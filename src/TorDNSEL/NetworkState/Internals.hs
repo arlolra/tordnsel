@@ -61,7 +61,8 @@ import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
-import Network.Socket (HostAddress, PortNumber)
+import Data.Word (Word16)
+import Network.Socket (HostAddress)
 
 import TorDNSEL.Directory
 import TorDNSEL.Util
@@ -250,7 +251,7 @@ data ExitListQuery
     -- | The destination address.
     destAddr  :: {-# UNPACK #-} !HostAddress,
     -- | The destination port.
-    destPort  :: {-# UNPACK #-} !PortNumber
+    destPort  :: {-# UNPACK #-} !Word16
   } deriving Eq
 
 instance Show ExitListQuery where
