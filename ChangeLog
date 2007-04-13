@@ -1,0 +1,18 @@
+0.0.1 - 2007-04-13
+  - Ignore incoming descriptors with published times older than ones we
+    already have.
+
+  - Consider any router that has published a descriptor within the last 48
+    hours to be running. This means we don't use network status info anymore,
+    but we'll still keep track of it in case it becomes useful.
+
+  - Set FetchUselessDescriptors so we receive descriptors for non-running
+    routers.
+
+  - Fix a bug caused by an erroneous Ord instance for PortNumber in
+    Network.Socket. PortNumbers were being compared in host order even
+    though they're stored in network order. This caused some queries to
+    incorrectly match exit policy rules and others to miss matches.
+
+0.0.0 - 2007-04-11
+  - Initial release.
