@@ -269,16 +269,14 @@ isExitNode state q = do
       Just set -> do
         routers <- readTVar $ nsRouters state
         let addrRtrs = catMaybes . map (flip M.lookup routers) . S.elems $ set
-            running = filter (isRunning now . rtrRunning) addrRtrs
-            pols = map descExitPolicy . catMaybes . map rtrDescriptor $ running
-        return $ any (exitPolicyAccepts (destAddr q) (destPort q)) pols
+            descs = catMaybes . map rtrDescriptor $ addrRtrs
+            policies = map descExitPolicy . filter (isRunning now) $ descs
+        return $! any (exitPolicyAccepts (destAddr q) (destPort q)) policies
 
 -- | At a certain time, do we believe a router to be running? We consider
--- routers to be still running until it's been 30 minutes since they were last
--- reported running. Is this a reasonable value?
-isRunning :: UTCTime -> RunningStatus -> Bool
+-- a router to be running if it last published a descriptor less than 48 hours
+-- ago.
+isRunning :: UTCTime -> Descriptor -> Bool
 {-# INLINE isRunning #-}
-isRunning _    Running                 = True
-isRunning now (NotRunning lastRunning) =
-  now `diffUTCTime` lastRunning < notRunningPeriod
-  where notRunningPeriod = 60 * 30
+isRunning now d = now `diffUTCTime` descPublished d < routerMaxAge
+  where routerMaxAge = 60 * 60 * 48
