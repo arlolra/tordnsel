@@ -60,6 +60,7 @@ import Data.Map (Map)
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Network.Socket (HostAddress, PortNumber)
 
 import TorDNSEL.Directory
@@ -261,7 +262,7 @@ instance Show ExitListQuery where
 isExitNode :: NetworkState -> ExitListQuery -> IO Bool
 {-# INLINE isExitNode #-}
 isExitNode state q = do
-  now <- getCurrentTime
+  now <- getPOSIXTime
   atomically $ do
     addrs <- readTVar $ nsAddrs state
     case M.lookup (queryAddr q) addrs of
@@ -273,10 +274,10 @@ isExitNode state q = do
             policies = map descExitPolicy . filter (isRunning now) $ descs
         return $! any (exitPolicyAccepts (destAddr q) (destPort q)) policies
 
--- | At a certain time, do we believe a router to be running? We consider
--- a router to be running if it last published a descriptor less than 48 hours
--- ago.
-isRunning :: UTCTime -> Descriptor -> Bool
+-- | We consider a router to be running if it last published a descriptor less
+-- than 48 hours ago. Descriptors hold an unboxed 'POSIXTime' instead of a
+-- 'UTCTime' to prevent this function from showing up in profiles.
+isRunning :: POSIXTime -> Descriptor -> Bool
 {-# INLINE isRunning #-}
-isRunning now d = now `diffUTCTime` descPublished d < routerMaxAge
+isRunning now d = now - descPublished d < routerMaxAge
   where routerMaxAge = 60 * 60 * 48

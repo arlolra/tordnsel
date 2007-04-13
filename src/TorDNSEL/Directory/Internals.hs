@@ -64,6 +64,8 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
 import Data.ByteString (ByteString)
 import Data.Time (fromGregorian, UTCTime(..), addUTCTime)
+import Data.Time.Clock.POSIX
+  (POSIXTime, utcTimeToPOSIXSeconds, posixSecondsToUTCTime)
 import Network.Socket (HostAddress, PortNumber)
 
 import GHC.Prim (Addr#)
@@ -78,7 +80,7 @@ data Descriptor = Desc
   { -- | The IPv4 address at which this router accepts connections.
     descListenAddr  :: {-# UNPACK #-} !HostAddress,
     -- | The time when this descriptor was generated.
-    descPublished   :: {-# UNPACK #-} !UTCTime,
+    descPublished   :: {-# UNPACK #-} !POSIXTime,
     -- | This router's identity fingerprint.
     descFingerprint :: {-# UNPACK #-} !Fingerprint,
     -- | This router's exit policy.
@@ -87,7 +89,7 @@ data Descriptor = Desc
 instance Show Descriptor where
   showsPrec _ d = shows (descFingerprint d) . (" " ++) .
     (inet_htoa (descListenAddr d) ++) . (" " ++) .
-    shows (descPublished d) . ("\n" ++) .
+    shows (posixSecondsToUTCTime $ descPublished d) . ("\n" ++) .
     foldl' (.) id (map (\p -> shows p . ("\n" ++)) (descExitPolicy d))
 
 -- | Parse a router descriptor. Returns the result or 'fail' in the monad if the
@@ -112,14 +114,15 @@ parseDescriptor items = do
       _:address:_ <- return $ B.splitWith isSpace router
       inet_atoh address
 
-    -- Parse a UTCTime in this format: "YYYY-MM-DD HH:MM:SS"
+    -- Parse a POSIXTime in this format: "YYYY-MM-DD HH:MM:SS"
     parseTime bs = do
       [date,time]          <- return       $ B.split ' ' bs
       [year,month,day]     <- mapM readInt $ B.split '-' date
       [hour,minute,second] <- mapM readInt $ B.split ':' time
       let utcDay = fromGregorian (fromIntegral year) month day
           utcDayTime = hour * 3600 + minute * 60 + second
-      return $! addUTCTime (fromIntegral utcDayTime) (UTCTime utcDay 0)
+          utcTime = addUTCTime (fromIntegral utcDayTime) (UTCTime utcDay 0)
+      return $! utcTimeToPOSIXSeconds utcTime
 
     parseFingerprint = decodeBase16Fingerprint . B.filter (/= ' ')
 
