@@ -79,7 +79,7 @@ runServer :: Socket -> (Message -> IO Message) -> IO ()
 runServer sock handler = forever $ recvMessageFrom sock >>= handleQuery
   where
     handleQuery (Just query, sockAddr@(SockAddrInet port _))
-      | port >= 1024 = do
+      | (fromIntegral port :: Int) >= 1024 = do
           response <- handler query
           sendMessageTo sock response sockAddr
     handleQuery _ = return ()
