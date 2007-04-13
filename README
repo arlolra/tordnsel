@@ -5,26 +5,13 @@ TorDNSEL implements the design described at
 modifications. Instead of parsing the cached-routers file, it establishes a
 persistent controller connection to Tor, receiving updated nodes and exit
 policies as Tor fetches them from directories. When Tor is running as a
-directory mirror this information should be very up-to-date.
+directory authority this information should be the most up-to-date.
 
-A few design decisions that may need reconsideration:
-
-  * When Tor thinks a node's status has changed from running to not running,
-    we consider it to be still running for 30 more minutes. This should
-    reduce false negatives that could occur when nodes go up and down over
-    short periods of time.
-
-  * We return a TTL of 30 minutes with positive DNS responses. This could be
-    either too short or too long.
-
-  * Right now, we don't do any active testing through exit nodes to find out
-    which address their exit connections actually originate from. This is
-    tricky because we would need to open several listening ports to allow
-    for varying exit policies. We would also probably need to use HTTP to
-    avoid breaking exit nodes running transparent squids. This is planned for
-    a future version.
-
-  * XXX others?
+Right now, we don't do any active testing through exit nodes to find out which
+address their exit connections actually originate from. This is tricky because
+we would need to open several listening ports to allow for varying exit
+policies. We would also probably need to use HTTP to avoid breaking exit nodes
+running transparent squids. This is planned for a future version.
 
 Currently, only query type 1 from torbl-design.txt is supported:
 
