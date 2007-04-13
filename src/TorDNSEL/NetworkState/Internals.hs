@@ -177,26 +177,28 @@ discardOldRouters now state = do
 
 -- | Given a new router descriptor, return an updated network state.
 updateDesc :: UTCTime -> (Routers, Addrs) -> Descriptor -> (Routers, Addrs)
-updateDesc now (routers,addrs) desc
+updateDesc now state@(routers,addrs) newD
   -- we know about this router already, but we might not have its descriptor
-  -- so update its descriptor
-  | Just router <- M.lookup fp routers = (,) updateRouters $
-    case rtrDescriptor router of
-      -- we have the descriptor, and therefore a possibly outdated address
-      Just desc'
+  | Just router <- M.lookup fp routers
+  = case rtrDescriptor router of
+      -- we have a descriptor, and therefore a possibly outdated address
+      Just oldD
+        -- the descriptor we already have is newer than this one, so ignore it
+        | descPublished oldD > descPublished newD
+                    -> state
         -- address changed: delete old address, insert new address
-        | descListenAddr desc /= descListenAddr desc'
-                    -> insertAddr desc . deleteAddr desc' $ addrs
+        | descListenAddr newD /= descListenAddr oldD
+                    -> (updateRouters, insertAddr newD $ deleteAddr oldD addrs)
         -- address hasn't changed: don't update addrs
-        | otherwise -> addrs
+        | otherwise -> (updateRouters, addrs)
       -- we didn't have an address before: insert new address
-      _             -> insertAddr desc addrs
+      _             -> (updateRouters, insertAddr newD addrs)
   -- this is a new router: insert into routers and addrs
-  | otherwise        = (insertRouters, insertAddr desc addrs)
+  | otherwise        = (insertRouters, insertAddr newD addrs)
   where
-    fp = descFingerprint desc
-    updateRouters = M.adjust (\r -> r { rtrDescriptor = Just desc }) fp routers
-    insertRouters = M.insert fp (Router (Just desc) Running now) routers
+    fp = descFingerprint newD
+    updateRouters = M.adjust (\r -> r { rtrDescriptor = Just newD }) fp routers
+    insertRouters = M.insert fp (Router (Just newD) Running now) routers
     insertAddr d = insertAddress (descListenAddr d) fp
     deleteAddr d = deleteAddress (descListenAddr d) fp
 
