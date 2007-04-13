@@ -1,0 +1,49 @@
+## The DNS zone for which this name server is authoritative. For example,
+## if this is set to "torhosts.example.com", your server would accept
+## queries of the form "1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com".
+## This option is required.
+#AuthoritativeZone torhosts.example.com
+
+## The IP address and UDP port the name server will bind to. If you want
+## to bind to all interfaces, you might set the address to "0.0.0.0".
+## This port is bound before dropping privileges. Leave it commented to use
+## the default.
+#DNSListenAddress 127.0.0.1:53
+
+## The IP address and TCP port on which Tor is listening for controller
+## connections. You'll need to set this as your ControlListenAddress or
+## ControlPort in Tor's torrc. Leave it commented to use the default.
+#TorControlAddress 127.0.0.1:9051
+
+## Detach from the controlling terminal and run in the background as a
+## daemon. The default is \"False\".
+#RunAsDaemon True
+
+## Tor's data directory. Only specify this when you're using Tor's
+## CookieAuthentication for controller connections. The control auth
+## cookie is read before chrooting or dropping privileges.
+#TorDataDirectory /var/lib/tor
+
+## The password you used to generate the HashedControlPassword in Tor's
+## torrc. This is only required when you have a HashedControlPassword.
+#TorControlPassword password
+
+## The user name to which you want to drop privileges. This option
+## requires root privileges.
+#User nobody
+
+## The group name to which you want to drop privileges. This option also
+## requires root privileges.
+#Group nobody
+
+## Call chroot(2) to change our root directory. This option also requires
+## root privileges.
+#ChangeRootDirectory /var/empty
+
+## Write our PID to the specified file before chrooting or dropping
+## privileges. This file won't be removed on exit.
+#PIDFile /var/run/tordnsel.pid
+
+## Include another config file, using options in this file when duplicates
+## are encountered. You probably don't want to do this.
+#ConfigFile /etc/tordnsel/tordnsel.conf

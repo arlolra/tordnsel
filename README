@@ -1,0 +1,92 @@
+TorDNSEL: A Tor DNS Exit List Daemon
+
+TorDNSEL implements the design described at
+<http://tor.eff.org/svn/trunk/doc/contrib/torbl-design.txt> with some
+modifications. Instead of parsing the cached-routers file, it establishes a
+persistent controller connection to Tor, receiving updated nodes and exit
+policies as Tor fetches them from directories. When Tor is running as a
+directory mirror this information should be very up-to-date.
+
+A few design decisions that may need reconsideration:
+
+  * When Tor thinks a node's status has changed from running to not running,
+    we consider it to be still running for 30 more minutes. This should
+    reduce false negatives that could occur when nodes go up and down over
+    short periods of time.
+
+  * We return a TTL of 30 minutes with positive DNS responses. This could be
+    either too short or too long.
+
+  * Right now, we don't do any active testing through exit nodes to find out
+    which address their exit connections actually originate from. This is
+    tricky because we would need to open several listening ports to allow
+    for varying exit policies. We would also probably need to use HTTP to
+    avoid breaking exit nodes running transparent squids. This is planned for
+    a future version.
+
+  * XXX others?
+
+Currently, only query type 1 from torbl-design.txt is supported:
+
+A request for the A record "1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com"
+would return 127.0.0.2 if there's a running Tor node at 10.0.0.1 that allows
+exits to port 80 at 1.2.3.4 and our AuthoritativeZone is set to
+"torhosts.example.com". If there isn't such an exit node, we return NXDOMAIN.
+If the query isn't in our authoritative zone, we return server failure.
+
+Presumably, users of software with built-in support for DNSBLs would configure
+[serviceport].[serviceaddress].ip-port.torhosts.example.com as a DNSBL.
+
+-----------------------------------------------------------------------------
+
+Dependencies
+
+  TorDNSEL requires GHC 6.6. If you're running Debian unstable:
+
+    apt-get install ghc6 libghc6-network-dev libghc6-time-dev libghc6-hunit-dev
+
+  Older Debians will need backports from Haskell Unsafe:
+
+    http://haskell-unsafe.alioth.debian.org/haskell-unsafe.html
+
+  Otherwise, use your system's package manager or grab a binary distribution
+  from the GHC website:
+
+    http://haskell.org/ghc/download.html
+
+  binary, a new serialization library, also required, is available here:
+
+    http://hackage.haskell.org/packages/archive/binary/binary-0.3.tar.gz
+
+  Before building binary, apply the included patch in binary.patch. If you
+  don't, you're likely to experience a segfault if you receive a malformed
+  DNS packet.
+
+Building TorDNSEL
+
+    ./Setup.lhs configure
+    ./Setup.lhs build
+
+  If you want a tordnsel binary installed in /usr/local/bin:
+
+    sudo ./Setup.lhs install
+
+  For haddock documentation (if haddock is installed):
+
+    ./Setup.lhs haddock
+
+Configuring TorDNSEL
+
+  Copy tordnsel.conf.sample located in config. At the very least, you'll need
+  to uncomment and modify AuthoritativeZone, and probably DNSListenAddress.
+  Make sure everything is working before changing RunAsDaemon to True so you
+  won't miss any error messages (currently there's no support for logging).
+
+  Load a config file with the -f option.
+
+  Options listed in tordnsel.conf.sample can also be specified on the command
+  line:
+
+    ./tordnsel -f /etc/tordnsel.conf -AuthoritativeZone torhosts.example.com
+
+  Command line options override those included in a config file.

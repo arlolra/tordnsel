@@ -1,0 +1,31 @@
+Name:           TorDNSEL
+Version:        0.0.0
+Synopsis:       provides a DNSBL-style interface for detecting Tor exit nodes
+Description:    TorDNSEL implements a design for a DNSBL-style interface for
+  detecting connections exiting the Tor network. This design and its rationale
+  is described at <http://tor.eff.org/svn/trunk/doc/contrib/torbl-design.txt>.
+License:        PublicDomain
+License-File:   LICENSE
+Author:         tup
+Maintainer:     tup.tuple@googlemail.com
+Build-Depends:  base>=2.0, network>=2.0, unix>=1.0, stm>=2.0, time>=1.0,
+  HUnit>=1.1, binary>=0.3
+tested-with:    GHC==6.6
+
+Executable:     tordnsel
+Main-Is:        tordnsel.hs
+Other-Modules:  TorDNSEL.Config, TorDNSEL.Config.Internals, TorDNSEL.Control,
+  TorDNSEL.Control.Internals, TorDNSEL.Directory, TorDNSEL.Directory.Internals,
+  TorDNSEL.NetworkState, TorDNSEL.NetworkState.Internals, TorDNSEL.DNS,
+  TorDNSEL.DNS.Internals,  TorDNSEL.DNS.Handler, TorDNSEL.DNS.Handler.Internals,
+  TorDNSEL.Main, TorDNSEL.Util
+hs-source-dirs: src
+ghc-options:    -O2 -Wall -Werror
+
+Executable:     runtests
+Buildable:      False
+Main-Is:        runtests.hs
+Other-Modules:  TorDNSEL.Config.Tests, TorDNSEL.Directory.Tests,
+  TorDNSEL.DNS.Tests, TorDNSEL.DNS.Handler.Tests
+hs-source-dirs: src
+ghc-options:    -fasm -Wall -Werror -fno-warn-missing-signatures
