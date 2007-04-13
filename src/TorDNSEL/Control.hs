@@ -32,6 +32,7 @@ module TorDNSEL.Control (
   , fetchAllDescriptors
   , fetchRouterStatus
   , fetchNetworkStatus
+  , setFetchUselessDescriptors
 
   -- * Asynchronous events
   , EventHandler

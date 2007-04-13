@@ -177,6 +177,7 @@ torController netState control authSecret tcp = do
     registerEventHandlers [newNS, newDesc] conn
     fetchNetworkStatus conn >>= updateNetworkStatus netState
     fetchAllDescriptors conn >>= updateDescriptors netState
+    setFetchUselessDescriptors conn
     waitForConnection conn
 
 -- | Lookup the UID and GID for a pair of user and group names.

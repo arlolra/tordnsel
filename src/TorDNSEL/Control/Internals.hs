@@ -40,7 +40,9 @@ module TorDNSEL.Control.Internals (
   , fetchAllDescriptors
   , fetchRouterStatus
   , fetchNetworkStatus
+  , setFetchUselessDescriptors
   , fetchDocument
+  , setConf
   , sendCommand
 
   -- * Asynchronous events
@@ -192,6 +194,12 @@ fetchNetworkStatus :: Connection -> IO [RouterStatus]
 fetchNetworkStatus = fetchDocument arg parseRouterStatuses
   where arg = b 6 "ns/all"#
 
+-- | Set Tor's config option \"FetchUselessDescriptors\" so we get descriptors
+-- for non-running routers. Throw 'TorControlError' if the reply code isn't 250.
+setFetchUselessDescriptors :: Connection -> IO ()
+setFetchUselessDescriptors conn =
+  setConf [(b 23 "fetchuselessdescriptors"#, Just (b 1 "1"#))] conn
+
 -- | Send a @GETINFO@ command using @key@ as a single keyword. If the reply code
 -- is 250, pass the document contained in data from the first reply to @parse@
 -- and return the parsed document. Otherwise, throw 'TorControlError'.
@@ -203,6 +211,19 @@ fetchDocument key parse conn = do
       -> return . parse . parseDocument $ doc
     _ -> E.throwDyn . statusCodeToError . repStatus $ reply
   where command = Command (b 7 "getinfo"#) [key] Nothing
+
+-- | Send a @SETCONF@ command with a set of key-value pairs. Throw
+-- 'TorControlError' if the reply code isn't 250.
+setConf :: [(ByteString, Maybe ByteString)] -> Connection -> IO ()
+setConf args conn = do
+  reply:_ <- sendCommand command conn
+  case reply of
+    Reply 250 _ _ -> return ()
+    _             -> E.throwDyn . statusCodeToError . repStatus $ reply
+  where
+    command = Command (b 7 "setconf"#) (map renderArg args) Nothing
+    renderArg (key, Just val) = B.join (b 1 "="#) [key,val]
+    renderArg (key, _)        = key
 
 -- | Send a command using a connection, blocking the current thread until all
 -- replies have been received.
