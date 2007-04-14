@@ -1,3 +1,9 @@
+0.0.2 - 2007-04-14
+  - Fix another bug caused by the incorrect Ord instance for PortNumber.
+    We don't want to accept DNS queries from privileged ports so we can
+    avoid a potential denial of service caused by an attacker spoofing our
+    own IP address in the query.
+
 0.0.1 - 2007-04-13
   - Ignore incoming descriptors with published times older than ones we
     already have.
