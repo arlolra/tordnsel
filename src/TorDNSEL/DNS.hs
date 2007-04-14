@@ -16,22 +16,22 @@
 -----------------------------------------------------------------------------
 
 module TorDNSEL.DNS (
-  -- * I\/O
-  runServer,
-  recvMessageFrom,
-  sendMessageTo,
+    -- * I\/O
+    runServer
+  , recvMessageFrom
+  , sendMessageTo
 
   -- * Data types
-  Message(..),
-  Question(..),
-  Answer(..),
-  DomainName(..),
-  Label(..),
-  QR(..),
-  RCode(..),
-  OpCode(..),
-  Type(..),
-  Class(..)
+  , Message(..)
+  , Question(..)
+  , Answer(..)
+  , DomainName(..)
+  , Label(..)
+  , QR(..)
+  , RCode(..)
+  , OpCode(..)
+  , Type(..)
+  , Class(..)
   ) where
 
 import TorDNSEL.DNS.Internals
