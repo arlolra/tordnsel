@@ -1,7 +1,7 @@
 TorDNSEL: A Tor DNS Exit List Daemon
 
 TorDNSEL implements the design described at
-<http://tor.eff.org/svn/trunk/doc/contrib/torbl-design.txt> with some
+<http://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt> with some
 modifications. Instead of parsing the cached-routers file, it establishes a
 persistent controller connection to Tor, receiving updated nodes and exit
 policies as Tor fetches them from directories. When Tor is running as a
@@ -13,7 +13,7 @@ we would need to open several listening ports to allow for varying exit
 policies. We would also probably need to use HTTP to avoid breaking exit nodes
 running transparent squids. This is planned for a future version.
 
-Currently, only query type 1 from torbl-design.txt is supported:
+Currently, only query type 1 from torel-design.txt is supported:
 
 A request for the A record "1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com"
 would return 127.0.0.2 if there's a running Tor node at 10.0.0.1 that allows
