@@ -137,7 +137,7 @@ parseConfigArgs = liftM M.fromList . mapM parseArg . splitPairs
   where
     parseArg [item,option]
       | item == "-f" = return (b "configfile"#, B.pack option)
-      | '-':rest <- item, item' <- B.pack $ map toLower rest
+      | ("--",rest) <- splitAt 2 item, item' <- B.pack $ map toLower rest
       , item' `S.member` knownConfigItems = return (item', B.pack option)
       | otherwise = fail ("unknown config option: " ++ show item)
     splitPairs = takeWhile isPair . map (take 2) . iterate (drop 2)

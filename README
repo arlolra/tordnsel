@@ -74,6 +74,6 @@ Configuring TorDNSEL
   Options listed in tordnsel.conf.sample can also be specified on the command
   line:
 
-    ./tordnsel -f /etc/tordnsel.conf -AuthoritativeZone torhosts.example.com
+    ./tordnsel -f /etc/tordnsel.conf --AuthoritativeZone torhosts.example.com
 
   Command line options override those included in a config file.

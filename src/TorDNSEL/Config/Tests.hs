@@ -44,7 +44,7 @@ config = toConfig $
   , ("tordatadirectory", "/var/lib/tor")
   , ("user", "nobody") ]
 
-configArgs = ["-User", "_tordnsel", "-f", "/etc/tordnsel.conf"]
+configArgs = ["--User", "_tordnsel", "-f", "/etc/tordnsel.conf"]
 
 configFile = B.pack
   "## The DNS zone for which this name server is authoritative. For example,\n\
