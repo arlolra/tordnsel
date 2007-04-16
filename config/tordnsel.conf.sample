@@ -34,7 +34,7 @@
 
 ## The group name to which you want to drop privileges. This option also
 ## requires root privileges.
-#Group nobody
+#Group nogroup
 
 ## Call chroot(2) to change our root directory. This option also requires
 ## root privileges.

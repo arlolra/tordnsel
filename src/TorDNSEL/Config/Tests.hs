@@ -36,7 +36,7 @@ config = toConfig $
   , ("changerootdirectory", "/var/empty")
   , ("configfile", "/etc/tordnsel/tordnsel.conf")
   , ("dnslistenaddress", "127.0.0.1:53")
-  , ("group", "nobody")
+  , ("group", "nogroup")
   , ("pidfile", "/var/run/tordnsel.pid")
   , ("runasdaemon", "True")
   , ("torcontroladdress", "127.0.0.1:9051")
@@ -83,7 +83,7 @@ configFile = B.pack
   \\n\
   \## The group name to which you want to drop privileges. This option also\n\
   \## requires root privileges.\n\
-  \Group nobody\n\
+  \Group nogroup\n\
   \\n\
   \## Call chroot(2) to change our root directory. This option also requires\n\
   \## root privileges.\n\
