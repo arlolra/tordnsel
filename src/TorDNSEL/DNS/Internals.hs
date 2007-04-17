@@ -33,10 +33,6 @@ module TorDNSEL.DNS.Internals (
   , unsafeDecodeMessage
   , BinaryPacket(..)
 
-  -- * Strict evaluation
-  , DeepSeq(..)
-  , ($!!)
-
   -- * Data types
   , Message(..)
   , Question(..)
@@ -58,15 +54,17 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Base as B
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString (ByteString)
-import Data.Binary (Binary(..), Get, Put, getWord8, putWord8, Word16, Word32)
-import Data.Binary.Get
-  (runGet, getWord16be, getByteString, bytesRead, lookAhead, skip)
-import Data.Binary.Put (runPut, putWord16be, putByteString)
 import Network.Socket
   (HostAddress, Socket, SockAddr(..), sendBufTo, recvBufFrom)
 import Foreign.ForeignPtr (withForeignPtr)
 import Foreign.Ptr (plusPtr)
 
+import Data.Binary (Binary(..), Get, Put, getWord8, putWord8, Word16, Word32)
+import Data.Binary.Get
+  (runGet, getWord16be, getByteString, bytesRead, lookAhead, skip)
+import Data.Binary.Put (runPut, putWord16be, putByteString)
+
+import TorDNSEL.DeepSeq
 import TorDNSEL.Util
 
 --------------------------------------------------------------------------------
@@ -139,25 +137,6 @@ unsafeDecodeMessage pkt = runGet (getPacket pkt) (L.fromChunks [unPacket pkt])
 class BinaryPacket a where
   getPacket :: Packet -> Get a
   putPacket :: a -> Put
-
---------------------------------------------------------------------------------
--- Strict evaluation
-
-class DeepSeq a where
-  deepSeq :: a -> b -> b
-
-infixr 0 `deepSeq`, $!!
-
-instance DeepSeq Bool where deepSeq = seq
-instance DeepSeq Word16 where deepSeq = seq
-instance DeepSeq Word32 where deepSeq = seq
-instance DeepSeq ByteString where deepSeq = seq
-instance DeepSeq a => DeepSeq [a] where
-  deepSeq = flip . foldl' . flip $ deepSeq
-
--- | Strict application, defined in terms of 'deepSeq'.
-($!!) :: DeepSeq a => (a -> b) -> a -> b
-f $!! x = x `deepSeq` f x
 
 --------------------------------------------------------------------------------
 -- Data types
