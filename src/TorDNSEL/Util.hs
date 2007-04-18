@@ -51,18 +51,9 @@ inet_atoh bs
   | Just os@[_,_,_,_] <- mapM readInt $ B.split '.' bs
   , all (\o -> 0 <= o && o <= 255) os
   = return . foldl' (.|.) 0 . zipWith shiftL (map fromIntegral os) $ [24,16..]
-inet_atoh bs = fail ("inet_aton \"" ++ B.unpack bs ++ "\": invalid IP address")
+inet_atoh bs = fail ("Invalid IP address " ++ show bs)
 
 -- | Encode a 'ByteString' in base16.
 encodeBase16 :: ByteString -> ByteString
-encodeBase16 = B.pack . concat . W.foldr ((:) . padByte . toBase16 []) []
-  where
-    padByte xs@[_] = '0':xs
-    padByte xs     = xs
-    toBase16 digits x
-      | d == 0    = digits'
-      | otherwise = toBase16 digits' (digit `seq` d)
-      where
-        digits' = digit : digits
-        digit = intToDigit . fromIntegral $ m
-        (d,m) = x `divMod` 16
+encodeBase16 = B.pack . concat . W.foldr ((:) . toBase16) []
+  where toBase16 x = map (intToDigit . fromIntegral) [x `shiftR` 4, x .&. 0xf]
