@@ -64,7 +64,7 @@ import System.Posix.IO
   , defaultFileFlags, dupTo )
 import System.Posix.Process
   (forkProcess, createSession, exitImmediately, getProcessID)
-import System.Posix.Signals (installHandler, Handler(Ignore), sigHUP)
+import System.Posix.Signals (installHandler, Handler(Ignore), sigHUP, sigPIPE)
 
 import System.Posix.Error (throwErrnoPathIfMinus1_)
 import System.Posix.Types (UserID, GroupID)
@@ -132,6 +132,7 @@ main = do
 
     netState <- newNetworkState
     let controller = torController netState controlSockAddr authSecret tcp
+    installHandler sigPIPE Ignore Nothing
     forkIO . forever . E.catchJust connExceptions controller $ \e -> do
       -- XXX this should be logged
       unless runAsDaemon $
