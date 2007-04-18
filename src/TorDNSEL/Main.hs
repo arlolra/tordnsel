@@ -148,9 +148,10 @@ main = do
         threadDelay (5 * 10^6)
   where
     connExceptions :: E.Exception -> Maybe E.Exception
-    connExceptions e@(E.IOException _)  = Just e
-    connExceptions e@(E.DynException _) = Just e
-    connExceptions _                    = Nothing
+    connExceptions e@(E.IOException _)                = Just e
+    connExceptions e@(E.DynException e')
+      | Just (_ :: TorControlError) <- fromDynamic e' = Just e
+    connExceptions _                                  = Nothing
 
     showConnException :: E.Exception -> String
     showConnException (E.IOException e) = show e
