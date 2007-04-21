@@ -115,7 +115,11 @@ openConnection handle closeHandler = do
   hSetBuffering handle LineBuffering
   chan <- newChan
   mv <- newEmptyMVar
-  forkIO $ ioManager handle chan (\e -> putMVar mv () >> closeHandler e)
+  -- closeHandler should be called before putMVar so the async exception can
+  -- interrupt waitForConnection inside withConnection. Otherwise, the async
+  -- exception will be delivered outside withConnection, creating a race
+  -- condition for external exception handlers.
+  forkIO $ ioManager handle chan (\e -> closeHandler e `E.finally` putMVar mv ())
   return (Conn chan mv)
 
 -- | Block the current thread until a connection terminates. This can happen
