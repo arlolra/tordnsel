@@ -65,6 +65,7 @@ import Data.Word (Word16)
 import Network.Socket (HostAddress)
 
 import TorDNSEL.Directory
+import TorDNSEL.Document
 import TorDNSEL.Util
 
 --------------------------------------------------------------------------------

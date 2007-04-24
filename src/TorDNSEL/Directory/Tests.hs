@@ -21,6 +21,7 @@ import qualified Data.ByteString.Char8 as B
 import Test.HUnit (Test(..), (@=?))
 
 import TorDNSEL.Directory.Internals
+import TorDNSEL.Document
 import TorDNSEL.Util
 
 tests = TestList [TestCase descriptorParses, fingerprint, TestCase exitPolicy]

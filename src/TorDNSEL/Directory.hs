@@ -35,11 +35,6 @@ module TorDNSEL.Directory (
   -- * Exit policies
   , ExitPolicy
   , exitPolicyAccepts
-
-  -- * Document meta-format
-  , Document
-  , Item
-  , parseDocument
   ) where
 
 import TorDNSEL.Directory.Internals
