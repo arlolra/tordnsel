@@ -55,12 +55,12 @@ dnsHandler netState authZone msg
   , Just qLabels <- mbQLabels
   , Just query   <- parseExitListQuery qLabels = do
     isExit <- isExitNode netState query
-    return $ if isExit
+    return $ if isExit || isTest query
       then r { msgAA = True, msgRCode = NoError, msgAnswers = positive }
       else r { msgAA = True, msgRCode = NXDomain }
   | otherwise = return r { msgAA = True, msgRCode = NXDomain }
   where
-    -- We set a TTL of 30 minutes in positive responses. Is this reasonable?
+    isTest q = queryAddr q == 0x7f000002
     ttl = 60 * 30
     positive = [Answer QuestionName ttl 0x7f000002]
     question = msgQuestion msg
