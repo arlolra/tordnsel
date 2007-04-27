@@ -1,3 +1,16 @@
+0.0.3 - 2007-04-27
+  - Implement active testing through exit nodes to determine the IP address
+    connections actually originate from. Store this information in state
+    files so external scripts have access to it.
+
+  - Always return an A record with the value 127.0.0.2 when queried about
+    127.0.0.2. This conforms to the convention for testing DNSBLs.
+
+  - Fix a bug that could kill the Tor controller thread when Tor is
+    restarted. Tor closing the control connection created a race condition
+    allowing an asynchronous exception to escape an exception handler and
+    kill the Tor controller thread.
+
 0.0.2 - 2007-04-14
   - Fix another bug caused by the incorrect Ord instance for PortNumber.
     We don't want to accept DNS queries from privileged ports so we can
