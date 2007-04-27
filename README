@@ -7,11 +7,12 @@ persistent controller connection to Tor, receiving updated nodes and exit
 policies as Tor fetches them from directories. When Tor is running as a
 directory authority this information should be the most up-to-date.
 
-Right now, we don't do any active testing through exit nodes to find out which
-address their exit connections actually originate from. This is tricky because
-we would need to open several listening ports to allow for varying exit
-policies. We would also probably need to use HTTP to avoid breaking exit nodes
-running transparent squids. This is planned for a future version.
+TorDNSEL can perform active exit testing by launching an HTTP request to itself
+through every exit node with a suitable exit policy. This allows it to detect
+exit nodes configured to send outbound connections through a different IP
+address from the one they advertise in their descriptors. When configured to
+run exit tests, we test through a particular exit node only after receiving
+a new descriptor for it.
 
 Currently, only query type 1 from torel-design.txt is supported:
 
@@ -66,6 +67,10 @@ Configuring TorDNSEL
 
   Copy tordnsel.conf.sample located in config. At the very least, you'll need
   to uncomment and modify AuthoritativeZone, and probably DNSListenAddress.
+
+  To run exit tests, you need to specify at least ConcurrentExitTests,
+  StateDirectory, TestListenAddress, and TestDestinationAddress.
+
   Make sure everything is working before changing RunAsDaemon to True so you
   won't miss any error messages (currently there's no support for logging).
 
