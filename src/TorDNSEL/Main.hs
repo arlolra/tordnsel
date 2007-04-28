@@ -1,5 +1,5 @@
 {-# LANGUAGE PatternGuards, ForeignFunctionInterface #-}
-{-# OPTIONS_GHC -fno-warn-type-defaults #-}
+{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-missing-fields #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -49,7 +49,7 @@ import Data.Map ((!))
 import Data.Maybe (isJust)
 import System.Environment (getArgs)
 import System.IO
-  ( openFile, hPutStr, hPutStrLn, hClose, stderr
+  ( openFile, hPutStr, hPutStrLn, hFlush, hClose, stderr
   , IOMode(WriteMode, ReadWriteMode) )
 import Network.BSD (getProtocolNumber, ProtocolNumber)
 import Network.Socket
@@ -57,7 +57,7 @@ import Network.Socket
   , Family(AF_INET), SocketType(Datagram, Stream), SocketOption(ReuseAddr) )
 
 import System.Exit (ExitCode(ExitSuccess))
-import System.Directory (setCurrentDirectory)
+import System.Directory (setCurrentDirectory, createDirectoryIfMissing)
 import System.Posix.Files (setFileCreationMask)
 import System.Posix.IO
   ( openFd, closeFd, stdInput, stdOutput, stdError, OpenMode(ReadWrite)
@@ -83,17 +83,41 @@ import TorDNSEL.NetworkState
 import TorDNSEL.Util
 
 -- | The main entry point for the server. This handles parsing config options,
--- various daemon operations, forking the network state handler and Tor
--- controller, and starting the DNS server.
+-- various daemon operations, forking the network state handler, Tor controller,
+-- and exit test threads, and starting the DNS server.
 main :: IO ()
 main = do
-  config <- fillInConfig =<< parseConfig =<< parseConfigArgs =<< getArgs
-  dnsSockAddr     <- parse $ config ! b "dnslistenaddress"#
-  controlSockAddr <- parse $ config ! b "torcontroladdress"#
-  runAsDaemon     <- parse $ config ! b "runasdaemon"#
+  conf <- exitLeft . fillInConfig =<< parseConfig =<< exitLeft . parseConfigArgs
+                                                  =<< getArgs
 
-  let authZone = toAuthZone $ config ! b "authoritativezone"#
-      [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` config)
+  dnsSockAddr     <- conf <! "dnslistenaddress"#
+  controlSockAddr <- conf <! "torcontroladdress"#
+  runAsDaemon     <- conf <! "runasdaemon"#
+
+  tcp <- getProtocolNumber "tcp"
+
+  concTests <- conf <! "concurrentexittests"#
+  testConf <- do
+    if concTests <= 0 then return Nothing else do
+
+    stateDir <- conf <! "statedirectory"#
+    createDirectoryIfMissing True stateDir
+
+    socksSockAddr <- conf <! "torsocksaddress"#
+    (testListenAddr,testListenPorts) <- conf <! "testlistenaddress"#
+    (testDestAddr,testDestPorts) <- conf <! "testdestinationaddress"#
+
+    testSockets <- bindListeningSockets tcp testListenAddr testListenPorts
+
+    return . Just . ((,) stateDir) $ \c -> c
+      { etConcTests   = concTests
+      , etSocksServer = socksSockAddr
+      , etListenSocks = testSockets
+      , etTestAddr    = testDestAddr
+      , etTestPorts   = testDestPorts }
+
+  let authZone = toAuthZone $ conf ! b "authoritativezone"#
+      [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
         [ b "user"#, b "group"#, b "changerootdirectory"#, b "pidfile"#
         , b "tordatadirectory"#, b "torcontrolpassword"# ]
 
@@ -110,7 +134,6 @@ main = do
 
   pidHandle <- flip openFile WriteMode . B.unpack `liftMb` pidFile
   ids <- getIDs user group
-  tcp <- getProtocolNumber "tcp"
 
   sock <- socket AF_INET Datagram =<< getProtocolNumber "udp"
   setSocketOption sock ReuseAddr 1
@@ -130,13 +153,24 @@ main = do
 
     dropPrivileges ids
 
-    netState <- newNetworkState
+    netState <- case testConf of
+      Just (stateDir, testConf') -> do
+        exitTestState <- newExitTestState
+        netState <- newNetworkState $ Just (exitTestState, stateDir)
+        startExitTests . testConf' $ ExitTestConfig
+          { etState    = exitTestState
+          , etNetState = netState
+          , etTcp      = tcp }
+        return netState
+      _ ->
+        newNetworkState Nothing
+
     let controller = torController netState controlSockAddr authSecret tcp
     installHandler sigPIPE Ignore Nothing
     forkIO . forever . E.catchJust connExceptions controller $ \e -> do
       -- XXX this should be logged
-      unless runAsDaemon $
-        hPutStrLn stderr (showConnException e)
+      unless runAsDaemon $ do
+        hPutStrLn stderr (showConnException e) >> hFlush stderr
       threadDelay (5 * 10^6)
 
     -- start the DNS server
@@ -144,24 +178,23 @@ main = do
       (runServer sock $ dnsHandler netState authZone) $ \e -> do
         -- XXX this should be logged
         unless runAsDaemon $
-          hPutStrLn stderr (show e)
+          hPutStrLn stderr (show e) >> hFlush stderr
         threadDelay (5 * 10^6)
   where
-    connExceptions :: E.Exception -> Maybe E.Exception
     connExceptions e@(E.IOException _)                = Just e
     connExceptions e@(E.DynException e')
       | Just (_ :: TorControlError) <- fromDynamic e' = Just e
     connExceptions _                                  = Nothing
 
-    showConnException :: E.Exception -> String
     showConnException (E.IOException e) = show e
     showConnException (E.DynException e)
       | Just (e' :: TorControlError) <- fromDynamic e
       = "Tor control error: " ++ show e'
     showConnException _ = "bug: unknown exception type"
 
-    toAuthZone :: ByteString -> DomainName
     toAuthZone = DomainName . map Label . reverse . B.split '.' . B.map toLower
+
+    conf <! addr = exitLeft . parse $ conf ! b addr
 
 -- | Connect to Tor using the controller interface. Initialize our network state
 -- with all the routers Tor knows about and register asynchronous events to
@@ -227,7 +260,7 @@ liftMb f = maybe (return Nothing) (liftM Just . f)
 
 infixr 8 `liftMb`
 
--- | An alias for 'B.packAddress'.
+-- | An alias for packAddress.
 b :: Addr# -> ByteString
 b = B.packAddress
 

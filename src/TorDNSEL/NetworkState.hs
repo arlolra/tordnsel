@@ -9,8 +9,8 @@
 -- Portability : non-portable (concurrency, STM, pattern guards)
 --
 -- Managing our current view of the Tor network. The network state constantly
--- changes as we receive new router descriptors and router status entries
--- from Tor.
+-- changes as we receive new router information from Tor and new exit test
+-- results.
 --
 -----------------------------------------------------------------------------
 
@@ -26,6 +26,13 @@ module TorDNSEL.NetworkState (
   -- * Exit list queries
   , ExitListQuery(..)
   , isExitNode
+
+  -- * Exit tests
+  , ExitTestConfig(..)
+  , ExitTestState
+  , newExitTestState
+  , bindListeningSockets
+  , startExitTests
   ) where
 
 import TorDNSEL.NetworkState.Internals

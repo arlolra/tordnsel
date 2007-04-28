@@ -1,4 +1,5 @@
 {-# LANGUAGE PatternGuards, ForeignFunctionInterface #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -8,7 +9,7 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (pattern guards, ffi)
+-- Portability : non-portable (pattern guards, FFI)
 --
 -- Common utility functions.
 --
@@ -16,15 +17,20 @@
 
 module TorDNSEL.Util where
 
+import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Char (intToDigit)
 import Data.List (foldl', intersperse)
-import Data.Bits ((.&.), (.|.), shiftL, shiftR)
-import Network.Socket (HostAddress)
-import qualified Data.ByteString as W
 import qualified Data.ByteString.Char8 as B
-import Data.ByteString.Char8 (ByteString)
+import qualified Data.ByteString as W
+import Data.ByteString (ByteString)
+import Data.Time (fromGregorian, UTCTime(..), addUTCTime)
+import Data.Word (Word32)
+import Network.Socket (HostAddress)
+import System.Environment (getProgName)
+import System.Exit (exitFailure)
+import System.IO (hPutStr, stderr)
 
--- | Parses an 'Int' from a 'B.ByteString'. Returns the result or 'fail' in the
+-- | Parse an 'Int' from a 'B.ByteString'. Return the result or 'fail' in the
 -- monad if parsing fails.
 readInt :: Monad m => B.ByteString -> m Int
 readInt bs = case B.readInt bs of
@@ -57,3 +63,34 @@ inet_atoh bs = fail ("Invalid IP address " ++ show bs)
 encodeBase16 :: ByteString -> ByteString
 encodeBase16 = B.pack . concat . W.foldr ((:) . toBase16) []
   where toBase16 x = map (intToDigit . fromIntegral) [x `shiftR` 4, x .&. 0xf]
+
+-- | Parse a UTCTime in this format: \"YYYY-MM-DD HH:MM:SS\".
+parseTime :: Monad m => ByteString -> m UTCTime
+parseTime bs = do
+  [date,time]          <- return       $ B.split ' ' bs
+  [year,month,day]     <- mapM readInt $ B.split '-' date
+  [hour,minute,second] <- mapM readInt $ B.split ':' time
+  let utcDay = fromGregorian (fromIntegral year) month day
+      utcDayTime = hour * 3600 + minute * 60 + second
+  return $! addUTCTime (fromIntegral utcDayTime) (UTCTime utcDay 0)
+
+-- | Split a 'ByteString' into blocks of @x@ length.
+split :: Int -> ByteString -> [ByteString]
+split x = takeWhile (not . B.null) . map (B.take x) . iterate (B.drop x)
+
+-- | Lift an @Either String@ computation into the 'IO' monad by printing
+-- @Left e@ as an error message and exiting.
+exitLeft :: Either String a -> IO a
+exitLeft = either (\e -> err e >> exitFailure) return
+  where
+    err e = hPutStr stderr . unlines . (:[e]) . usage =<< getProgName
+    usage progName = "Usage: " ++ progName ++ " [-f <config file>] [options...]"
+
+instance Monad (Either String) where
+  return        = Right
+  fail          = Left
+  Right x >>= f = f x
+  Left x  >>= _ = Left x
+
+foreign import ccall unsafe "htonl" htonl :: Word32 -> Word32
+foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32

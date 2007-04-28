@@ -15,10 +15,12 @@ tested-with:    GHC==6.6
 Executable:     tordnsel
 Main-Is:        tordnsel.hs
 Other-Modules:  TorDNSEL.Config, TorDNSEL.Config.Internals, TorDNSEL.Control,
-  TorDNSEL.Control.Internals, TorDNSEL.Directory, TorDNSEL.Directory.Internals,
-  TorDNSEL.NetworkState, TorDNSEL.NetworkState.Internals, TorDNSEL.DNS,
-  TorDNSEL.DNS.Internals,  TorDNSEL.DNS.Handler, TorDNSEL.DNS.Handler.Internals,
-  TorDNSEL.Main, TorDNSEL.Util
+  TorDNSEL.Control.Internals, TorDNSEL.DeepSeq, TorDNSEL.Directory,
+  TorDNSEL.Directory.Internals, TorDNSEL.Document, TorDNSEL.NetworkState,
+  TorDNSEL.NetworkState.Internals, TorDNSEL.DNS, TorDNSEL.DNS.Internals,
+  TorDNSEL.DNS.Handler, TorDNSEL.DNS.Handler.Internals, TorDNSEL.Main,
+  TorDNSEL.Socks, TorDNSEL.Socks.Internals, TorDNSEL.System.Timeout,
+  TorDNSEL.Util
 hs-source-dirs: src
 ghc-options:    -O2 -Wall -Werror
 

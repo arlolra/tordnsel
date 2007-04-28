@@ -60,8 +60,8 @@ import TorDNSEL.DeepSeq
 -- Connections
 
 -- | Open a Socks connection to an IP address\/domain name and port. The handle
--- will be closed if an exception occurs during the given IO action. Throw a
--- SocksError if the connection request fails.
+-- will be closed if an exception occurs during the given 'IO' action. Throw a
+-- 'SocksError' if the connection request fails.
 withSocksConnection
   :: Socket -> ByteString -> Word16 -> (Handle -> IO a) -> IO a
 withSocksConnection sock domain port io =

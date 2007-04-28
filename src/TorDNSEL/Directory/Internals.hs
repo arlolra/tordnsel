@@ -49,14 +49,14 @@ module TorDNSEL.Directory.Internals (
   , b
   ) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, liftM)
 import Data.Char (ord, isSpace, isHexDigit, digitToInt)
-import Data.List (foldl', find)
+import Data.List (foldl')
 import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
 import Data.ByteString (ByteString)
-import Data.Time (fromGregorian, UTCTime(..), addUTCTime)
+import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX
   (POSIXTime, utcTimeToPOSIXSeconds, posixSecondsToUTCTime)
 import Data.Word (Word16)
@@ -91,33 +91,19 @@ instance Show Descriptor where
 -- format is invalid.
 parseDescriptor :: Monad m => Document -> m Descriptor
 parseDescriptor items = do
-  address    <- parseRouter           =<< findArg isRouter
-  time       <- parseTime . B.take 19 =<< findArg isPublished
-  fp         <- parseFingerprint      =<< findArg isFingerprint
+  address    <- parseRouter      =<< findArg (b 6 "router"# ==) items
+  time       <- parsePOSIXTime   =<< findArg (b 9 "published"# ==) items
+  fp         <- parseFingerprint =<< findArg (b 11 "fingerprint"# ==) items
   exitPolicy <- parseExitPolicy . filter isRule $ items
   return $! Desc address time fp exitPolicy
   where
-    isRouter = (b 6 "router"# ==) . iKey
-    isPublished = (b 9 "published"# ==) . iKey
-    isFingerprint = (b 11 "fingerprint"# ==) . iKey
     isRule = (\k -> k == b 6 "accept"# || k == b 6 "reject"#) . iKey
-
-    findArg p | Just item <- find p items, Just arg <- iArg item = return arg
-    findArg _ = fail "parseDescriptor: item doesn't exist"
 
     parseRouter router = do
       _:address:_ <- return $ B.splitWith isSpace router
       inet_atoh address
 
-    -- Parse a POSIXTime in this format: "YYYY-MM-DD HH:MM:SS"
-    parseTime bs = do
-      [date,time]          <- return       $ B.split ' ' bs
-      [year,month,day]     <- mapM readInt $ B.split '-' date
-      [hour,minute,second] <- mapM readInt $ B.split ':' time
-      let utcDay = fromGregorian (fromIntegral year) month day
-          utcDayTime = hour * 3600 + minute * 60 + second
-          utcTime = addUTCTime (fromIntegral utcDayTime) (UTCTime utcDay 0)
-      return $! utcTimeToPOSIXSeconds utcTime
+    parsePOSIXTime = liftM utcTimeToPOSIXSeconds . parseTime . B.take 19
 
     parseFingerprint = decodeBase16Fingerprint . B.filter (/= ' ')
 
@@ -132,6 +118,8 @@ parseDescriptors = parseSubDocs (b 6 "router"#) parseDescriptor
 data RouterStatus = RS
   { -- | This router's identity fingerprint.
     rsFingerprint :: {-# UNPACK #-} !Fingerprint,
+    -- | When this router's most recent descriptor was published.
+    rsPublished   :: {-# UNPACK #-} !UTCTime,
     -- | Is this router running?
     rsIsRunning   :: {-# UNPACK #-} !Bool }
   deriving Show
@@ -140,15 +128,14 @@ data RouterStatus = RS
 -- the format is invalid.
 parseRouterStatus :: Monad m => Document -> m RouterStatus
 parseRouterStatus items = do
-  fingerprint <- parseRouter =<< findArg ((b 1 "r"# ==) . iKey)
-  return $! RS fingerprint (parseStatus . findArg $ (b 1 "s"# ==) . iKey)
+  (fingerprint,published) <- parseRouter =<< findArg (b 1 "r"# ==) items
+  return $! RS fingerprint published (parseStatus $ findArg (b 1 "s"# ==) items)
   where
-    findArg p | Just item <- find p items, Just arg <- iArg item = return arg
-    findArg _ = fail "parseRouterStatus: item doesn't exist"
-
     parseRouter router = do
-      _:base64Fingerprint:_ <- return $ B.splitWith isSpace router
-      decodeBase64Fingerprint base64Fingerprint
+      _:base64Fingerprint:_:date:time:_ <- return $ B.splitWith isSpace router
+      fingerprint <- decodeBase64Fingerprint base64Fingerprint
+      published   <- parseTime $ B.unwords [date, time]
+      return (fingerprint, published)
 
     parseStatus = maybe False (elem (b 7 "Running"#) . B.splitWith isSpace)
 
@@ -186,10 +173,9 @@ decodeBase64Fingerprint :: Monad m => ByteString -> m Fingerprint
 decodeBase64Fingerprint bs = do
   unless (B.length bs == 27 && B.all isBase64Char bs) $
     fail "decodeBase64Fingerprint: failed"
-  return $! FP . B.init . toBytes . blocks $ bs
+  return $! FP . B.init . toBytes . split 4 $ bs
   where
     toBytes = W.pack . concatMap (indicesToBytes . map base64Index . B.unpack)
-    blocks = takeWhile (not . B.null) . map (B.take 4) . iterate (B.drop 4)
 
     indicesToBytes is = map (fromIntegral . (0xff .&.) . shiftR buf) [16,8,0]
       where buf = foldl' (.|.) 0 $ zipWith shiftL is [18,12..]

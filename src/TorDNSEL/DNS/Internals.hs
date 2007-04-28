@@ -70,8 +70,8 @@ import TorDNSEL.Util
 --------------------------------------------------------------------------------
 -- I/O
 
--- | Run a DNS server using a bound UDP socket. Passes received messages to the
--- handler, then sends back responses returned by the handler.
+-- | Run a DNS server using a bound UDP socket. Pass received messages to the
+-- handler and send back responses returned by the handler.
 runServer :: Socket -> (Message -> IO Message) -> IO ()
 {-# INLINE runServer #-} -- critical
 runServer sock handler = forever $ recvMessageFrom sock >>= handleQuery
@@ -82,7 +82,7 @@ runServer sock handler = forever $ recvMessageFrom sock >>= handleQuery
           sendMessageTo sock response sockAddr
     handleQuery _ = return ()
 
--- | Read a DNS message from a bound UDP socket. Returns the source 'SockAddr'
+-- | Read a DNS message from a bound UDP socket. Return the source 'SockAddr'
 -- and @'Just' _@ if parsing the message succeeded, or 'Nothing' if it failed.
 recvMessageFrom :: Socket -> IO (Maybe Message, SockAddr)
 recvMessageFrom sock = do

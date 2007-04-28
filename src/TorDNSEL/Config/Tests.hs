@@ -15,6 +15,8 @@
 -- #hide
 module TorDNSEL.Config.Tests (tests) where
 
+import Control.Arrow ((***))
+import Data.Char (toLower)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map as M
 import Test.HUnit (Test(..), (@=?))
@@ -25,43 +27,46 @@ tests = TestList . map TestCase $
   [ Just config @=? parseConfigFile configFile
   , Just config' @=? parseConfigArgs configArgs ]
 
-toConfig = M.fromList . map (\(k,v) -> (B.pack k, B.pack v))
-
-config' = toConfig $
-  [ ("user", "_tordnsel")
-  , ("configfile", "/etc/tordnsel.conf") ]
-
-config = toConfig $
-  [ ("authoritativezone", "torhosts.example.com")
-  , ("changerootdirectory", "/var/empty")
-  , ("configfile", "/etc/tordnsel/tordnsel.conf")
-  , ("dnslistenaddress", "127.0.0.1:53")
-  , ("group", "nogroup")
-  , ("pidfile", "/var/run/tordnsel.pid")
-  , ("runasdaemon", "True")
-  , ("torcontroladdress", "127.0.0.1:9051")
-  , ("torcontrolpassword", "password")
-  , ("tordatadirectory", "/var/lib/tor")
-  , ("user", "nobody") ]
+config' = toConfig
+  [ "User"       ~> "_tordnsel"
+  , "ConfigFile" ~> "/etc/tordnsel.conf" ]
 
 configArgs = ["--User", "_tordnsel", "-f", "/etc/tordnsel.conf"]
 
+config = toConfig
+  [ "AuthoritativeZone"      ~> "torhosts.example.com"
+  , "ChangerootDirectory"    ~> "/var/empty"
+  , "ConcurrentExitTests"    ~> "128"
+  , "ConfigFile"             ~> "/etc/tordnsel/tordnsel.conf"
+  , "DNSListenAddress"       ~> "127.0.0.1:53"
+  , "Group"                  ~> "_tordnsel"
+  , "PIDFile"                ~> "/var/run/tordnsel.pid"
+  , "RunAsDaemon"            ~> "True"
+  , "StateDirectory"         ~> "/var/lib/tordnsel"
+  , "TestDestinationAddress" ~> "18.0.0.1:80,443,110,53,22,5190,6667,9030"
+  , "TestListenAddress"      ~> "10.0.0.1:80,443,110,53,22,5190,6667,9030"
+  , "TorControlAddress"      ~> "127.0.0.1:9051"
+  , "TorControlPassword"     ~> "password"
+  , "TorDataDirectory"       ~> "/var/lib/tor"
+  , "TorSocksAddress"        ~> "127.0.0.1:9050"
+  , "User"                   ~> "_tordnsel" ]
+
 configFile = B.pack
-  "## The DNS zone for which this name server is authoritative. For example,\n\
-  \## if this is set to \"torhosts.example.com\", your server would accept\n\
-  \## queries of the form \"1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com\".\
-  \\n## This option is required.\n\
-  \AuthoritativeZone   \ttorhosts.example.com  # comment\n\
+  "## Answer queries authoritatively for this DNS zone. For example, if this\n\
+  \## is set to \"torhosts.example.com\", your server would accept queries of\n\
+  \## the form \"1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com\". This\n\
+  \## option is required.\n\
+  \AuthoritativeZone torhosts.example.com\n\
   \\n\
-  \## The IP address and UDP port the name server will bind to. If you want\n\
-  \## to bind to all interfaces, you might set the address to \"0.0.0.0\".\n\
-  \## This port is bound before dropping privileges. Leave it commented to use\
-  \\n## the default.\n\
+  \## Bind the name server to this IP address and UDP port. If you want to\n\
+  \## bind to all interfaces, you might set the address to \"0.0.0.0\". This\n\
+  \## port is bound before dropping privileges. Leave it commented to use\n\
+  \## the default.\n\
   \DNSListenAddress 127.0.0.1:53\n\
   \\n\
-  \## The IP address and TCP port on which Tor is listening for controller\n\
-  \## connections. You'll need to set this as your ControlListenAddress or\n\
-  \## ControlPort in Tor's torrc. Leave it commented to use the default.\n\
+  \## Make Tor controller connections to this IP address and TCP port.\n\
+  \## You'll need to set this as your ControlListenAddress or ControlPort in\n\
+  \## Tor's torrc. Leave it commented to use the default.\n\
   \TorControlAddress 127.0.0.1:9051\n\
   \\n\
   \## Detach from the controlling terminal and run in the background as a\n\
@@ -79,11 +84,11 @@ configFile = B.pack
   \\n\
   \## The user name to which you want to drop privileges. This option\n\
   \## requires root privileges.\n\
-  \User nobody\n\
+  \User _tordnsel\n\
   \\n\
   \## The group name to which you want to drop privileges. This option also\n\
   \## requires root privileges.\n\
-  \Group nogroup\n\
+  \Group _tordnsel\n\
   \\n\
   \## Call chroot(2) to change our root directory. This option also requires\n\
   \## root privileges.\n\
@@ -95,4 +100,36 @@ configFile = B.pack
   \\n\
   \## Include another config file, using options in this file when duplicates\n\
   \## are encountered. You probably don't want to do this.\n\
-  \ConfigFile /etc/tordnsel/tordnsel.conf\n"
+  \ConfigFile /etc/tordnsel/tordnsel.conf\n\
+  \\n\
+  \## Make at most this number of concurrent test connections through exit\n\
+  \## nodes. By default this is set to 0, that is, we don't perform any\n\
+  \## tests. If this is set higher than about (FD_SETSIZE-80)/2, the runtime\n\
+  \## will crash due to limitations of select(2). Setting it higher than the\n\
+  \## number of exit nodes has no benefit, so a reasonable maximum might be\n\
+  \## 384.\n\
+  \ConcurrentExitTests 128\n\
+  \\n\
+  \## Store exit test results in this directory. This path should be\n\
+  \## accessible and writable from inside the chroot (if configured) after\n\
+  \## dropping privileges. This option is only required when\n\
+  \## ConcurrentExitTests is greater than 0.\n\
+  \StateDirectory /var/lib/tordnsel\n\
+  \\n\
+  \## Make exit test connections through Tor's SocksPort on this IP address\n\
+  \## and TCP port. Leave it commented to use the default.\n\
+  \TorSocksAddress 127.0.0.1:9050\n\
+  \\n\
+  \## Bind the exit test listeners to this IP address and these TCP ports.\n\
+  \## These ports are bound before dropping privileges. This option is only\n\
+  \## required when ConcurrentExitTests is greater than 0.\n\
+  \TestListenAddress 10.0.0.1:80,443,110,53,22,5190,6667,9030\n\
+  \\n\
+  \## Make exit test connections to this IP address and these TCP ports.\n\
+  \## These should be publicly accessible from Tor exit nodes. This option\n\
+  \## is only required when ConcurrentExitTests is greater than 0.\n\
+  \TestDestinationAddress 18.0.0.1:80,443,110,53,22,5190,6667,9030\n"
+
+toConfig = M.fromList . map ((B.pack . map toLower) *** B.pack)
+
+(~>) = (,)
