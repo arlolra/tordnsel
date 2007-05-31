@@ -546,8 +546,6 @@ startExitTests :: ExitTestConfig -> IO ()
 startExitTests conf = do
   startTestListeners (etNetState conf) (etListenSocks conf) (etConcTests conf)
 
---   lock <- newMVar ()
-
   replicateM_ (etConcTests conf) . forkIO . forever $ do
     fp      <- atomically . readTChan . unETState . etState $ conf
     routers <- atomically . readRouters . etNetState $ conf
@@ -556,10 +554,6 @@ startExitTests conf = do
           guard $ rtrRunning rtr == Running
           ports@(_:_) <- allowedPorts `fmap` rtrDescriptor rtr
           return ports
-
---     withMVar lock $ \_ -> do
---       putStrLn (show fp ++ " " ++ show mbPorts)
---       hFlush stdout
 
     -- Skip the test if this router's exit policy doesn't allow connections to
     -- any of our listening ports.
