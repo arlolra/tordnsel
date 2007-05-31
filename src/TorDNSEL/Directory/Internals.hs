@@ -50,7 +50,9 @@ module TorDNSEL.Directory.Internals (
   ) where
 
 import Control.Monad (unless, liftM)
-import Data.Char (ord, isSpace, isHexDigit, digitToInt)
+import Data.Char
+  ( ord, isSpace, isHexDigit, digitToInt, isAscii, isAsciiUpper
+  , isAsciiLower, isAlpha, isDigit )
 import Data.List (foldl')
 import Data.Bits ((.|.), (.&.), shiftL, shiftR)
 import qualified Data.ByteString.Char8 as B
@@ -181,16 +183,14 @@ decodeBase64Fingerprint bs = do
       where buf = foldl' (.|.) 0 $ zipWith shiftL is [18,12..]
 
     base64Index x
-      | 'A' <= x, x <= 'Z' = ord x - 65
-      | 'a' <= x, x <= 'z' = ord x - 71
-      | '0' <= x, x <= '9' = ord x + 4
-    base64Index '+' = 62
-    base64Index '/' = 63
-    base64Index _   = error "base64Index: invalid base64 index"
+      | isAsciiUpper x = ord x - 65
+      | isAsciiLower x = ord x - 71
+      | isDigit x      = ord x + 4
+    base64Index '+'    = 62
+    base64Index '/'    = 63
+    base64Index _      = error "base64Index: invalid base64 index"
 
-    isBase64Char x =
-      'A' <= x && x <= 'Z' || 'a' <= x && x <= 'z' ||
-      '0' <= x && x <= '9' || x `elem` "+/"
+    isBase64Char x = isAscii x && or [isAlpha x, isDigit x, x `elem` "+/"]
 
 -- | Encode a 'Fingerprint' in base16.
 encodeBase16Fingerprint :: Fingerprint -> ByteString
