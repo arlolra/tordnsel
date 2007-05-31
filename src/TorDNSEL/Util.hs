@@ -86,11 +86,13 @@ exitLeft = either (\e -> err e >> exitFailure) return
     err e = hPutStr stderr . unlines . (:[e]) . usage =<< getProgName
     usage progName = "Usage: " ++ progName ++ " [-f <config file>] [options...]"
 
+instance Functor (Either String) where
+  fmap f = either Left (Right . f)
+
 instance Monad (Either String) where
-  return        = Right
-  fail          = Left
-  Right x >>= f = f x
-  Left x  >>= _ = Left x
+  return = Right
+  fail   = Left
+  (>>=)  = flip (either Left)
 
 foreign import ccall unsafe "htonl" htonl :: Word32 -> Word32
 foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32
