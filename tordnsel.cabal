@@ -1,5 +1,5 @@
 Name:           TorDNSEL
-Version:        0.0.3
+Version:        0.0.4
 Synopsis:       provides a DNSBL-style interface for detecting Tor exit nodes
 Description:    TorDNSEL implements a design for a DNSBL-style interface for
   detecting connections exiting the Tor network. This design and its rationale

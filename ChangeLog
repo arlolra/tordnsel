@@ -1,3 +1,24 @@
+0.0.4 - 2007-06-02
+  - Return REFUSED instead of SERVFAIL for queries outside the authoritative
+    zone.
+
+  - Return NODATA for queries matching the authoritative zone.
+
+  - Return NODATA for positive results when queries ask for non-A records.
+
+  - Support queries with a type of *.
+
+  - Return a SOA record with NXDOMAIN and NODATA responses to support
+    negative caching.
+
+  - Don't send responses that exceed 512 bytes.
+
+  - Drop incoming messages with QR set.
+
+  - Implement compression for domain names in responses.
+
+  - Add a required SOARCode option to specify the RCODE field in SOA records.
+
 0.0.3 - 2007-04-27
   - Implement active testing through exit nodes to determine the IP address
     connections actually originate from. Store this information in state
