@@ -209,17 +209,16 @@ emptyTargetMap = TargetMap M.empty
 -- | Given the current offset into a datagram, compress a domain name. Return
 -- the compressed name and the updated map of compression targets.
 compressName :: Offset -> DomainName -> TargetMap -> (ByteString, TargetMap)
-compressName initOff (DomainName labels) initialTargets
-  = compress (reverse labels) initialTargets Nothing
+compressName initOff (DomainName labels) = compress Nothing (reverse labels)
   where
-    compress lls@(l:ls) ts@(TargetMap targets) off
+    compress off lls@(l:ls) ts@(TargetMap targets)
       | Just (off', nextTargets) <- l `M.lookup` targets
-      , (bs, newTargets) <- compress ls nextTargets (Just off')
+      , (bs, newTargets) <- compress (Just off') ls nextTargets
       = (bs, TargetMap (M.insert l (off', newTargets) targets))
       | otherwise
       = (encodeName (reverse lls) off, insert (lls `zip` offs) ts)
       where offs = tail $ scanr (\(Label x) a -> a + 1 + B.length x) initOff lls
-    compress [] targets off
+    compress off [] targets
       = (encodeOffset off, targets)
 
     insert ((l,off):ls) (TargetMap targets)
