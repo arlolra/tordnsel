@@ -56,6 +56,7 @@ knownConfigItems
   , "DNSListenAddress"
   , "TorControlAddress"
   , "AuthoritativeZone"
+  , "SOARName"
   , "TorDataDirectory"
   , "TorControlPassword"
   , "User"
@@ -72,8 +73,7 @@ knownConfigItems
 -- | Check for required config options and fill in defaults for absent options.
 fillInConfig :: Monad m => Config -> m Config
 fillInConfig conf = do
-  when (b "authoritativezone"# `M.notMember` conf') $
-    fail "AuthoritativeZone is a required option."
+  mapM_ checkForItem ["AuthoritativeZone", "SOARName"]
   concTests <- parse $ conf' ! b "concurrentexittests"#
   when (concTests > (0 :: Int)) . mapM_ checkForExitItem $
     ["StateDirectory", "TestListenAddress", "TestDestinationAddress"]
@@ -86,8 +86,10 @@ fillInConfig conf = do
       , "ConcurrentExitTests" ~> "0"
       , "TorSocksAddress"     ~> "127.0.0.1:9050" ]
     (~>) = (,)
-    checkForExitItem item = when (toItem item `M.notMember` conf') .
-      fail $ item ++ " is required for exit tests."
+    checkForItem item = when (toItem item `M.notMember` conf') $
+      fail (item ++ " is a required option.")
+    checkForExitItem item = when (toItem item `M.notMember` conf') $
+      fail (item ++ " is required for exit tests.")
 
 -- | Configuration information represented as a map from config item to unparsed
 -- config value.

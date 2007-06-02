@@ -1,8 +1,13 @@
 ## Answer queries authoritatively for this DNS zone. For example, if this
-## is set to "torhosts.example.com", your server would accept queries of
-## the form "1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com". This
+## is set to "torhosts.example.com.", your server would accept queries of
+## the form "1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com.". This
 ## option is required.
-#AuthoritativeZone torhosts.example.com
+#AuthoritativeZone torhosts.example.com.
+
+## Use this email address in the RNAME field of SOA records. Usually,
+## this should be something like "hostmaster@example.com". Replace the
+## "@" with a ".".
+#SOARName hostmaster.example.com.
 
 ## Bind the name server to this IP address and UDP port. If you want to
 ## bind to all interfaces, you might set the address to "0.0.0.0". This

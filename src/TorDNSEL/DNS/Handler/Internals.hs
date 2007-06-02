@@ -22,15 +22,17 @@ module TorDNSEL.DNS.Handler.Internals (
     dnsHandler
   , dropAuthZone
   , parseExitListQuery
+  , ttl
   , b
   ) where
 
 import Control.Monad (guard)
 import Data.Bits ((.|.), shiftL)
+import qualified Data.ByteString.Char8 as B
 import Data.Char (toLower)
 import Data.List (foldl')
 import Data.Maybe (isNothing)
-import qualified Data.ByteString.Char8 as B
+import Data.Word (Word32)
 
 import GHC.Prim (Addr#)
 
@@ -41,31 +43,46 @@ import TorDNSEL.NetworkState
 -- | Given our authoritative zone and a DNS query, parse the exit list query
 -- contained therein and generate an appropriate DNS response based on our
 -- knowledge of the current state of the Tor network.
-dnsHandler :: NetworkState -> DomainName -> Message -> IO Message
+dnsHandler
+  :: NetworkState -> DomainName -> ResourceRecord -> Message
+  -> IO (Maybe Message)
 {-# INLINE dnsHandler #-}
+-- XXX profiling info is old
 -- Profiling shows about 33% of time is spent in this handler for positive
 -- results, with 33% spent in deserialization and 33% in serialization.
-dnsHandler netState authZone msg
-  | msgOpCode msg /= StandardQuery
-  = return r { msgAA = False, msgRCode = NotImplemented }
-  | msgQR msg /= Query || isNothing mbQLabels
-  = return r { msgAA = False, msgRCode = ServerFailure }
-  | A            <- qType question
-  , IN           <- qClass question
+dnsHandler netState authZone soa msg
+  -- draft-arends-dnsext-qr-clarification-00
+  | msgQR msg                      = return Nothing
+  | msgOpCode msg /= StandardQuery = return notImpl -- RFC 3425
+  -- draft-koch-dns-unsolicited-queries-01
+  | isNothing mbQLabels            = return refused
+  | Just [] <- mbQLabels           = return noData -- RFC 2308
+  | IN <- qClass question
   , Just qLabels <- mbQLabels
   , Just query   <- parseExitListQuery qLabels = do
-    isExit <- isExitNode netState query
-    return $ if isExit || isTest query
-      then r { msgAA = True, msgRCode = NoError, msgAnswers = positive }
-      else r { msgAA = True, msgRCode = NXDomain }
-  | otherwise = return r { msgAA = True, msgRCode = NXDomain }
+      isExit <- isExitNode netState query
+      if isExit || isTest query then
+        if qType question == TA || qType question == TAny
+          then return positive -- draft-irtf-asrg-dnsbl-02
+          else return noData
+        else return nxDomain
+  | otherwise                      = return nxDomain
   where
     isTest q = queryAddr q == 0x7f000002
-    ttl = 60 * 30
-    positive = [Answer QuestionName ttl 0x7f000002]
     question = msgQuestion msg
     mbQLabels = dropAuthZone authZone (qName question)
-    r = msg { msgQR = Response, msgTC = False, msgRA = False, msgAnswers = [] }
+    positive = Just r { msgAA = True, msgRCode = NoError, msgAuthority = []
+                      , msgAnswers = [A (qName question) ttl 0x7f000002] }
+    noData   = Just r { msgAA = True, msgRCode = NoError, msgAnswers = []
+                      , msgAuthority = [soa] }
+    nxDomain = Just r { msgAA = True, msgRCode = NXDomain, msgAnswers = []
+                      , msgAuthority = [soa] }
+    notImpl  = Just r { msgAA = False, msgRCode = NotImplemented
+                      , msgAnswers = [], msgAuthority = [soa] }
+    refused  = Just r { msgAA = False, msgRCode = Refused
+                      , msgAnswers = [], msgAuthority = [soa] }
+    r = msg { msgQR = False, msgTC = False, msgRA = False, msgAD = False
+            , msgAdditional = [] }
 
 -- | Given @authZone@, a sequence of labels ordered from top to bottom
 -- representing our authoritative zone, return @Just labels@ if @name@ is a
@@ -109,6 +126,10 @@ parseExitListQuery labels = do
     toPort p = do
       guard $ 0 <= p && p <= 0xffff
       return $! fromIntegral p
+
+-- | The time-to-live set for caching.
+ttl :: Word32
+ttl = 60 * 30
 
 -- | An alias for unsafePackAddress.
 b :: Int -> Addr# -> B.ByteString

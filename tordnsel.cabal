@@ -8,8 +8,8 @@ License:        PublicDomain
 License-File:   LICENSE
 Author:         tup
 Maintainer:     tup.tuple@googlemail.com
-Build-Depends:  base>=2.0, network>=2.0, unix>=1.0, stm>=2.0, time>=1.0,
-  HUnit>=1.1, binary>=0.3
+Build-Depends:  base>=2.0, network>=2.0, mtl>=1.0, unix>=1.0, stm>=2.0,
+  time>=1.0, HUnit>=1.1, binary>=0.3
 tested-with:    GHC==6.6
 
 Executable:     tordnsel

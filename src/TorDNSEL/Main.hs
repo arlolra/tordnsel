@@ -116,7 +116,11 @@ main = do
       , etTestAddr    = testDestAddr
       , etTestPorts   = testDestPorts }
 
-  let authZone = toAuthZone $ conf ! b "authoritativezone"#
+  let authLabels = toLabels $ conf ! b "authoritativezone"#
+      authZone = DomainName authLabels
+      revAuthZone = DomainName $ reverse authLabels
+      rName = DomainName . toLabels $ conf ! b "soarname"#
+      soa = SOA authZone ttl authZone rName 0 ttl ttl ttl ttl
       [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
         [ b "user"#, b "group"#, b "changerootdirectory"#, b "pidfile"#
         , b "tordatadirectory"#, b "torcontrolpassword"# ]
@@ -175,7 +179,7 @@ main = do
 
     -- start the DNS server
     forever . E.catchJust E.ioErrors
-      (runServer sock $ dnsHandler netState authZone) $ \e -> do
+      (runServer sock $ dnsHandler netState revAuthZone soa) $ \e -> do
         -- XXX this should be logged
         unless runAsDaemon $
           hPutStrLn stderr (show e) >> hFlush stderr
@@ -192,7 +196,8 @@ main = do
       = "Tor control error: " ++ show e'
     showConnException _ = "bug: unknown exception type"
 
-    toAuthZone = DomainName . map Label . reverse . B.split '.' . B.map toLower
+    toLabels = map Label . reverse . dropWhile B.null . reverse .
+      B.split '.' . B.map toLower
 
     conf <! addr = exitLeft . parse $ conf ! b addr
 

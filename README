@@ -1,7 +1,7 @@
-TorDNSEL: A Tor DNS Exit List Daemon
+TorDNSEL: A Tor DNS-based Exit List
 
 TorDNSEL implements the design described at
-<http://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt> with some
+<https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt> with some
 modifications. Instead of parsing the cached-routers file, it establishes a
 persistent controller connection to Tor, receiving updated nodes and exit
 policies as Tor fetches them from directories. When Tor is running as a
@@ -20,10 +20,11 @@ A request for the A record "1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com"
 would return 127.0.0.2 if there's a running Tor node at 10.0.0.1 that allows
 exits to port 80 at 1.2.3.4 and our AuthoritativeZone is set to
 "torhosts.example.com". If there isn't such an exit node, we return NXDOMAIN.
-If the query isn't in our authoritative zone, we return server failure.
+If the query is unsolicited and outside our authoritative zone, we return
+REFUSED.
 
 Presumably, users of software with built-in support for DNSBLs would configure
-[serviceport].[serviceaddress].ip-port.torhosts.example.com as a DNSBL.
+[service port].[service address].ip-port.torhosts.example.com as a DNSBL.
 
 -----------------------------------------------------------------------------
 
@@ -31,7 +32,8 @@ Dependencies
 
   TorDNSEL requires GHC 6.6. If you're running Debian unstable:
 
-    apt-get install ghc6 libghc6-network-dev libghc6-time-dev libghc6-hunit-dev
+    apt-get install ghc6 libghc6-mtl-dev libghc6-network-dev libghc6-time-dev \
+      libghc6-hunit-dev
 
   Older Debians will need backports from Haskell Unsafe:
 
@@ -44,7 +46,7 @@ Dependencies
 
   binary, a new serialization library, also required, is available here:
 
-    http://hackage.haskell.org/packages/archive/binary/binary-0.3.tar.gz
+    http://hackage.haskell.org/packages/archive/binary/0.3/binary-0.3.tar.gz
 
   Before building binary, apply the included patch in binary.patch. If you
   don't, you're likely to experience a segfault if you receive a malformed
@@ -66,7 +68,8 @@ Building TorDNSEL
 Configuring TorDNSEL
 
   Copy tordnsel.conf.sample located in config. At the very least, you'll need
-  to uncomment and modify AuthoritativeZone, and probably DNSListenAddress.
+  to uncomment and modify AuthoritativeZone, SOARName, and probably
+  DNSListenAddress.
 
   To run exit tests, you need to specify at least ConcurrentExitTests,
   StateDirectory, TestListenAddress, and TestDestinationAddress.

@@ -34,7 +34,8 @@ config' = toConfig
 configArgs = ["--User", "_tordnsel", "-f", "/etc/tordnsel.conf"]
 
 config = toConfig
-  [ "AuthoritativeZone"      ~> "torhosts.example.com"
+  [ "AuthoritativeZone"      ~> "torhosts.example.com."
+  , "SOARName"               ~> "hostmaster.example.com."
   , "ChangerootDirectory"    ~> "/var/empty"
   , "ConcurrentExitTests"    ~> "128"
   , "ConfigFile"             ~> "/etc/tordnsel/tordnsel.conf"
@@ -53,10 +54,15 @@ config = toConfig
 
 configFile = B.pack
   "## Answer queries authoritatively for this DNS zone. For example, if this\n\
-  \## is set to \"torhosts.example.com\", your server would accept queries of\n\
-  \## the form \"1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com\". This\n\
+  \## is set to \"torhosts.example.com.\", your server would accept queries of\n\
+  \## the form \"1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com.\". This\n\
   \## option is required.\n\
-  \AuthoritativeZone torhosts.example.com\n\
+  \AuthoritativeZone torhosts.example.com.\n\
+  \\n\
+  \## Use this email address in the RNAME field of SOA records. Usually,\n\
+  \## this should be something like \"hostmaster@example.com\". Replace the\n\
+  \## \"@\" with a \".\".\n\
+  \SOARName hostmaster.example.com.\n\
   \\n\
   \## Bind the name server to this IP address and UDP port. If you want to\n\
   \## bind to all interfaces, you might set the address to \"0.0.0.0\". This\n\

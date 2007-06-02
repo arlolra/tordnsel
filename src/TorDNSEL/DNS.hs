@@ -6,12 +6,14 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (imprecise exceptions)
+-- Portability : non-portable (imprecise exceptions, pattern guards)
+--
+-- /Internals/: should only be imported by the public module and tests.
 --
 -- Decoding and encoding the subset of DNS necessary for running a DNSBL
 -- server.
 --
--- See RFC 1035 for details.
+-- See RFC 1035 and RFC 2308 for details.
 --
 -----------------------------------------------------------------------------
 
@@ -24,10 +26,9 @@ module TorDNSEL.DNS (
   -- * Data types
   , Message(..)
   , Question(..)
-  , Answer(..)
+  , ResourceRecord(..)
   , DomainName(..)
   , Label(..)
-  , QR(..)
   , RCode(..)
   , OpCode(..)
   , Type(..)
