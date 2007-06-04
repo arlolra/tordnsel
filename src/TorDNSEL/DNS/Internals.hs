@@ -497,14 +497,14 @@ instance BinaryPacket DomainName where
           0                        -> skip 1 >> return []
           _ | len .&. 0xc0 == 0xc0 -> do
                 ptr <- xor 0xc000 `fmap` getWord16be
-                () <- unless (ptr < p) $
+                () <- unless (ptr < p && ptr >= 12) $
                   fail "invalid name pointer"
-                return $! runGet (getLabels ptr)
-                                 (L.fromChunks [B.drop (fromIntegral ptr) pkt])
+                let priorLen = fromIntegral (p - ptr)
+                    -- names can't overlap
+                    prior = B.take priorLen . B.drop (fromIntegral ptr) $ pkt
+                return $! runGet (getLabels ptr) (L.fromChunks [prior])
             | len > 63             -> fail "label too long"
             | otherwise            -> liftM2 (:) get (getLabels p)
-
-
 
   -- Write a DomainName as a possibly null list of 'Label's terminated by
   -- either a null label or a pointer to a label from a prior domain name.

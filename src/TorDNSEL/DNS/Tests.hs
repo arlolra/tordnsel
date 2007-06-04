@@ -21,7 +21,7 @@ import qualified Data.ByteString.Base as B
 import qualified Data.ByteString.Lazy as L
 import Test.HUnit (Test(..), (@=?))
 
-import Data.Binary.Get (runGet)
+import Data.Binary.Get (runGet, skip)
 
 import TorDNSEL.DNS.Internals
 
@@ -53,23 +53,24 @@ r' = Message 0x8eba True StandardQuery False False True True False False
 name = toName ["yahoo","com"]
 name' = toName ["1","0","0","127","dnsbl","sorbs","net"]
 
-decompNames = runGet (replicateM 4 (getPacket (Packet compNames)))
+decompNames = runGet (skip 12 >> replicateM 4 (getPacket (Packet compNames)))
                      (L.fromChunks [compNames])
 
 decompNames' = [name1, name2, name3, name4]
 
-compNames = B.concat [b1,b2,b3,b4]
+compNames = B.replicate 12 0 `B.append` B.concat [b1,b2,b3,b4]
   where
     len = sum . map B.length
-    (b1,t1) = compressName 0 name1 emptyTargetMap
+    (b1,t1) = compressName 12 name1 emptyTargetMap
     (b2,t2) = compressName (B.length b1) name2 t1
     (b3,t3) = compressName (len [b1,b2]) name3 t2
     (b4,_) = compressName (len [b1,b2,b3]) name4 t3
 
 compNames' = B.pack . map B.c2w $
-  "\x03\x77\x77\x77\x05\x79\x61\x68\x6f\x6f\x03\x63\x6f\x6d\
-  \\x00\x04\x6d\x61\x69\x6c\xc0\x04\x04\x6d\x61\x69\x6c\x06\
-  \\x67\x6f\x6f\x67\x6c\x65\xc0\x0a\xc0\x00"
+  "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+  \\x03\x77\x77\x77\x05\x79\x61\x68\x6f\x6f\x03\x63\x6f\x6d\
+  \\x00\x04\x6d\x61\x69\x6c\xc0\x10\x04\x6d\x61\x69\x6c\x06\
+  \\x67\x6f\x6f\x67\x6c\x65\xc0\x16\xc0\x0c"
 
 name1 = toName ["www","yahoo","com"]
 name2 = toName ["mail","yahoo","com"]
