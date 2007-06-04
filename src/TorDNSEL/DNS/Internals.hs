@@ -166,7 +166,7 @@ unsafeDecodeMessage pkt = runGet (getPacket pkt) (L.fromChunks [unPacket pkt])
 -- offset (in bytes) into the datagram we're serializing.
 data PutState = PutState
   { psTargets :: {-# UNPACK #-} !TargetMap
-  , psCurOff  :: {-# UNPACK #-} !Int }
+  , psCurOff  :: {-# UNPACK #-} !Offset }
 
 -- | The initial state before we start writing a datagram.
 initialPutState :: PutState
@@ -181,7 +181,7 @@ runPutMessage :: PutMessage -> L.ByteString
 runPutMessage = runPut . flip S.evalStateT initialPutState
 
 -- | Increment the current offset by @n@ bytes.
-incrOffset :: Int -> PutMessage
+incrOffset :: Offset -> PutMessage
 incrOffset n = S.modify $ \s -> s { psCurOff = psCurOff s + n }
 
 -- | Binary serialization and deserialization of a packet. The entire packet is
@@ -198,8 +198,9 @@ class BinaryPacket a where
 type Offset = Int
 
 -- | A tree of labels used as compression targets. The top level represents
--- top-level domain names, the second level second-level and so on.
-data TargetMap = TargetMap (Map Label (Offset, TargetMap))
+-- top-level domain names, the second level second-level and so on. Making this
+-- a newtype triggers a bug in GHC 6.6.
+data TargetMap = TargetMap {-# UNPACK #-} !(Map Label (Offset, TargetMap))
   deriving Show
 
 -- | The empty target map.
@@ -211,19 +212,19 @@ emptyTargetMap = TargetMap M.empty
 compressName :: Offset -> DomainName -> TargetMap -> (ByteString, TargetMap)
 compressName initOff (DomainName labels) = compress Nothing (reverse labels)
   where
-    compress off lls@(l:ls) ts@(TargetMap targets)
-      | Just (off', nextTargets) <- l `M.lookup` targets
-      , (bs, newTargets) <- compress (Just off') ls nextTargets
-      = (bs, TargetMap (M.insert l (off', newTargets) targets))
+    compress off lls@(l:ls) targets
+      | Just (off', subTargets) <- lookupZone l targets
+      = let (compressedName, subTargets') = compress (Just off') ls subTargets
+        in (compressedName, insertZone l (off', subTargets') targets)
       | otherwise
-      = (encodeName (reverse lls) off, insert (lls `zip` offs) ts)
-      where offs = tail $ scanr (\(Label x) a -> a + 1 + B.length x) initOff lls
+      = let offs = tail $ scanr (\(Label x) a -> a + 1 + B.length x) initOff lls
+        in (encodeName (reverse lls) off, insertZones (lls `zip` offs) targets)
     compress off [] targets
       = (encodeOffset off, targets)
 
-    insert ((l,off):ls) (TargetMap targets)
-      = TargetMap (M.insert l (off, insert ls emptyTargetMap) targets)
-    insert [] targets = targets
+    insertZones ((l,off):ls) targets
+      = insertZone l (off, insertZones ls emptyTargetMap) targets
+    insertZones [] targets = targets
 
     encodeName ls off = B.concat . L.toChunks . runPut $
       mapM_ put ls >> putByteString (encodeOffset off)
@@ -231,6 +232,10 @@ compressName initOff (DomainName labels) = compress Nothing (reverse labels)
     encodeOffset Nothing    = B.singleton 0
     encodeOffset (Just off) = B.pack . map fromIntegral $ [ptr `shiftR` 8, ptr]
       where ptr = off .|. 0xc000
+
+    lookupZone k (TargetMap targets) = k `M.lookup` targets
+
+    insertZone k v (TargetMap targets) = TargetMap (M.insert k v targets)
 
 -- | Compress a domain name, updating the compression target and current
 -- offset state. Return the compressed name.
