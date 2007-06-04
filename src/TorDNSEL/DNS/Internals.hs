@@ -318,11 +318,12 @@ instance BinaryPacket Message where
 
   putPacket (Message ident qr opCode aa tc rd ra ad cd rCode question answers
                      authority additional) = do
-    lift $ put ident
-    lift . putWord16be $ flags (opCode' .|. rCode')
-    lift $ putWord16be 1
-    mapM_ (lift . putWord16be . fromIntegral . length)
-      [answers, authority, additional]
+    lift $ do
+      put ident
+      putWord16be $ flags (opCode' .|. rCode')
+      putWord16be 1
+      mapM_ (putWord16be . fromIntegral . length)
+        [answers, authority, additional]
     incrOffset 12
     putPacket question
     mapM_ (mapM_ putPacket) [answers, authority, additional]
@@ -359,8 +360,9 @@ instance BinaryPacket Question where
 
   putPacket (Question name qsType qsClass) = do
     putPacket name
-    lift $ put qsType
-    lift $ put qsClass
+    lift $ do
+      put qsType
+      put qsClass
     incrOffset 4
 
 -- | A resource record.
@@ -439,24 +441,26 @@ instance BinaryPacket ResourceRecord where
 
   putPacket (A name ttl addr) = do
     putPacket name
-    mapM_ lift [put TA, put IN, put ttl, putWord16be 4, put addr]
+    lift $ put TA >> put IN >> put ttl >> putWord16be 4 >> put addr
     incrOffset 14
 
   putPacket (SOA name ttl mName rName serial refresh retry expire minim) = do
     putPacket name
-    mapM_ lift [put TSOA, put IN, put ttl]
+    lift $ put TSOA >> put IN >> put ttl
     incrOffset 10
     [mName',rName'] <- mapM compressNameStatefully [mName, rName]
-    lift . putWord16be . fromIntegral $ B.length mName' + B.length rName' + 20
-    mapM_ (lift . putByteString) [mName', rName']
-    mapM_ (lift . put) [serial, refresh, retry, expire, minim]
+    lift $ do
+      putWord16be . fromIntegral $ B.length mName' + B.length rName' + 20
+      mapM_ putByteString [mName', rName']
+      mapM_ put [serial, refresh, retry, expire, minim]
     incrOffset 20
 
   putPacket (UnsupportedResourceRecord name ttl rType rClass rData) = do
     putPacket name
-    mapM_ lift [put ttl, put rType, put rClass]
-    lift . putWord16be . fromIntegral . B.length $ rData
-    lift $ putByteString rData
+    lift $ do
+      put ttl >> put rType >> put rClass
+      putWord16be . fromIntegral . B.length $ rData
+      putByteString rData
     incrOffset (10 + B.length rData)
 
 instance DeepSeq ResourceRecord where
