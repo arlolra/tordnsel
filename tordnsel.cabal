@@ -6,11 +6,13 @@ Description:    TorDNSEL implements a design for a DNSBL-style interface for
   is described at <http://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt>.
 License:        PublicDomain
 License-File:   LICENSE
+Homepage:       http://p56soo2ibjkx23xo.onion/
 Author:         tup
 Maintainer:     tup.tuple@googlemail.com
 Build-Depends:  base>=2.0, network>=2.0, mtl>=1.0, unix>=1.0, stm>=2.0,
   time>=1.0, HUnit>=1.1, binary>=0.3
 tested-with:    GHC==6.6
+data-files:     config/tordnsel-init.d-script.sample, config/tordnsel.conf.sample
 
 Executable:     tordnsel
 Main-Is:        tordnsel.hs

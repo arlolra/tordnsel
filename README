@@ -85,3 +85,25 @@ Configuring TorDNSEL
     ./tordnsel -f /etc/tordnsel.conf --AuthoritativeZone torhosts.example.com
 
   Command line options override those included in a config file.
+
+Running TorDNSEL practically
+
+    cp tordnsel-init.d-script.sample /etc/init.d/tordnsel
+    chmod +x /etc/init.d/tordnsel
+    cp tordnsel.conf.sample /etc/tordnsel.conf
+    # Configure it
+    vim /etc/tordnsel.conf
+    addgroup --system tordnsel
+    adduser --ingroup tordnsel --system --no-create-home --home /var/lib/tordnsel tordnsel
+    mkdir /var/lib/tordnsel
+    chown tordnsel.tordnsel /var/lib/tordnsel/
+
+    update-rc.d tordnsel defaults
+    /etc/init.d/tordnsel start
+
+Common configuration problems
+
+     This indicates that you're trying to bind to a port that is already bound:
+     
+       tordnsel: bind: resource busy (Address already in use)
+

@@ -43,7 +43,7 @@
 
 ## Call chroot(2) to change our root directory. This option also requires
 ## root privileges.
-#ChangeRootDirectory /var/empty
+#ChangeRootDirectory /var/lib/tordnsel
 
 ## Write our PID to the specified file before chrooting or dropping
 ## privileges. This file won't be removed on exit.
@@ -65,15 +65,18 @@
 ## accessible and writable from inside the chroot (if configured) after
 ## dropping privileges. This option is only required when
 ## ConcurrentExitTests is greater than 0.
-#StateDirectory /var/lib/tordnsel
+## This example assumes a chroot
+#StateDirectory /state
 
 ## Make exit test connections through Tor's SocksPort on this IP address
 ## and TCP port. Leave it commented to use the default.
 #TorSocksAddress 127.0.0.1:9050
 
 ## Bind the exit test listeners to this IP address and these TCP ports.
-## These ports are bound before dropping privileges. This option is only
-## required when ConcurrentExitTests is greater than 0.
+## These ports are bound before dropping privileges. Don't use 127.0.0.1 
+## for TestListenAddress on linux as it will drop your redirected packets
+## as martians. This option is only required when ConcurrentExitTests is 
+## greater than 0.
 #TestListenAddress 10.0.0.1:80,443,110,53,22,5190,6667,9030
 
 ## Make exit test connections to this IP address and these TCP ports.
