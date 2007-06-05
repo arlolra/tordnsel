@@ -56,20 +56,21 @@ dnsHandler netState authZone soa msg
   | msgOpCode msg /= StandardQuery = return notImpl -- RFC 3425
   -- draft-koch-dns-unsolicited-queries-01
   | isNothing mbQLabels            = return refused
-  | Just [] <- mbQLabels           = return noData -- RFC 2308
-  | IN <- qClass question
-  , Just qLabels <- mbQLabels
+  | qc /= IN                       = return nxDomain
+  | Just [] <- mbQLabels
+  = if qt == TSOA || qt == TAny then return soaResp
+                                else return noData -- RFC 2308
+  | Just qLabels <- mbQLabels
   , Just query   <- parseExitListQuery qLabels = do
       isExit <- isExitNode netState query
       if isExit || isTest query then
-        if qType question == TA || qType question == TAny
+        if qt == TA || qt == TAny
           then return positive -- draft-irtf-asrg-dnsbl-02
           else return noData
         else return nxDomain
   | otherwise                      = return nxDomain
   where
     isTest q = queryAddr q == 0x7f000002
-    question = msgQuestion msg
     mbQLabels = dropAuthZone authZone (qName question)
     positive = Just r { msgAA = True, msgRCode = NoError, msgAuthority = []
                       , msgAnswers = [A (qName question) ttl 0x7f000002] }
@@ -81,8 +82,13 @@ dnsHandler netState authZone soa msg
                       , msgAnswers = [], msgAuthority = [soa] }
     refused  = Just r { msgAA = False, msgRCode = Refused
                       , msgAnswers = [], msgAuthority = [soa] }
+    soaResp  = Just r { msgAA = True, msgRCode = NoError, msgAnswers = [soa]
+                      , msgAuthority = [] }
     r = msg { msgQR = False, msgTC = False, msgRA = False, msgAD = False
             , msgAdditional = [] }
+    question = msgQuestion msg
+    qt = qType question
+    qc = qClass question
 
 -- | Given @authZone@, a sequence of labels ordered from top to bottom
 -- representing our authoritative zone, return @Just labels@ if @name@ is a
