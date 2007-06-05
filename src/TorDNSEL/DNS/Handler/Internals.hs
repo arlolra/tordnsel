@@ -84,7 +84,7 @@ dnsHandler netState authZone soa msg
                       , msgAnswers = [], msgAuthority = [soa] }
     soaResp  = Just r { msgAA = True, msgRCode = NoError, msgAnswers = [soa]
                       , msgAuthority = [] }
-    r = msg { msgQR = False, msgTC = False, msgRA = False, msgAD = False
+    r = msg { msgQR = True, msgTC = False, msgRA = False, msgAD = False
             , msgAdditional = [] }
     question = msgQuestion msg
     qt = qType question
