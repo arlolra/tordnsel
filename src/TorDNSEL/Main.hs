@@ -101,7 +101,6 @@ main = do
     if concTests <= 0 then return Nothing else do
 
     stateDir <- conf <! "statedirectory"#
-    createDirectoryIfMissing True stateDir
 
     socksSockAddr <- conf <! "torsocksaddress"#
     (testListenAddr,testListenPorts) <- conf <! "testlistenaddress"#
@@ -159,6 +158,7 @@ main = do
 
     netState <- case testConf of
       Just (stateDir, testConf') -> do
+        createDirectoryIfMissing True stateDir
         exitTestState <- newExitTestState
         netState <- newNetworkState $ Just (exitTestState, stateDir)
         startExitTests . testConf' $ ExitTestConfig
