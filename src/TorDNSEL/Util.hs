@@ -83,7 +83,7 @@ split x = takeWhile (not . B.null) . map (B.take x) . iterate (B.drop x)
 exitLeft :: Either String a -> IO a
 exitLeft = either (\e -> err e >> exitFailure) return
   where
-    err e = hPutStr stderr . unlines . (:[e]) . usage =<< getProgName
+    err e = hPutStr stderr . unlines . (\u -> [e,u]) . usage =<< getProgName
     usage progName = "Usage: " ++ progName ++ " [-f <config file>] [options...]"
 
 instance Functor (Either String) where
