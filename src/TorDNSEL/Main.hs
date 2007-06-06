@@ -58,7 +58,6 @@ import Network.Socket
 
 import System.Exit (ExitCode(ExitSuccess))
 import System.Directory (setCurrentDirectory, createDirectoryIfMissing)
-import System.Posix.Files (setFileCreationMask)
 import System.Posix.IO
   ( openFd, closeFd, stdInput, stdOutput, stdError, OpenMode(ReadWrite)
   , defaultFileFlags, dupTo )
@@ -249,7 +248,6 @@ daemonize io = do
     forkProcess $ do
       installHandler sigHUP Ignore Nothing
       setCurrentDirectory "/"
-      setFileCreationMask 0
       mapM_ closeFd stdFds
       nullFd <- openFd "/dev/null" ReadWrite Nothing defaultFileFlags
       mapM_ (dupTo nullFd) stdFds
