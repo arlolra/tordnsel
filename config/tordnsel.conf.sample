@@ -4,20 +4,20 @@
 ## option is required.
 #AuthoritativeZone torhosts.example.com.
 
-## Use this email address in the RNAME field of SOA records. Usually,
-## this should be something like "hostmaster@example.com". Replace the
-## "@" with a ".".
+## Use this email address in the RNAME field of SOA records. Usually, this
+## should be something like "hostmaster@example.com". Replace the "@" with
+## a ".". This option is required.
 #SOARName hostmaster.example.com.
 
 ## Bind the name server to this IP address and UDP port. If you want to
 ## bind to all interfaces, you might set the address to "0.0.0.0". This
-## port is bound before dropping privileges. Leave it commented to use
-## the default.
+## port is bound before dropping privileges. Leave it commented to use the
+## default.
 #DNSListenAddress 127.0.0.1:53
 
-## Make Tor controller connections to this IP address and TCP port.
-## You'll need to set this as your ControlListenAddress or ControlPort in
-## Tor's torrc. Leave it commented to use the default.
+## Make Tor controller connections to this IP address and TCP port. You'll
+## need to set this as your ControlListenAddress or ControlPort in Tor's
+## torrc. Leave it commented to use the default.
 #TorControlAddress 127.0.0.1:9051
 
 ## Detach from the controlling terminal and run in the background as a
@@ -25,21 +25,21 @@
 #RunAsDaemon True
 
 ## Tor's data directory. Only specify this when you're using Tor's
-## CookieAuthentication for controller connections. The control auth
-## cookie is read before chrooting or dropping privileges.
+## CookieAuthentication for controller connections. The control auth cookie
+## is read before chrooting or dropping privileges.
 #TorDataDirectory /var/lib/tor
 
 ## The password you used to generate the HashedControlPassword in Tor's
 ## torrc. This is only required when you have a HashedControlPassword.
 #TorControlPassword password
 
-## The user name to which you want to drop privileges. This option
-## requires root privileges.
-#User _tordnsel
+## The user name to which you want to drop privileges. This option requires
+## root privileges.
+#User tordnsel
 
 ## The group name to which you want to drop privileges. This option also
 ## requires root privileges.
-#Group _tordnsel
+#Group tordnsel
 
 ## Call chroot(2) to change our root directory. This option also requires
 ## root privileges.
@@ -54,18 +54,16 @@
 #ConfigFile /etc/tordnsel/tordnsel.conf
 
 ## Make at most this number of concurrent test connections through exit
-## nodes. By default this is set to 0, that is, we don't perform any
-## tests. If this is set higher than about (FD_SETSIZE-80)/2, the runtime
-## will crash due to limitations of select(2). Setting it higher than the
-## number of exit nodes has no benefit, so a reasonable maximum might be
-## 384.
+## nodes. By default this is set to 0, that is, we don't perform any tests.
+## If this is set higher than about (FD_SETSIZE-80)/2, the runtime will
+## crash due to limitations of select(2). Setting it higher than the number
+## of exit nodes has no benefit, so a reasonable maximum might be 384.
 #ConcurrentExitTests 128
 
-## Store exit test results in this directory. This path should be
-## accessible and writable from inside the chroot (if configured) after
-## dropping privileges. This option is only required when
-## ConcurrentExitTests is greater than 0.
-## This example assumes a chroot
+## Store exit test results in this directory. This should be an absolute
+## path accessible inside the chroot (if one is configured).
+##
+## This example assumes you've specified ChangeRootDirectory.
 #StateDirectory /state
 
 ## Make exit test connections through Tor's SocksPort on this IP address
@@ -73,13 +71,13 @@
 #TorSocksAddress 127.0.0.1:9050
 
 ## Bind the exit test listeners to this IP address and these TCP ports.
-## These ports are bound before dropping privileges. Don't use 127.0.0.1 
-## for TestListenAddress on linux as it will drop your redirected packets
-## as martians. This option is only required when ConcurrentExitTests is 
-## greater than 0.
+## These ports are bound before dropping privileges. Don't use the loopback
+## interface for TestListenAddress if you're redirecting connections with
+## iptables because your redirected packets will be dropped as martians.
+## This option is only required when ConcurrentExitTests is greater than 0.
 #TestListenAddress 10.0.0.1:80,443,110,53,22,5190,6667,9030
 
-## Make exit test connections to this IP address and these TCP ports.
-## These should be publicly accessible from Tor exit nodes. This option
-## is only required when ConcurrentExitTests is greater than 0.
+## Make exit test connections to this IP address and these TCP ports. These
+## should be publicly accessible from Tor exit nodes. This option is only
+## required when ConcurrentExitTests is greater than 0.
 #TestDestinationAddress 18.0.0.1:80,443,110,53,22,5190,6667,9030
