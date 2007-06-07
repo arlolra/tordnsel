@@ -32,6 +32,7 @@ module TorDNSEL.Main (
   , daemonize
 
   -- * Helpers
+  , checkStateDirectory
   , liftMb
   , b
   , chroot
@@ -40,6 +41,7 @@ module TorDNSEL.Main (
 import Control.Concurrent (forkIO, threadDelay)
 import qualified Control.Exception as E
 import Control.Monad (when, unless, liftM)
+import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (toLower)
@@ -66,10 +68,13 @@ import System.Posix.Process
 import System.Posix.Signals (installHandler, Handler(Ignore), sigHUP, sigPIPE)
 
 import System.Posix.Error (throwErrnoPathIfMinus1_)
+import System.Posix.Files
+  (getFileStatus, fileOwner, fileGroup, fileMode, setFileMode, setOwnerAndGroup)
 import System.Posix.Types (UserID, GroupID)
 import System.Posix.User
-  ( getEffectiveUserID, UserEntry(userID), GroupEntry(groupID)
-  , getUserEntryForName, getGroupEntryForName, setUserID, setGroupID )
+  ( getEffectiveUserID, getEffectiveGroupID, UserEntry(userID)
+  , GroupEntry(groupID), getUserEntryForName, getGroupEntryForName
+  , setUserID, setGroupID )
 import Foreign.C (CString, CInt)
 
 import GHC.Prim (Addr#)
@@ -93,13 +98,28 @@ main = do
   controlSockAddr <- conf <! "torcontroladdress"#
   runAsDaemon     <- conf <! "runasdaemon"#
 
+  let authLabels = toLabels $ conf ! b "authoritativezone"#
+      authZone = DomainName authLabels
+      revAuthZone = DomainName $ reverse authLabels
+      rName = DomainName . toLabels $ conf ! b "soarname"#
+      soa = SOA authZone ttl authZone rName 0 ttl ttl ttl ttl
+      [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
+        [ b "user"#, b "group"#, b "changerootdirectory"#, b "pidfile"#
+        , b "tordatadirectory"#, b "torcontrolpassword"# ]
+
+  euid <- getEffectiveUserID
+  when (any isJust [user, group, newRoot] && euid /= 0) $
+    failMsg "You must be root to drop privileges or chroot."
+
   tcp <- getProtocolNumber "tcp"
+  ids <- getIDs user group
 
   concTests <- conf <! "concurrentexittests"#
   testConf <- do
     if concTests <= 0 then return Nothing else do
 
     stateDir <- conf <! "statedirectory"#
+    checkStateDirectory ids newRoot stateDir
 
     socksSockAddr <- conf <! "torsocksaddress"#
     (testListenAddr,testListenPorts) <- conf <! "testlistenaddress"#
@@ -114,19 +134,6 @@ main = do
       , etTestAddr    = testDestAddr
       , etTestPorts   = testDestPorts }
 
-  let authLabels = toLabels $ conf ! b "authoritativezone"#
-      authZone = DomainName authLabels
-      revAuthZone = DomainName $ reverse authLabels
-      rName = DomainName . toLabels $ conf ! b "soarname"#
-      soa = SOA authZone ttl authZone rName 0 ttl ttl ttl ttl
-      [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
-        [ b "user"#, b "group"#, b "changerootdirectory"#, b "pidfile"#
-        , b "tordatadirectory"#, b "torcontrolpassword"# ]
-
-  euid <- getEffectiveUserID
-  when (any isJust [user, group, newRoot] && euid /= 0) $
-    fail "You must be root to drop privileges or chroot."
-
   authSecret <- fmap encodeBase16 `fmap`
     case (dataDir, password) of
       (Just dir,_)    ->
@@ -135,7 +142,6 @@ main = do
       _               -> return Nothing
 
   pidHandle <- flip openFile WriteMode . B.unpack `liftMb` pidFile
-  ids <- getIDs user group
 
   sock <- socket AF_INET Datagram =<< getProtocolNumber "udp"
   setSocketOption sock ReuseAddr 1
@@ -157,7 +163,6 @@ main = do
 
     netState <- case testConf of
       Just (stateDir, testConf') -> do
-        createDirectoryIfMissing True stateDir
         exitTestState <- newExitTestState
         netState <- newNetworkState $ Just (exitTestState, stateDir)
         startExitTests . testConf' $ ExitTestConfig
@@ -200,6 +205,8 @@ main = do
 
     conf <! addr = exitLeft . parse $ conf ! b addr
 
+    failMsg = exitLeft . Left
+
 -- | Connect to Tor using the controller interface. Initialize our network state
 -- with all the routers Tor knows about and register asynchronous events to
 -- notify us and update the state when updated router info comes in.
@@ -218,6 +225,22 @@ torController netState control authSecret tcp = do
     fetchAllDescriptors conn >>= updateDescriptors netState
     setFetchUselessDescriptors conn
     waitForConnection conn
+
+-- | Set up the state directory with proper ownership and permissions.
+checkStateDirectory
+  :: (Maybe UserID, Maybe GroupID) -> Maybe ByteString -> FilePath -> IO ()
+checkStateDirectory (uid,gid) newRoot stateDir = do
+  createDirectoryIfMissing True stateDir'
+  desiredUID <- maybe getEffectiveUserID return uid
+  desiredGID <- maybe getEffectiveGroupID return gid
+  st <- getFileStatus stateDir'
+  let changeUID = if fileOwner st == desiredUID then -1 else desiredUID
+      changeGID = if fileGroup st == desiredGID then -1 else desiredGID
+  when (changeUID /= -1 || changeGID /= -1) $
+    setOwnerAndGroup stateDir' changeUID changeGID
+  when (fileMode st .&. 0o700 /= 0o700) $
+    setFileMode stateDir' (fileMode st .|. 0o700)
+  where stateDir' = maybe "" (B.unpack . flip B.snoc '/') newRoot ++ stateDir
 
 -- | Lookup the UID and GID for a pair of user and group names.
 getIDs
