@@ -17,7 +17,7 @@
 
   - Implement compression for domain names in responses.
 
-  - Add a required SOARCode option to specify the RCODE field in SOA records.
+  - Add a required SOARName option to specify the RNAME field in SOA records.
 
 0.0.3 - 2007-04-27
   - Implement active testing through exit nodes to determine the IP address
