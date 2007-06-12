@@ -16,7 +16,7 @@
 -- status entries from the Tor directory protocol, version 2. We only
 -- parse information necessary for running the exit list server.
 --
--- See <http://tor.eff.org/svn/trunk/doc/spec/dir-spec.txt> for details.
+-- See <https://tor.eff.org/svn/trunk/doc/spec/dir-spec.txt> for details.
 --
 -----------------------------------------------------------------------------
 

@@ -437,7 +437,7 @@ deleteAddress addr fp = M.update deleteFingerprint addr
 -- | Queries asking whether there's a Tor exit node at a specific IP address.
 data ExitListQuery
   -- |  Query type 1 from
-  -- <http://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt>.
+  -- <https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt>.
   = IPPort
   { -- | The address of the candidate exit node.
     queryAddr :: {-# UNPACK #-} !HostAddress,

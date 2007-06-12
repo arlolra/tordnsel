@@ -14,7 +14,7 @@
 -- in asynchronous events that Tor generates when it receives new information
 -- from directories.
 --
--- See <http://tor.eff.org/svn/trunk/doc/spec/control-spec.txt> for details.
+-- See <https://tor.eff.org/svn/trunk/doc/spec/control-spec.txt> for details.
 --
 -----------------------------------------------------------------------------
 

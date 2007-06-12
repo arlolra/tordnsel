@@ -16,7 +16,7 @@
 -- Making a TCP connection using the SOCKS4A protocol. Support for various
 -- Tor extensions to SOCKS is sketched out.
 --
--- See <http://tor.eff.org/svn/trunk/doc/spec/socks-extensions.txt> for
+-- See <https://tor.eff.org/svn/trunk/doc/spec/socks-extensions.txt> for
 -- details.
 --
 -----------------------------------------------------------------------------
