@@ -1,32 +1,22 @@
 0.0.4 - 2007-06-02
   - Return REFUSED instead of SERVFAIL for queries outside the authoritative
     zone.
-
   - Return NODATA for queries matching the authoritative zone.
-
   - Return NODATA for positive results when queries ask for non-A records.
-
   - Support queries with a type of *.
-
   - Return a SOA record with NXDOMAIN and NODATA responses to support
     negative caching.
-
   - Don't send responses that exceed 512 bytes.
-
   - Drop incoming messages with QR set.
-
   - Implement compression for domain names in responses.
-
   - Add a required SOARName option to specify the RNAME field in SOA records.
 
 0.0.3 - 2007-04-27
   - Implement active testing through exit nodes to determine the IP address
     connections actually originate from. Store this information in state
     files so external scripts have access to it.
-
   - Always return an A record with the value 127.0.0.2 when queried about
     127.0.0.2. This conforms to the convention for testing DNSBLs.
-
   - Fix a bug that could kill the Tor controller thread when Tor is
     restarted. Tor closing the control connection created a race condition
     allowing an asynchronous exception to escape an exception handler and
@@ -41,14 +31,11 @@
 0.0.1 - 2007-04-13
   - Ignore incoming descriptors with published times older than ones we
     already have.
-
   - Consider any router that has published a descriptor within the last 48
     hours to be running. This means we don't use network status info anymore,
     but we'll still keep track of it in case it becomes useful.
-
   - Set FetchUselessDescriptors so we receive descriptors for non-running
     routers.
-
   - Fix a bug caused by an erroneous Ord instance for PortNumber in
     Network.Socket. PortNumbers were being compared in host order even
     though they're stored in network order. This caused some queries to
