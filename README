@@ -48,9 +48,12 @@ Dependencies
 
     http://hackage.haskell.org/packages/archive/binary/0.3/binary-0.3.tar.gz
 
-  Before building binary, apply the included patch in binary.patch. If you
-  don't, you're likely to experience a segfault if you receive a malformed
-  DNS packet.
+  Before building binary, apply the included patch in binary.patch.
+
+    cd binary-0.3 && patch -p0 < ../tordnsel-0.0.5/binary.patch
+
+  If you don't, you're likely to experience a segfault if you receive a
+  malformed DNS packet.
 
 Building TorDNSEL
 
@@ -59,7 +62,7 @@ Building TorDNSEL
 
   If you want a tordnsel binary installed in /usr/local/bin:
 
-    sudo ./Setup.lhs install
+    sudo ./Setup.lhs copy
 
   For haddock documentation (if haddock is installed):
 
