@@ -97,12 +97,20 @@ main = do
   dnsSockAddr     <- conf <! "dnslistenaddress"#
   controlSockAddr <- conf <! "torcontroladdress"#
   runAsDaemon     <- conf <! "runasdaemon"#
+  address         <- exitLeft . parse `liftMb` b "address"# `M.lookup` conf
 
-  let authLabels = toLabels $ conf ! b "authoritativezone"#
-      authZone = DomainName authLabels
+  let authLabels  = toLabels $ conf ! b "authoritativezone"#
+      authZone    = DomainName authLabels
       revAuthZone = DomainName $ reverse authLabels
-      rName = DomainName . toLabels $ conf ! b "soarname"#
-      soa = SOA authZone ttl authZone rName 0 ttl ttl ttl ttl
+      rName       = DomainName . toLabels $ conf ! b "soarname"#
+      myName      = DomainName . toLabels $ conf ! b "domainname"#
+      dnsConf = DNSConfig
+        { dnsAuthZone = revAuthZone
+        , dnsMyName   = myName
+        , dnsSOA      = SOA authZone ttl myName rName 0 ttl ttl ttl ttl
+        , dnsNS       = NS authZone ttl myName
+        , dnsA        = A authZone ttl `fmap` address }
+
       [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
         [ b "user"#, b "group"#, b "changerootdirectory"#, b "pidfile"#
         , b "tordatadirectory"#, b "torcontrolpassword"# ]
@@ -183,7 +191,7 @@ main = do
 
     -- start the DNS server
     forever . E.catchJust E.ioErrors
-      (runServer sock $ dnsHandler netState revAuthZone soa) $ \e -> do
+      (runServer sock $ dnsHandler netState dnsConf) $ \e -> do
         -- XXX this should be logged
         unless runAsDaemon $
           hPutStrLn stderr (show e) >> hFlush stderr

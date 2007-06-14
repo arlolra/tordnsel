@@ -12,6 +12,6 @@
 --
 -----------------------------------------------------------------------------
 
-module TorDNSEL.DNS.Handler (dnsHandler, ttl) where
+module TorDNSEL.DNS.Handler (DNSConfig(..), dnsHandler, ttl) where
 
 import TorDNSEL.DNS.Handler.Internals

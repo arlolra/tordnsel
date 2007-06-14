@@ -19,7 +19,8 @@
 
 -- #not-home
 module TorDNSEL.DNS.Handler.Internals (
-    dnsHandler
+    DNSConfig(..)
+  , dnsHandler
   , dropAuthZone
   , parseExitListQuery
   , ttl
@@ -31,7 +32,7 @@ import Data.Bits ((.|.), shiftL)
 import qualified Data.ByteString.Char8 as B
 import Data.Char (toLower)
 import Data.List (foldl')
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, maybeToList)
 import Data.Word (Word32)
 
 import GHC.Prim (Addr#)
@@ -40,50 +41,69 @@ import TorDNSEL.Util
 import TorDNSEL.DNS
 import TorDNSEL.NetworkState
 
--- | Given our authoritative zone and a DNS query, parse the exit list query
--- contained therein and generate an appropriate DNS response based on our
--- knowledge of the current state of the Tor network.
-dnsHandler
-  :: NetworkState -> DomainName -> ResourceRecord -> Message
-  -> IO (Maybe Message)
+-- | The DNS handler configuration data.
+data DNSConfig
+  = DNSConfig
+  { dnsAuthZone :: !DomainName     -- ^ The zone we're authoritative for.
+  , dnsMyName   :: !DomainName     -- ^ The domain name where we're located.
+  , dnsSOA      :: !ResourceRecord -- ^ Our SOA record.
+  , dnsNS       :: !ResourceRecord -- ^ Our own NS record.
+  -- | The A record we return for our authoritative zone.
+  , dnsA        :: !(Maybe ResourceRecord)
+  }
+
+-- | Given our config data and a DNS query, parse the exit list query contained
+-- therein and generate an appropriate DNS response based on our knowledge of
+-- the current state of the Tor network.
+dnsHandler :: NetworkState -> DNSConfig -> Message -> IO (Maybe Message)
 {-# INLINE dnsHandler #-}
 -- XXX profiling info is old
 -- Profiling shows about 33% of time is spent in this handler for positive
 -- results, with 33% spent in deserialization and 33% in serialization.
-dnsHandler netState authZone soa msg
+dnsHandler netState c msg
   -- draft-arends-dnsext-qr-clarification-00
   | msgQR msg                      = return Nothing
   | msgOpCode msg /= StandardQuery = return notImpl -- RFC 3425
   -- draft-koch-dns-unsolicited-queries-01
   | isNothing mbQLabels            = return refused
   | qc /= IN                       = return nxDomain
-  | Just [] <- mbQLabels
-  = if qt == TSOA || qt == TAny then return soaResp
-                                else return noData -- RFC 2308
+  -- a request matching our authoritative zone
+  | Just [] <- mbQLabels = case qt of
+      TA | Just a <- dnsA c -> return $ aRec a
+      TNS                   -> return nsAnswer
+      TSOA                  -> return soaResp
+      TAny                  -> return allAns
+      _                     -> return noData -- RFC 2308
   | Just qLabels <- mbQLabels
   , Just query   <- parseExitListQuery qLabels = do
       isExit <- isExitNode netState query
       if isExit || isTest query then
         if qt == TA || qt == TAny
-          then return positive -- draft-irtf-asrg-dnsbl-02
+          then return $ aRec positive -- draft-irtf-asrg-dnsbl-02
           else return noData
         else return nxDomain
   | otherwise                      = return nxDomain
   where
     isTest q = queryAddr q == 0x7f000002
-    mbQLabels = dropAuthZone authZone (qName question)
-    positive = Just r { msgAA = True, msgRCode = NoError, msgAuthority = []
-                      , msgAnswers = [A (qName question) ttl 0x7f000002] }
-    noData   = Just r { msgAA = True, msgRCode = NoError, msgAnswers = []
-                      , msgAuthority = [soa] }
-    nxDomain = Just r { msgAA = True, msgRCode = NXDomain, msgAnswers = []
-                      , msgAuthority = [soa] }
-    notImpl  = Just r { msgAA = False, msgRCode = NotImplemented
-                      , msgAnswers = [], msgAuthority = [soa] }
-    refused  = Just r { msgAA = False, msgRCode = Refused
-                      , msgAnswers = [], msgAuthority = [soa] }
-    soaResp  = Just r { msgAA = True, msgRCode = NoError, msgAnswers = [soa]
+    mbQLabels = dropAuthZone (dnsAuthZone c) (qName question)
+    positive = A (qName question) ttl 0x7f000002
+    allAns   = Just r { msgAA = True, msgRCode = NoError
+                      , msgAnswers = [dnsSOA c, dnsNS c] ++ maybeToList (dnsA c)
                       , msgAuthority = [] }
+    nsAnswer = Just r { msgAA = True, msgRCode = NoError, msgAnswers = [dnsNS c]
+                      , msgAuthority = [] }
+    aRec a   = Just r { msgAA = True, msgRCode = NoError, msgAnswers = [a]
+                      , msgAuthority = [dnsNS c] }
+    noData   = Just r { msgAA = True, msgRCode = NoError, msgAnswers = []
+                      , msgAuthority = [dnsSOA c] }
+    nxDomain = Just r { msgAA = True, msgRCode = NXDomain, msgAnswers = []
+                      , msgAuthority = [dnsSOA c] }
+    notImpl  = Just r { msgAA = False, msgRCode = NotImplemented
+                      , msgAnswers = [], msgAuthority = [dnsSOA c] }
+    refused  = Just r { msgAA = False, msgRCode = Refused
+                      , msgAnswers = [], msgAuthority = [dnsSOA c] }
+    soaResp  = Just r { msgAA = True, msgRCode = NoError
+                      , msgAnswers = [dnsSOA c], msgAuthority = [dnsNS c] }
     r = msg { msgQR = True, msgTC = False, msgRA = False, msgAD = False
             , msgAdditional = [] }
     question = msgQuestion msg

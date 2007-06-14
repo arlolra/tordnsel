@@ -376,6 +376,15 @@ data ResourceRecord
       -- | An IPv4 address.
       aAddr  :: {-# UNPACK #-} !HostAddress }
 
+  -- | An authoritative name server record.
+  | NS
+    { -- | The domain name to which this record pertains.
+      rrName  :: {-# UNPACK #-} !DomainName,
+      -- | A time interval, in seconds, that the answer may be cached.
+      rrTTL   :: {-# UNPACK #-} !Word32,
+      -- | The host that should be authoritative for this zone.
+      nsDName :: {-# UNPACK #-} !DomainName }
+
   -- | A start of zone of authority record.
   | SOA
     { -- | The domain name to which this record pertains.
@@ -422,27 +431,35 @@ instance BinaryPacket ResourceRecord where
     ttl    <- get
     len    <- getWord16be
     begin  <- bytesRead
-    case (rClass, rType) of
-      (IN,TA) -> do
-        () <- unless (len == 4) $
-          fail "A: incorrect rdata length"
-        A name ttl `fmap` get
+    rec <- case (rClass, rType) of
+      (IN,TA)   -> A name ttl `fmap` get
+      (IN,TNS)  -> NS name ttl `fmap` getPacket pkt
       (IN,TSOA) -> do
         mName <- getPacket pkt
         rName <- getPacket pkt
         [serial,refresh,retry,expire,minim] <- replicateM 5 get
-        end <- bytesRead
-        () <- unless (end - begin == fromIntegral len) $
-          fail "SOA: incorrect rdata length"
         return $! SOA name ttl mName rName serial refresh retry expire minim
-      _ -> do
+      _         -> do
         rData <- getByteString $ fromIntegral len
         return $! UnsupportedResourceRecord name ttl rType rClass rData
+    end <- bytesRead
+    if end - begin == fromIntegral len
+      then return rec
+      else fail "incorrect rdata length"
 
   putPacket (A name ttl addr) = do
     putPacket name
     lift $ put TA >> put IN >> put ttl >> putWord16be 4 >> put addr
     incrOffset 14
+
+  putPacket (NS name ttl dName) = do
+    putPacket name
+    lift $ put TNS >> put IN >> put ttl
+    incrOffset 10
+    dName' <- compressNameStatefully dName
+    lift $ do
+      putWord16be . fromIntegral . B.length $ dName'
+      putByteString dName'
 
   putPacket (SOA name ttl mName rName serial refresh retry expire minim) = do
     putPacket name
@@ -465,6 +482,7 @@ instance BinaryPacket ResourceRecord where
 
 instance DeepSeq ResourceRecord where
   deepSeq (A a b c) = deepSeq a . deepSeq b $ deepSeq c
+  deepSeq (NS a b c) = deepSeq a . deepSeq b $ deepSeq c
   deepSeq (SOA a b c d e f g h i) =
     deepSeq a . deepSeq b . deepSeq c . deepSeq d . deepSeq e .
     deepSeq f . deepSeq g . deepSeq h $ deepSeq i
@@ -554,7 +572,8 @@ instance DeepSeq OpCode where deepSeq = seq
 -- respectively.
 data Type
   = TA                                     -- ^ An IPv4 host address.
-  | TSOA                                   -- ^ A start of authority record.
+  | TNS                                    -- ^ An authoritative name server.
+  | TSOA                                   -- ^ A start of zone of authority.
   | TAny                                   -- ^ A request for all records.
   | UnsupportedType {-# UNPACK #-} !Word16 -- ^ Any other type.
   deriving (Eq, Show)
@@ -564,17 +583,20 @@ instance Binary Type where
     t <- get
     case t of
       1   -> return TA
+      2   -> return TNS
       6   -> return TSOA
       255 -> return TAny
       _   -> return $ UnsupportedType t
 
   put TA                  = putWord16be 1
+  put TNS                 = putWord16be 2
   put TSOA                = putWord16be 6
   put TAny                = putWord16be 255
   put (UnsupportedType t) = put t
 
 instance DeepSeq Type where
   deepSeq TA   = id
+  deepSeq TNS  = id
   deepSeq TAny = id
   deepSeq TSOA = id
   deepSeq (UnsupportedType t) = deepSeq t
