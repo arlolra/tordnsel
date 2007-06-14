@@ -1,10 +1,10 @@
 0.0.5 - 2007-06-12
-  - Set QR in responses as we did in 0.0.3 and earlier. Fixes a bug introduced
-    in 0.0.4.
+  - Set QR in responses as we did in 0.0.3 and earlier. Fixes a bug
+    introduced in 0.0.4.
   - Return a SOA record when queries ask for one.
   - Ensure that the state directory has correct ownership and permissions.
-  - Include a Debian-style init script and instructions for setting up TorDNSEL
-    with it. (patch from Jacob Appelbaum)
+  - Include a Debian-style init script and instructions for setting up
+    TorDNSEL with it. (patch from Jacob Appelbaum)
 
 0.0.4 - 2007-06-02
   - Return REFUSED instead of SERVFAIL for queries outside the authoritative
