@@ -64,14 +64,15 @@ Building TorDNSEL
 
     sudo ./Setup.lhs copy
 
-  For haddock documentation (if haddock is installed):
+  For Haddock documentation (if Haddock is installed):
 
     ./Setup.lhs haddock
 
 Configuring TorDNSEL
 
   Copy config/tordnsel.conf.sample. At the very least, you'll need to uncomment
-  and modify AuthoritativeZone, SOARName, and probably DNSListenAddress.
+  and modify AuthoritativeZone, DomainName, SOARName, and probably
+  DNSListenAddress.
 
   To run exit tests, you need to specify at least ConcurrentExitTests,
   StateDirectory, TestListenAddress, and TestDestinationAddress.
@@ -84,7 +85,7 @@ Configuring TorDNSEL
   Options listed in tordnsel.conf.sample can also be specified on the command
   line:
 
-    ./tordnsel -f /etc/tordnsel.conf --AuthoritativeZone torhosts.example.com
+    ./tordnsel -f /etc/tordnsel.conf --AuthoritativeZone exitlist.example.com
 
   Command line options override those included in a config file.
 

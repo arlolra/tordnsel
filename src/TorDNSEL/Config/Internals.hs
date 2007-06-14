@@ -41,7 +41,7 @@ import qualified Data.Map as M
 import Data.Map (Map, (!))
 import qualified Data.Set as S
 import Data.Set (Set)
-import Data.Word (Word16)
+import Data.Word (Word16, Word32)
 import Network.Socket (HostAddress, SockAddr(SockAddrInet))
 
 import GHC.Prim (Addr#)
@@ -56,6 +56,8 @@ knownConfigItems
   , "DNSListenAddress"
   , "TorControlAddress"
   , "AuthoritativeZone"
+  , "DomainName"
+  , "Address"
   , "SOARName"
   , "TorDataDirectory"
   , "TorControlPassword"
@@ -73,10 +75,12 @@ knownConfigItems
 -- | Check for required config options and fill in defaults for absent options.
 fillInConfig :: Monad m => Config -> m Config
 fillInConfig conf = do
-  mapM_ checkForItem ["AuthoritativeZone", "SOARName"]
+  mapM_ (checkForItem " is a required option.")
+    ["AuthoritativeZone", "DomainName", "SOARName"]
   concTests <- parse $ conf' ! b "concurrentexittests"#
-  when (concTests > (0 :: Int)) . mapM_ checkForExitItem $
-    ["StateDirectory", "TestListenAddress", "TestDestinationAddress"]
+  when (concTests > (0 :: Int)) .
+    mapM_ (checkForItem " is required for exit tests.") $
+      ["StateDirectory", "TestListenAddress", "TestDestinationAddress"]
   return conf'
   where
     conf' = M.union conf . M.fromList . map (toItem *** toItem) $
@@ -86,10 +90,8 @@ fillInConfig conf = do
       , "ConcurrentExitTests" ~> "0"
       , "TorSocksAddress"     ~> "127.0.0.1:9050" ]
     (~>) = (,)
-    checkForItem item = when (toItem item `M.notMember` conf') $
-      fail (item ++ " is a required option.")
-    checkForExitItem item = when (toItem item `M.notMember` conf') $
-      fail (item ++ " is required for exit tests.")
+    checkForItem msg item = when (toItem item `M.notMember` conf') $
+      fail (item ++ msg)
 
 -- | Configuration information represented as a map from config item to unparsed
 -- config value.
@@ -142,6 +144,9 @@ instance ConfigValue (HostAddress, [Word16]) where
     where
       [addr,rest] = B.split ':' bs
       ports = B.split ',' rest
+
+instance ConfigValue Word32 where
+  parse = inet_atoh
 
 -- | Given config options, merge the config file located at the ConfigFile
 -- value with the current options. We give preference to the current options
