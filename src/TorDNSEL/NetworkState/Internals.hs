@@ -106,7 +106,7 @@ import qualified Data.ByteString.Lazy.Char8 as L
 import Data.Char (toLower, toUpper, isSpace)
 import Data.Dynamic (fromDynamic)
 import Data.List (foldl')
-import Data.Maybe (catMaybes, mapMaybe, isNothing)
+import Data.Maybe (mapMaybe, isNothing)
 import qualified Data.Map as M
 import Data.Map (Map)
 import qualified Data.Set as S
@@ -743,7 +743,7 @@ replaceExitAddresses stateDir routers = do
   writeFile (dir "/exit-addresses.new") ""
   (fromIntegral . fileSize) `fmap` getFileStatus (dir "/exit-addresses")
   where
-    addrs = map renderExitAddress . catMaybes . map mkExitAddress . M.toList
+    addrs = mapMaybe (fmap renderExitAddress . mkExitAddress) . M.toList
     dir = (stateDir ++)
 
 -- | Return an exit address entry if we have enough information to create one.
