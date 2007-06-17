@@ -41,7 +41,7 @@ import qualified Data.Map as M
 import Data.Map (Map, (!))
 import qualified Data.Set as S
 import Data.Set (Set)
-import Data.Word (Word16, Word32)
+import Data.Word (Word16)
 import Network.Socket (HostAddress, SockAddr(SockAddrInet))
 
 import GHC.Prim (Addr#)
@@ -145,7 +145,7 @@ instance ConfigValue (HostAddress, [Word16]) where
       [addr,rest] = B.split ':' bs
       ports = B.split ',' rest
 
-instance ConfigValue Word32 where
+instance ConfigValue HostAddress where
   parse = inet_atoh
 
 -- | Given config options, merge the config file located at the ConfigFile
