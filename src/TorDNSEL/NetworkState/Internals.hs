@@ -106,7 +106,7 @@ import qualified Data.ByteString.Lazy.Char8 as L
 import Data.Char (toLower, toUpper, isSpace)
 import Data.Dynamic (fromDynamic)
 import Data.List (foldl')
-import Data.Maybe (catMaybes, isNothing)
+import Data.Maybe (catMaybes, mapMaybe, isNothing)
 import qualified Data.Map as M
 import Data.Map (Map)
 import qualified Data.Set as S
@@ -462,11 +462,12 @@ isExitNode state q = do
     case M.lookup (queryAddr q) addrs of
       Nothing  -> return False
       Just set -> do
-        routers <- readTVar $ nsRouters state
-        let addrRtrs = catMaybes . map (`M.lookup` routers) . S.elems $ set
-            descs = catMaybes . map rtrDescriptor $ addrRtrs
-            policies = map descExitPolicy . filter (isRunning now) $ descs
-        return $! any (exitPolicyAccepts (destAddr q) (destPort q)) policies
+        rs <- readTVar $ nsRouters state
+        return $! any (isExit now) . mapMaybe (lookupDesc rs) . S.elems $ set
+  where
+    lookupDesc routers fp = M.lookup fp routers >>= rtrDescriptor
+    isExit t d = isRunning t d &&
+                 exitPolicyAccepts (destAddr q) (destPort q) (descExitPolicy d)
 
 -- | We consider a router to be running if it last published a descriptor less
 -- than 48 hours ago. Descriptors hold an unboxed 'POSIXTime' instead of a
