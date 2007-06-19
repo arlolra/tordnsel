@@ -69,12 +69,11 @@ import System.Posix.Signals (installHandler, Handler(Ignore), sigHUP, sigPIPE)
 
 import System.Posix.Error (throwErrnoPathIfMinus1_)
 import System.Posix.Files
-  (getFileStatus, fileOwner, fileGroup, fileMode, setFileMode, setOwnerAndGroup)
+  (getFileStatus, fileOwner, fileMode, setFileMode, setOwnerAndGroup)
 import System.Posix.Types (UserID, GroupID)
 import System.Posix.User
-  ( getEffectiveUserID, getEffectiveGroupID, UserEntry(userID)
-  , GroupEntry(groupID), getUserEntryForName, getGroupEntryForName
-  , setUserID, setGroupID )
+  ( getEffectiveUserID, UserEntry(userID), GroupEntry(groupID)
+  , getUserEntryForName, getGroupEntryForName, setUserID, setGroupID )
 import Foreign.C (CString, CInt)
 
 import GHC.Prim (Addr#)
@@ -127,7 +126,7 @@ main = do
     if concTests <= 0 then return Nothing else do
 
     stateDir <- conf <! "statedirectory"#
-    checkStateDirectory ids newRoot stateDir
+    checkStateDirectory (fst ids) newRoot stateDir
 
     socksSockAddr <- conf <! "torsocksaddress"#
     (testListenAddr,testListenPorts) <- conf <! "testlistenaddress"#
@@ -235,17 +234,13 @@ torController netState control authSecret tcp = do
     waitForConnection conn
 
 -- | Set up the state directory with proper ownership and permissions.
-checkStateDirectory
-  :: (Maybe UserID, Maybe GroupID) -> Maybe ByteString -> FilePath -> IO ()
-checkStateDirectory (uid,gid) newRoot stateDir = do
+checkStateDirectory :: Maybe UserID -> Maybe ByteString -> FilePath -> IO ()
+checkStateDirectory uid newRoot stateDir = do
   createDirectoryIfMissing True stateDir'
   desiredUID <- maybe getEffectiveUserID return uid
-  desiredGID <- maybe getEffectiveGroupID return gid
   st <- getFileStatus stateDir'
-  let changeUID = if fileOwner st == desiredUID then -1 else desiredUID
-      changeGID = if fileGroup st == desiredGID then -1 else desiredGID
-  when (changeUID /= -1 || changeGID /= -1) $
-    setOwnerAndGroup stateDir' changeUID changeGID
+  when (fileOwner st /= desiredUID) $
+    setOwnerAndGroup stateDir' desiredUID (-1)
   when (fileMode st .&. 0o700 /= 0o700) $
     setFileMode stateDir' (fileMode st .|. 0o700)
   where stateDir' = maybe "" (B.unpack . flip B.snoc '/') newRoot ++ stateDir
