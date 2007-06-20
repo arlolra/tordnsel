@@ -168,19 +168,19 @@ main = do
 
     dropPrivileges ids
 
-    netState <- case testConf of
+    net <- case testConf of
       Just (stateDir, testConf') -> do
-        exitTestState <- newExitTestState
-        netState <- newNetworkState $ Just (exitTestState, stateDir)
+        exitTestChan <- newExitTestChan
+        net <- newNetwork $ Just (exitTestChan, stateDir)
         startExitTests . testConf' $ ExitTestConfig
-          { etState    = exitTestState
-          , etNetState = netState
-          , etTcp      = tcp }
-        return netState
+          { etChan    = exitTestChan
+          , etNetwork = net
+          , etTcp     = tcp }
+        return net
       _ ->
-        newNetworkState Nothing
+        newNetwork Nothing
 
-    let controller = torController netState controlSockAddr authSecret tcp
+    let controller = torController net controlSockAddr authSecret tcp
     installHandler sigPIPE Ignore Nothing
     forkIO . forever . E.catchJust connExceptions controller $ \e -> do
       -- XXX this should be logged
@@ -190,7 +190,7 @@ main = do
 
     -- start the DNS server
     forever . E.catchJust E.ioErrors
-      (runServer sock $ dnsHandler netState dnsConf) $ \e -> do
+      (runServer sock $ dnsHandler net dnsConf) $ \e -> do
         -- XXX this should be logged
         unless runAsDaemon $
           hPutStrLn stderr (show e) >> hFlush stderr
@@ -218,18 +218,18 @@ main = do
 -- with all the routers Tor knows about and register asynchronous events to
 -- notify us and update the state when updated router info comes in.
 torController
-  :: NetworkState -> SockAddr -> Maybe ByteString -> ProtocolNumber -> IO ()
-torController netState control authSecret tcp = do
+  :: Network -> SockAddr -> Maybe ByteString -> ProtocolNumber -> IO ()
+torController net control authSecret tcp = do
   sock <- socket AF_INET Stream tcp
   connect sock control
   handle <- socketToHandle sock ReadWriteMode
   withConnection handle $ \conn -> do
     authenticate authSecret conn
-    let newNS = newNetworkStatus (updateNetworkStatus netState)
-        newDesc = newDescriptors (updateDescriptors netState) conn
+    let newNS = newNetworkStatus (updateNetworkStatus net)
+        newDesc = newDescriptors (updateDescriptors net) conn
     registerEventHandlers [newNS, newDesc] conn
-    fetchNetworkStatus conn >>= updateNetworkStatus netState
-    fetchAllDescriptors conn >>= updateDescriptors netState
+    fetchNetworkStatus conn >>= updateNetworkStatus net
+    fetchAllDescriptors conn >>= updateDescriptors net
     setFetchUselessDescriptors conn
     waitForConnection conn
 

@@ -55,12 +55,12 @@ data DNSConfig
 -- | Given our config data and a DNS query, parse the exit list query contained
 -- therein and generate an appropriate DNS response based on our knowledge of
 -- the current state of the Tor network.
-dnsHandler :: NetworkState -> DNSConfig -> Message -> IO (Maybe Message)
+dnsHandler :: Network -> DNSConfig -> Message -> IO (Maybe Message)
 {-# INLINE dnsHandler #-}
 -- XXX profiling info is old
 -- Profiling shows about 33% of time is spent in this handler for positive
 -- results, with 33% spent in deserialization and 33% in serialization.
-dnsHandler netState c msg
+dnsHandler net c msg
   -- draft-arends-dnsext-qr-clarification-00
   | msgQR msg                      = return Nothing
   | msgOpCode msg /= StandardQuery = return notImpl -- RFC 3425
@@ -76,7 +76,7 @@ dnsHandler netState c msg
       _                     -> return noData -- RFC 2308
   | Just qLabels <- mbQLabels
   , Just query   <- parseExitListQuery qLabels = do
-      isExit <- isExitNode netState query
+      isExit <- isExitNode net query
       if isExit || isTest query then
         if qt == TA || qt == TAny
           then return $ aRec positive -- draft-irtf-asrg-dnsbl-02

@@ -16,8 +16,8 @@
 
 module TorDNSEL.NetworkState (
   -- * Network state
-    NetworkState
-  , newNetworkState
+    Network
+  , newNetwork
 
   -- * State events
   , updateDescriptors
@@ -29,8 +29,8 @@ module TorDNSEL.NetworkState (
 
   -- * Exit tests
   , ExitTestConfig(..)
-  , ExitTestState
-  , newExitTestState
+  , ExitTestChan
+  , newExitTestChan
   , bindListeningSockets
   , startExitTests
   ) where
