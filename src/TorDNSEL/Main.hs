@@ -83,6 +83,7 @@ import TorDNSEL.Control
 import TorDNSEL.DNS
 import TorDNSEL.DNS.Handler
 import TorDNSEL.NetworkState
+import TorDNSEL.Random
 import TorDNSEL.Util
 
 -- | The main entry point for the server. This handles parsing config options,
@@ -134,12 +135,16 @@ main = do
 
     testSockets <- bindListeningSockets tcp testListenAddr testListenPorts
 
+    random <- exitLeft =<< openRandomDevice
+    seedPRNG random
+
     return . Just . ((,) stateDir) $ \c -> c
       { etConcTests   = concTests
       , etSocksServer = socksSockAddr
       , etListenSocks = testSockets
       , etTestAddr    = testDestAddr
-      , etTestPorts   = testDestPorts }
+      , etTestPorts   = testDestPorts
+      , etRandom      = random }
 
   authSecret <- fmap encodeBase16 `fmap`
     case (dataDir, password) of

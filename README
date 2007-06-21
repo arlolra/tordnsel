@@ -5,26 +5,26 @@ TorDNSEL implements the design described at
 modifications. Instead of parsing the cached-routers file, it establishes a
 persistent controller connection to Tor, receiving updated nodes and exit
 policies as Tor fetches them from directories. When Tor is running as a
-directory authority this information should be the most up-to-date.
+directory authority this information should be the most up to date.
 
 TorDNSEL can perform active exit testing by launching an HTTP request to itself
 through every exit node with a suitable exit policy. This allows it to detect
 exit nodes configured to send outbound connections through a different IP
 address from the one they advertise in their descriptors. When configured to
-run exit tests, we test through a particular exit node only after receiving
-a new descriptor for it.
+run exit tests, it tests through a particular exit node each time the node
+publishes a new descriptor.
 
 Currently, only query type 1 from torel-design.txt is supported:
 
-A request for the A record "1.0.0.10.80.4.3.2.1.ip-port.torhosts.example.com"
+A request for the A record "1.0.0.10.80.4.3.2.1.ip-port.exitlist.example.com"
 would return 127.0.0.2 if there's a running Tor node at 10.0.0.1 that allows
 exits to port 80 at 1.2.3.4 and our AuthoritativeZone is set to
-"torhosts.example.com". If there isn't such an exit node, we return NXDOMAIN.
+"exitlist.example.com". If there isn't such an exit node, we return NXDOMAIN.
 If the query is unsolicited and outside our authoritative zone, we return
 REFUSED.
 
 Presumably, users of software with built-in support for DNSBLs would configure
-[service port].[service address].ip-port.torhosts.example.com as a DNSBL.
+[service port].[service address].ip-port.exitlist.example.com as a DNSBL.
 
 -----------------------------------------------------------------------------
 
@@ -54,6 +54,8 @@ Dependencies
 
   If you don't, you're likely to experience a segfault if you receive a
   malformed DNS packet.
+
+  OpenSSL's libcrypto is required for strong random numbers.
 
 Building TorDNSEL
 

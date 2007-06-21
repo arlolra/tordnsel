@@ -93,8 +93,7 @@ module TorDNSEL.NetworkState.Internals (
   ) where
 
 import Control.Arrow ((&&&))
-import Control.Monad
-  (liftM2, forM, forM_, replicateM, replicateM_, guard)
+import Control.Monad (liftM2, forM, forM_, replicateM_, guard)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
@@ -102,7 +101,6 @@ import Control.Concurrent.STM
   ( STM, atomically, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
-import qualified Data.ByteString as W
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as L
 import Data.Char (toLower, toUpper, isSpace)
@@ -123,13 +121,13 @@ import Network.Socket
 import System.Directory (renameFile)
 import System.IO
   (Handle, hClose, IOMode(ReadWriteMode, WriteMode), hFlush, openFile)
-import System.Random (randomIO)
 import System.Posix.Files (getFileStatus, fileSize)
 
 import GHC.Prim (Addr#)
 
 import TorDNSEL.Directory
 import TorDNSEL.Document
+import TorDNSEL.Random
 import TorDNSEL.Socks
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
@@ -200,12 +198,13 @@ updateNetworkStatus net = writeChan (nChan net) . NewNS
 -- | Register a mapping from cookie to fingerprint and descriptor published
 -- time, passing the cookie to the given 'IO' action. The cookie is guaranteed
 -- to be released when the action terminates.
-withCookie :: Network -> Fingerprint -> UTCTime -> (Cookie -> IO a) -> IO a
-withCookie net fp published =
+withCookie
+  :: Network -> Handle -> Fingerprint -> UTCTime -> (Cookie -> IO a) -> IO a
+withCookie net random fp published =
   E.bracket addNewCookie (writeChan (nChan net) . DeleteCookie)
   where
     addNewCookie = do
-      cookie <- newCookie
+      cookie <- newCookie random
       writeChan (nChan net) (AddCookie cookie fp published)
       return cookie
 
@@ -530,7 +529,8 @@ data ExitTestConfig = ExitTestConfig
   , etSocksServer :: SockAddr
   , etListenSocks :: [Socket]
   , etTestAddr    :: HostAddress
-  , etTestPorts   :: [Word16] }
+  , etTestPorts   :: [Word16]
+  , etRandom      :: Handle }
 
 -- | Fork all our exit test listeners.
 startTestListeners :: Network -> [Socket] -> Int -> IO ()
@@ -580,7 +580,7 @@ startExitTests conf = do
     -- descriptor yet, or its exit policy doesn't allow connections to any of
     -- our listening ports.
     whenJust mbTest $ \(published, ports) ->
-      withCookie (etNetwork conf) fp published $ \cookie -> do
+      withCookie (etNetwork conf) (etRandom conf) fp published $ \cookie -> do
         -- try to connect eight times before giving up
         attempt . take 8 . map (testConnection cookie fp testHost) $ cycle ports
         -- XXX log failure
@@ -694,13 +694,10 @@ newtype Cookie = Cookie { unCookie :: B.ByteString }
   deriving (Eq, Ord)
 
 -- | Create a new cookie from pseudo-random data.
-newCookie :: IO Cookie
-newCookie = do
-  -- XXX This is a weak PRNG. What's a better, portable alternative?
-  rs <- replicateM cookieLen randomIO :: IO [Int]
-  return . Cookie . W.pack . map fromIntegral $ rs
+newCookie :: Handle -> IO Cookie
+newCookie random = Cookie `fmap` randBytes random cookieLen
 
--- | The cookie length.
+-- | The cookie length in bytes.
 cookieLen :: Int
 cookieLen = 32
 

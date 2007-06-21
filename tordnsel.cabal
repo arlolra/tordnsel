@@ -1,36 +1,39 @@
-Name:           TorDNSEL
-Version:        0.0.5
-Synopsis:       provides a DNSBL-style interface for detecting Tor exit nodes
-Description:    TorDNSEL implements a design for a DNSBL-style interface for
+Name:            TorDNSEL
+Version:         0.0.5
+Synopsis:        provides a DNSBL-style interface for detecting Tor exit nodes
+Description:     TorDNSEL implements a design for a DNSBL-style interface for
   detecting connections exiting the Tor network. This design and its rationale
   is described at <https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt>.
-License:        PublicDomain
-License-File:   LICENSE
-Homepage:       http://p56soo2ibjkx23xo.onion/
-Author:         tup
-Maintainer:     tup.tuple@googlemail.com
-Build-Depends:  base>=2.0, network>=2.0, mtl>=1.0, unix>=1.0, stm>=2.0,
+License:         PublicDomain
+License-File:    LICENSE
+Homepage:        http://p56soo2ibjkx23xo.onion/
+Package-URL:     http://p56soo2ibjkx23xo.onion/dist/tordnsel-0.0.5.tar.gz
+Author:          tup
+Maintainer:      tup.tuple@googlemail.com
+Build-Depends:   base>=2.0, network>=2.0, mtl>=1.0, unix>=1.0, stm>=2.0,
   time>=1.0, HUnit>=1.1, binary>=0.3
-tested-with:    GHC==6.6
-data-files:     config/tordnsel.conf.sample,
+Tested-With:     GHC==6.6
+Data-Files:      config/tordnsel.conf.sample,
   config/tordnsel-init.d-script.sample
 
-Executable:     tordnsel
-Main-Is:        tordnsel.hs
-Other-Modules:  TorDNSEL.Config, TorDNSEL.Config.Internals, TorDNSEL.Control,
+Executable:      tordnsel
+Main-Is:         tordnsel.hs
+Other-Modules:   TorDNSEL.Config, TorDNSEL.Config.Internals, TorDNSEL.Control,
   TorDNSEL.Control.Internals, TorDNSEL.DeepSeq, TorDNSEL.Directory,
   TorDNSEL.Directory.Internals, TorDNSEL.Document, TorDNSEL.NetworkState,
   TorDNSEL.NetworkState.Internals, TorDNSEL.DNS, TorDNSEL.DNS.Internals,
   TorDNSEL.DNS.Handler, TorDNSEL.DNS.Handler.Internals, TorDNSEL.Main,
-  TorDNSEL.Socks, TorDNSEL.Socks.Internals, TorDNSEL.System.Timeout,
-  TorDNSEL.Util
-hs-source-dirs: src
-ghc-options:    -O2 -Wall -Werror
+  TorDNSEL.Random, TorDNSEL.Socks, TorDNSEL.Socks.Internals,
+  TorDNSEL.System.Timeout, TorDNSEL.Util
+HS-Source-Dirs:  src
+Includes:        openssl/rand.h
+Extra-Libraries: crypto
+GHC-Options:     -O2 -Wall -Werror
 
-Executable:     runtests
-Buildable:      False
-Main-Is:        runtests.hs
-Other-Modules:  TorDNSEL.Config.Tests, TorDNSEL.Directory.Tests,
+Executable:      runtests
+Buildable:       False
+Main-Is:         runtests.hs
+Other-Modules:   TorDNSEL.Config.Tests, TorDNSEL.Directory.Tests,
   TorDNSEL.DNS.Tests, TorDNSEL.DNS.Handler.Tests
-hs-source-dirs: src
-ghc-options:    -fasm -Wall -Werror -fno-warn-missing-signatures
+HS-Source-Dirs:  src
+GHC-Options:     -fasm -Wall -Werror -fno-warn-missing-signatures
