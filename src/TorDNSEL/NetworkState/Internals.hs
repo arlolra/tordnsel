@@ -32,8 +32,7 @@ module TorDNSEL.NetworkState.Internals (
   -- * State events
   , updateDescriptors
   , updateNetworkStatus
-  , addCookie
-  , deleteCookie
+  , withCookie
   , updateExitAddress
   , testComplete
   , readNetworkState
@@ -199,13 +198,16 @@ updateNetworkStatus :: Network -> [RouterStatus] -> IO ()
 updateNetworkStatus net = writeChan (nChan net) . NewNS
 
 -- | Register a mapping from cookie to fingerprint and descriptor published
--- time.
-addCookie :: Network -> Cookie -> Fingerprint -> UTCTime -> IO ()
-addCookie net c fp = writeChan (nChan net) . AddCookie c fp
-
--- | Delete a cookie to router mapping.
-deleteCookie :: Network -> Cookie -> IO ()
-deleteCookie net = writeChan (nChan net) . DeleteCookie
+-- time, passing the cookie to the given 'IO' action. The cookie is guaranteed
+-- to be released when the action terminates.
+withCookie :: Network -> Fingerprint -> UTCTime -> (Cookie -> IO a) -> IO a
+withCookie net fp published =
+  E.bracket addNewCookie (writeChan (nChan net) . DeleteCookie)
+  where
+    addNewCookie = do
+      cookie <- newCookie
+      writeChan (nChan net) (AddCookie cookie fp published)
+      return cookie
 
 -- | Update our known exit address from an incoming test connection.
 updateExitAddress :: Network -> UTCTime -> Cookie -> HostAddress -> IO ()
@@ -572,17 +574,17 @@ startExitTests conf = do
           guard $ rtrIsRunning rtr
           d <- rtrDescriptor rtr
           ports@(_:_) <- return $ allowedPorts d
-          return (descPublished d, ports)
+          return (posixSecondsToUTCTime (descPublished d), ports)
 
     -- Skip the test if this router isn't marked running, we don't have its
     -- descriptor yet, or its exit policy doesn't allow connections to any of
     -- our listening ports.
-    whenJust mbTest $ \(published, ports) -> do
-      cookie <- newCookie
-      addCookie (etNetwork conf) cookie fp (posixSecondsToUTCTime published)
-      -- try to connect eight times before giving up
-      attempt . take 8 . map (testConnection cookie fp testHost) . cycle $ ports
-      deleteCookie (etNetwork conf) cookie
+    whenJust mbTest $ \(published, ports) ->
+      withCookie (etNetwork conf) fp published $ \cookie -> do
+        -- try to connect eight times before giving up
+        attempt . take 8 . map (testConnection cookie fp testHost) $ cycle ports
+        -- XXX log failure
+        return ()
 
     testComplete (etNetwork conf) fp
 
