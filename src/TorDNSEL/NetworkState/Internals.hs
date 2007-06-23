@@ -554,9 +554,11 @@ startTestListeners net listenSockets concTests = do
         Just cookie -> do
           now <- getCurrentTime
           updateExitAddress net now cookie addr
-          B.hPut handle $ b 27 "HTTP/1.0 204 No Content\r\n\r\n"#
+          B.hPut handle $ b 46 "HTTP/1.0 204 No Content\r\n\
+                               \Connection: close\r\n\r\n"#
         _ ->
-          B.hPut handle $ b 28 "HTTP/1.0 400 Bad Request\r\n\r\n"#
+          B.hPut handle $ b 47 "HTTP/1.0 400 Bad Request\r\n\
+                               \Connection: close\r\n\r\n"#
     ignoreJust E.ioErrors $ hClose handle
 
   where ignoreJust p = E.handleJust p (const $ return ())
@@ -644,6 +646,7 @@ createRequest host port cookie =
   , b 6 "Host: "# `B.append` hostValue
   , b 38 "Content-Type: application/octet-stream"#
   , b 16 "Content-Length: "# `B.append` B.pack (show cookieLen)
+  , b 17 "Connection: close"#
   , b 2 "\r\n"# `B.append` unCookie cookie ]
   where
     hostValue
