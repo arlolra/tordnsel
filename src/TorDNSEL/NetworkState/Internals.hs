@@ -281,12 +281,14 @@ eventHandler net = loop emptyNetworkState
 -- | Handle testing events.
 testingEventHandler :: Network -> (ExitTestChan, FilePath) -> IO ()
 testingEventHandler net (testChan,stateDir) = do
+  -- initialize network state with test results from state directory
   exitAddrs <- readExitAddresses stateDir
-  let routers = M.fromList $ map initialRouter exitAddrs
-  addrLen <- replaceExitAddresses stateDir routers
+  s <- flip discardOldRouters (initialNetState exitAddrs) `fmap` getCurrentTime
+  swapMVar (nState net) s
+
+  -- remove old routers and merge journal into exit-addresses
+  addrLen <- replaceExitAddresses stateDir (nsRouters s)
   journal <- openFile (stateDir ++ "/exit-addresses.new") WriteMode
-  let netState = NetworkState (foldl' insertExit M.empty exitAddrs) routers
-  swapMVar (nState net) netState
 
   forkIO . forever $ do
     -- rebuild exit-addresses every 15 minutes so LastStatus entries
@@ -294,7 +296,7 @@ testingEventHandler net (testChan,stateDir) = do
     threadDelay (15 * 60 * 10^6)
     writeChan (nChan net) ReplaceExitAddresses
 
-  loop netState (TestState M.empty S.empty addrLen 0 journal)
+  loop s (TestState M.empty S.empty addrLen 0 journal)
   where
     loop ns ts = do
       event <- readChan $ nChan net
@@ -350,10 +352,13 @@ testingEventHandler net (testChan,stateDir) = do
       h <- openFile (stateDir ++ "/exit-addresses.new") WriteMode
       return $! ts { tsAddrLen = addrLen, tsJournalLen = 0, tsJournal = h }
 
-    insertExit addrs (ExitAddress fp addr _ _ _) = insertAddress addr fp addrs
-
-    initialRouter (ExitAddress fp addr pub tested status) =
-      (fp, Router Nothing (Just (TestResults addr pub tested)) False status)
+    initialNetState exitAddrs =
+      NetworkState (foldl' (flip insertExit) M.empty exitAddrs)
+                   (M.fromDistinctAscList $ map initialRouter exitAddrs)
+      where
+        insertExit (ExitAddress fp addr _ _ _) = insertAddress addr fp
+        initialRouter (ExitAddress fp addr pub tested status) =
+          (fp, Router Nothing (Just (TestResults addr pub tested)) False status)
 
 -- | Given the set of currently pending tests and the network state, should a
 -- router be added to the test queue?
@@ -749,7 +754,8 @@ parseExitAddress items = do
   lastStatus <- parseTime =<< findArg (b 10 "LastStatus"#  ==) items
   return $! ExitAddress fp addr published tested lastStatus
 
--- | On startup, read the exit test results from the state directory.
+-- | On startup, read the exit test results from the state directory. Return the
+-- results in ascending order of their fingerprints.
 readExitAddresses :: FilePath -> IO [ExitAddress]
 readExitAddresses stateDir =
   fmap (M.elems . M.fromList . map (eaFingerprint &&& id))
