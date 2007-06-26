@@ -104,7 +104,7 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as L
 import Data.Char (toLower, toUpper, isSpace)
 import Data.Dynamic (fromDynamic)
-import Data.List (foldl', sortBy)
+import Data.List (foldl', sortBy, partition)
 import Data.Maybe (mapMaybe, fromMaybe)
 import qualified Data.Map as M
 import Data.Map (Map)
@@ -141,7 +141,7 @@ data Network = Network
     nChan  :: {-# UNPACK #-} !(Chan StateEvent)
     -- | The network state shared with an 'MVar'. This 'MVar' is read-only from
     -- the point of view of other threads. It exists to overcome a performance
-    -- problem with pure message-passing.
+    -- problem with pure message passing.
   , nState :: {-# UNPACK #-} !(MVar NetworkState) }
 
 -- | Create a new network event handler given the exit test chan and the path to
@@ -232,6 +232,8 @@ data StateEvent
                    {-# UNPACK #-} !HostAddress
   -- | Rebuild the exit addresses storage.
   | ReplaceExitAddresses
+  -- | Perform periodic exit tests.
+  | RunPeriodicTests
 
 -- | An internal type representing the current exit test state.
 data TestState = TestState
@@ -287,6 +289,11 @@ testingEventHandler net (testChan,stateDir) = do
     threadDelay (15 * 60 * 10^6)
     writeChan (nChan net) ReplaceExitAddresses
 
+  forkIO . forever $ do
+    -- run periodic tests every 120 minutes
+    replicateM_ 4 $ threadDelay (30 * 60 * 10^6)
+    writeChan (nChan net) RunPeriodicTests
+
   loop s (TestState M.empty addrLen 0 journal)
   where
     loop ns ts = do
@@ -304,6 +311,12 @@ testingEventHandler net (testChan,stateDir) = do
           ns' `seq` swapMVar (nState net) ns'
           addExitTests (map rsFingerprint rss) ns'
           loop ns' ts
+
+        RunPeriodicTests -> do
+          let (up,down) = M.partition rtrIsRunning .
+                            M.filter (isPeriodicTestable now) . nsRouters $ ns
+          mapM_ (mapM_ (addExitTest testChan Nothing) . M.keys) [up,down]
+          loop ns ts
 
         ExpireOldInfo ->
           let ns' = expireOldInfo now ns
@@ -338,7 +351,11 @@ testingEventHandler net (testChan,stateDir) = do
         ReplaceExitAddresses -> rebuildExitStorage ns ts >>= loop ns
 
     addExitTests fps ns =
-      mapM_ (addExitTest testChan Nothing) (filter (isTestable ns) fps)
+      mapM_ (mapM_ (addExitTest testChan Nothing . fst)) [up,down]
+      where
+        (up,down) =
+          partition (rtrIsRunning . snd) . filter (isTestable . snd) .
+          mapMaybe (\fp -> (,) fp `fmap` M.lookup fp (nsRouters ns)) $ fps
 
     rebuildExitStorage ns ts = do
       hClose $ tsJournal ts
@@ -357,16 +374,24 @@ testingEventHandler net (testChan,stateDir) = do
           (fp, Router Nothing (Just (TestResults pub exits)) False status)
 
 -- | Should a router be added to the test queue?
-isTestable :: NetworkState -> Fingerprint -> Bool
-isTestable s fp
-  | Just r <- fp `M.lookup` nsRouters s
-  = case (rtrDescriptor r, rtrTestResults r) of
-      (Nothing, _)     -> False
-      (_, Nothing)     -> True
-      -- have we already done a test for this descriptor version?
-      (Just d, Just t) -> tstPublished t < descPublished' d
-  | otherwise = False
-  where descPublished' = posixSecondsToUTCTime . descPublished
+isTestable :: Router -> Bool
+isTestable r
+  | Nothing <- rtrDescriptor r  = False
+  | Nothing <- rtrTestResults r = True
+  | Just d <- rtrDescriptor r, Just t <- rtrTestResults r
+  -- have we already done a test for this descriptor version?
+  = tstPublished t < posixSecondsToUTCTime (descPublished d)
+  | otherwise                   = False
+
+-- | A router is eligible for periodic testing if we have its descriptor and it
+-- hasn't been tested in the last @minTestInterval@ seconds.
+isPeriodicTestable :: UTCTime -> Router -> Bool
+isPeriodicTestable now r
+  | Nothing <- rtrDescriptor r = False
+  | Just t <- rtrTestResults r
+  = now `diffUTCTime` (maximum . M.elems . tstAddresses $ t) > minTestInterval
+  | otherwise                  = True
+  where minTestInterval = 60 * 60
 
 -- | Update the network state with the results of an exit test. Return the
 -- updated router information.
@@ -516,8 +541,8 @@ isExitNode net q = do
 -- 'UTCTime' to prevent this function from showing up in profiles.
 isRunning :: POSIXTime -> Descriptor -> Bool
 {-# INLINE isRunning #-}
-isRunning now d = now - descPublished d < routerMaxAge
-  where routerMaxAge = 60 * 60 * 48
+isRunning now d = now - descPublished d < maxRouterAge
+  where maxRouterAge = 60 * 60 * 48
 
 --------------------------------------------------------------------------------
 -- Exit tests
@@ -599,19 +624,23 @@ startExitTests conf = do
     s <- readNetworkState . etNetwork $ conf
     let mbTest = do
           rtr <- fp `M.lookup` nsRouters s
-          guard $ rtrIsRunning rtr
           d <- rtrDescriptor rtr
           ports@(_:_) <- return $ allowedPorts d
-          return (posixSecondsToUTCTime (descPublished d), ports)
+          return (rtr, posixSecondsToUTCTime (descPublished d), ports)
 
     -- Skip the test if this router isn't marked running, we don't have its
     -- descriptor yet, or its exit policy doesn't allow connections to any of
     -- our listening ports.
-    whenJust mbTest $ \(published, ports) ->
+    whenJust mbTest $ \(rtr, published, ports) ->
       case mbPort of
-        Nothing ->
-          -- perform one test for each port
-          mapM_ (writeChan (unETChan $ etChan conf) . (,) fp . Just) ports
+        Nothing
+          | rtrIsRunning rtr ->
+              -- perform one test for each port
+              mapM_ (writeChan (unETChan $ etChan conf) . (,) fp . Just) ports
+          | otherwise ->
+              -- Tests through non-running routers will almost always time out.
+              -- Only test one port so we don't tie up all the testing threads.
+              writeChan (unETChan $ etChan conf) (fp, Just $ head ports)
         Just port | port `elem` ports ->
           withCookie (etNetwork conf) (etRandom conf) fp published port $
             \cookie -> do
