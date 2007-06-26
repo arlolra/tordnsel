@@ -30,6 +30,11 @@ import System.Environment (getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, stderr)
 
+-- | A useful combinator for applying a binary function to the result of
+-- applying a unary function to each of two arguments.
+on :: (b -> b -> c) -> (a -> b) -> a -> a -> c
+on f g x y = g x `f` g y
+
 -- | Parse an 'Int' from a 'B.ByteString'. Return the result or 'fail' in the
 -- monad if parsing fails.
 readInt :: Monad m => B.ByteString -> m Int

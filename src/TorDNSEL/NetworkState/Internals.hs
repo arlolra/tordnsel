@@ -34,7 +34,6 @@ module TorDNSEL.NetworkState.Internals (
   , updateNetworkStatus
   , withCookie
   , updateExitAddress
-  , testComplete
   , readNetworkState
   , StateEvent(..)
   , TestState(..)
@@ -45,7 +44,7 @@ module TorDNSEL.NetworkState.Internals (
   , newExitAddress
   , newDescriptor
   , newRouterStatus
-  , discardOldRouters
+  , expireOldInfo
   , insertAddress
   , deleteAddress
 
@@ -93,7 +92,7 @@ module TorDNSEL.NetworkState.Internals (
   ) where
 
 import Control.Arrow ((&&&))
-import Control.Monad (liftM2, forM, forM_, replicateM_, guard)
+import Control.Monad (liftM, liftM2, forM, forM_, replicateM_, guard, unless)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
@@ -105,8 +104,8 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as L
 import Data.Char (toLower, toUpper, isSpace)
 import Data.Dynamic (fromDynamic)
-import Data.List (foldl')
-import Data.Maybe (mapMaybe)
+import Data.List (foldl', sortBy)
+import Data.Maybe (mapMaybe, fromMaybe)
 import qualified Data.Map as M
 import Data.Map (Map)
 import qualified Data.Set as S
@@ -167,22 +166,20 @@ emptyNetworkState = NetworkState M.empty M.empty
 -- | A Tor router.
 data Router = Router
   { -- | This router's descriptor, if we have it yet.
-    rtrDescriptor    :: {-# UNPACK #-} !(Maybe Descriptor),
+    rtrDescriptor  :: {-# UNPACK #-} !(Maybe Descriptor),
     -- | This router's exit test results, if one has been completed.
-    rtrTest          :: {-# UNPACK #-} !(Maybe TestResults),
+    rtrTestResults :: {-# UNPACK #-} !(Maybe TestResults),
     -- | Whether we think this router is running.
-    rtrIsRunning     :: {-# UNPACK #-} !Bool,
+    rtrIsRunning   :: {-# UNPACK #-} !Bool,
     -- | The last time we received a router status entry for this router.
-    rtrLastStatus    :: {-# UNPACK #-} !UTCTime }
+    rtrLastStatus  :: {-# UNPACK #-} !UTCTime }
 
--- | The results of an exit test.
+-- | The results of exit tests.
 data TestResults = TestResults
-  { -- | The address from which our exit test originated.
-    trAddr      :: {-# UNPACK #-} !HostAddress,
-    -- | The descriptor's published time when the exit test was initiated.
-    trPublished :: {-# UNPACK #-} !UTCTime,
-    -- | When the exit test completed.
-    trTested    :: {-# UNPACK #-} !UTCTime }
+  { -- | The descriptor's published time when the last exit test was initiated.
+    tstPublished :: {-# UNPACK #-} !UTCTime,
+    -- | A map from exit address to when the address was last seen.
+    tstAddresses :: {-# UNPACK #-} !(Map HostAddress UTCTime) }
 
 --------------------------------------------------------------------------------
 -- State events
@@ -198,23 +195,19 @@ updateNetworkStatus net = writeChan (nChan net) . NewNS
 -- | Register a mapping from cookie to fingerprint and descriptor published
 -- time, passing the cookie to the given 'IO' action. The cookie is guaranteed
 -- to be released when the action terminates.
-withCookie
-  :: Network -> Handle -> Fingerprint -> UTCTime -> (Cookie -> IO a) -> IO a
-withCookie net random fp published =
+withCookie :: Network -> Handle -> Fingerprint -> UTCTime -> Word16
+           -> (Cookie -> IO a) -> IO a
+withCookie net random fp published port =
   E.bracket addNewCookie (writeChan (nChan net) . DeleteCookie)
   where
     addNewCookie = do
       cookie <- newCookie random
-      writeChan (nChan net) (AddCookie cookie fp published)
+      writeChan (nChan net) (AddCookie cookie fp published port)
       return cookie
 
 -- | Update our known exit address from an incoming test connection.
 updateExitAddress :: Network -> UTCTime -> Cookie -> HostAddress -> IO ()
 updateExitAddress net tested c = writeChan (nChan net) . NewExitAddress tested c
-
--- | Signal that an exit test has finished.
-testComplete :: Network -> Fingerprint -> IO ()
-testComplete net = writeChan (nChan net) . TestComplete
 
 -- | Read the current network state.
 readNetworkState :: Network -> IO NetworkState
@@ -226,25 +219,23 @@ data StateEvent
   = NewDesc {-# UNPACK #-} ![Descriptor]
   -- | New router status entries are available.
   | NewNS {-# UNPACK #-} ![RouterStatus]
-  -- | Discard routers that haven't received status updates for a long time.
-  | DiscardOldRouters
-  -- | Map a new cookie to an exit node identity and descriptor published time.
+  -- | Discard inactive routers and old exit test results.
+  | ExpireOldInfo
+  -- | Map a new cookie to an exit node identity, descriptor published time,
+  -- and port.
   | AddCookie {-# UNPACK #-} !Cookie  {-# UNPACK #-} !Fingerprint
-              {-# UNPACK #-} !UTCTime
+              {-# UNPACK #-} !UTCTime {-# UNPACK #-} !Word16
   -- | Remove a cookie to exit node identity mapping.
   | DeleteCookie {-# UNPACK #-} !Cookie
   -- | We've received a cookie from an incoming test connection.
   | NewExitAddress {-# UNPACK #-} !UTCTime {-# UNPACK #-} !Cookie
                    {-# UNPACK #-} !HostAddress
-  -- | A test is finished, so remove it from the set of pending tests.
-  | TestComplete {-# UNPACK #-} !Fingerprint
   -- | Rebuild the exit addresses storage.
   | ReplaceExitAddresses
 
 -- | An internal type representing the current exit test state.
 data TestState = TestState
-  { tsCookies    :: !(Map Cookie (Fingerprint, UTCTime))
-  , tsPending    :: !(Set Fingerprint)
+  { tsCookies    :: !(Map Cookie (Fingerprint, UTCTime, Word16))
   , tsAddrLen
   , tsJournalLen :: !Integer
   , tsJournal    :: !Handle }
@@ -255,7 +246,7 @@ stateEventHandler net testConf = do
   forkIO . forever $ do
     -- check for and discard old routers every 30 minutes
     threadDelay (30 * 60 * 10^6)
-    writeChan (nChan net) DiscardOldRouters
+    writeChan (nChan net) ExpireOldInfo
 
   maybe (eventHandler net) (testingEventHandler net) testConf
 
@@ -273,8 +264,8 @@ eventHandler net = loop emptyNetworkState
         NewNS rss ->
           let s' =  foldl' (newRouterStatus now) s rss
           in s' `seq` swapMVar (nState net) s' >> loop s'
-        DiscardOldRouters ->
-          let s' = discardOldRouters now s
+        ExpireOldInfo ->
+          let s' = expireOldInfo now s
           in s' `seq` swapMVar (nState net) s' >> loop s'
         _ -> error "unexpected message" -- XXX log this
 
@@ -283,10 +274,10 @@ testingEventHandler :: Network -> (ExitTestChan, FilePath) -> IO ()
 testingEventHandler net (testChan,stateDir) = do
   -- initialize network state with test results from state directory
   exitAddrs <- readExitAddresses stateDir
-  s <- flip discardOldRouters (initialNetState exitAddrs) `fmap` getCurrentTime
+  s <- flip expireOldInfo (initialNetState exitAddrs) `fmap` getCurrentTime
   swapMVar (nState net) s
 
-  -- remove old routers and merge journal into exit-addresses
+  -- remove old info and merge journal into exit-addresses
   addrLen <- replaceExitAddresses stateDir (nsRouters s)
   journal <- openFile (stateDir ++ "/exit-addresses.new") WriteMode
 
@@ -296,7 +287,7 @@ testingEventHandler net (testChan,stateDir) = do
     threadDelay (15 * 60 * 10^6)
     writeChan (nChan net) ReplaceExitAddresses
 
-  loop s (TestState M.empty S.empty addrLen 0 journal)
+  loop s (TestState M.empty addrLen 0 journal)
   where
     loop ns ts = do
       event <- readChan $ nChan net
@@ -305,32 +296,37 @@ testingEventHandler net (testChan,stateDir) = do
         NewDesc ds -> do
           let ns' = foldl' (newDescriptor now) ns ds
           ns' `seq` swapMVar (nState net) ns'
-          addExitTests (tsPending ts) (map descFingerprint ds) ns' ts
-            >>= loop ns'
+          addExitTests (map descFingerprint ds) ns'
+          loop ns' ts
 
         NewNS rss -> do
           let ns' = foldl' (newRouterStatus now) ns rss
           ns' `seq` swapMVar (nState net) ns'
-          addExitTests (tsPending ts) (map rsFingerprint rss) ns' ts
-            >>= loop ns'
+          addExitTests (map rsFingerprint rss) ns'
+          loop ns' ts
 
-        DiscardOldRouters ->
-          let ns' = discardOldRouters now ns
+        ExpireOldInfo ->
+          let ns' = expireOldInfo now ns
           in ns' `seq` swapMVar (nState net) ns' >> loop ns' ts
 
-        AddCookie c fp published ->
-          loop ns ts { tsCookies = M.insert c (fp, published) (tsCookies ts) }
+        AddCookie c fp published port ->
+          loop ns ts { tsCookies = M.insert c (fp, published, port)
+                                              (tsCookies ts) }
 
         DeleteCookie c -> loop ns ts { tsCookies = M.delete c (tsCookies ts) }
 
-        TestComplete fp -> loop ns ts { tsPending = S.delete fp (tsPending ts) }
-
         NewExitAddress tested c addr
-          | Just (fp, published) <- c  `M.lookup` tsCookies ts
-          , Just r               <- fp `M.lookup` nsRouters ns -> do
+          | Just (fp,published,port) <- c  `M.lookup` tsCookies ts
+          , Just r                   <- fp `M.lookup` nsRouters ns -> do
 
           let (r',ns') = newExitAddress tested published r fp addr ns
           ns' `seq` swapMVar (nState net) ns'
+
+          -- have we seen this exit address before?
+          unless (fromMaybe False . fmap (M.member addr . tstAddresses) $
+                  rtrTestResults r) $
+            -- test this port again in case exit addresses are rotated
+            addExitTest testChan (Just port) fp
 
           len <- appendExitAddressToJournal (tsJournal ts) fp r'
           if isJournalTooLarge (tsAddrLen ts) (tsJournalLen ts + len)
@@ -341,36 +337,34 @@ testingEventHandler net (testChan,stateDir) = do
 
         ReplaceExitAddresses -> rebuildExitStorage ns ts >>= loop ns
 
-    addExitTests pending fps ns ts = do
-      mapM_ (addExitTest testChan) testable
-      return $! ts { tsPending = tsPending ts `S.union` S.fromList testable }
-      where testable = filter (isTestable pending ns) fps
+    addExitTests fps ns =
+      mapM_ (addExitTest testChan Nothing) (filter (isTestable ns) fps)
 
     rebuildExitStorage ns ts = do
       hClose $ tsJournal ts
       addrLen <- replaceExitAddresses stateDir (nsRouters ns)
       h <- openFile (stateDir ++ "/exit-addresses.new") WriteMode
-      return $! ts { tsAddrLen = addrLen, tsJournalLen = 0, tsJournal = h }
+      return ts { tsAddrLen = addrLen, tsJournalLen = 0, tsJournal = h }
 
     initialNetState exitAddrs =
-      NetworkState (foldl' (flip insertExit) M.empty exitAddrs)
+      NetworkState (foldl' insertExits M.empty exitAddrs)
                    (M.fromDistinctAscList $ map initialRouter exitAddrs)
       where
-        insertExit (ExitAddress fp addr _ _ _) = insertAddress addr fp
-        initialRouter (ExitAddress fp addr pub tested status) =
-          (fp, Router Nothing (Just (TestResults addr pub tested)) False status)
+        insertExits addrs (ExitAddress fp _ _ exits) =
+          foldl' (\addrs' (addr,_) -> insertAddress addr fp addrs') addrs
+                 (M.assocs exits)
+        initialRouter (ExitAddress fp pub status exits) =
+          (fp, Router Nothing (Just (TestResults pub exits)) False status)
 
--- | Given the set of currently pending tests and the network state, should a
--- router be added to the test queue?
-isTestable :: Set Fingerprint -> NetworkState -> Fingerprint -> Bool
-isTestable pending s fp
-  | fp `S.member` pending = False
+-- | Should a router be added to the test queue?
+isTestable :: NetworkState -> Fingerprint -> Bool
+isTestable s fp
   | Just r <- fp `M.lookup` nsRouters s
-  = case (rtrDescriptor r, rtrTest r) of
+  = case (rtrDescriptor r, rtrTestResults r) of
       (Nothing, _)     -> False
       (_, Nothing)     -> True
       -- have we already done a test for this descriptor version?
-      (Just d, Just t) -> trPublished t < descPublished' d
+      (Just d, Just t) -> tstPublished t < descPublished' d
   | otherwise = False
   where descPublished' = posixSecondsToUTCTime . descPublished
 
@@ -380,13 +374,14 @@ newExitAddress
   :: UTCTime -> UTCTime -> Router -> Fingerprint -> HostAddress -> NetworkState
   -> (Router, NetworkState)
 newExitAddress tested published r fp addr s
-  | trAddr `fmap` rtrTest r /= Just addr
-  = (r', s' { nsAddrs = insertAddress addr fp . deleteOldExit . nsAddrs $ s })
-  | otherwise = (r', s')
+  | Just test <- rtrTestResults r
+  = results $ TestResults (tstPublished test `max` published)
+                          (M.insert addr tested $ tstAddresses test)
+  | otherwise = results $ TestResults published (M.singleton addr tested)
   where
-    r' = r { rtrTest = Just (TestResults addr published tested) }
-    s' = s { nsRouters = M.insert fp r' (nsRouters s) }
-    deleteOldExit = maybe id (\t -> deleteAddress (trAddr t) fp) (rtrTest r)
+    results test = (id &&& s') r { rtrTestResults = Just test }
+    s' r' = s { nsAddrs   = insertAddress addr fp (nsAddrs s)
+              , nsRouters = M.insert fp r' (nsRouters s) }
 
 -- | Update the network state with a new router descriptor.
 newDescriptor :: UTCTime -> NetworkState -> Descriptor -> NetworkState
@@ -401,7 +396,7 @@ newDescriptor now s newD
         -- address changed: delete old address, insert new address
         | descListenAddr newD /= descListenAddr oldD ->
             s { nsAddrs   = insertAddr newD . deleteAddr oldD . nsAddrs $ s
-              , nsRouters = updateRouters }
+              , nsRouters = updateRoutersTests (descListenAddr oldD) }
         -- address hasn't changed: don't update addrs
         | otherwise -> s { nsRouters = updateRouters }
       -- we didn't have an address before: insert new address
@@ -413,6 +408,14 @@ newDescriptor now s newD
   where
     updateRouters =
       M.adjust (\r -> r { rtrDescriptor = Just newD }) fp (nsRouters s)
+    updateRoutersTests oldAddr =
+      M.adjust (\r -> r { rtrDescriptor = Just newD
+                        , rtrTestResults = updateTests oldAddr r })
+               fp (nsRouters s)
+    updateTests oldAddr (Router _ (Just test) _ _)
+      | not (M.null addrs') = Just test { tstAddresses = addrs' }
+      where addrs' = M.delete oldAddr (tstAddresses test)
+    updateTests _ _ = Nothing
     insertRouters =
       M.insert fp (Router (Just newD) Nothing False now) (nsRouters s)
     insertAddr d = insertAddress (descListenAddr d) fp
@@ -429,17 +432,34 @@ newRouterStatus now s rs =
     updateRouter r = r { rtrIsRunning = rsIsRunning rs, rtrLastStatus = now }
 
 -- | Discard routers whose last status update was received more than
--- @routerMaxAge@ seconds ago.
-discardOldRouters :: UTCTime -> NetworkState -> NetworkState
-discardOldRouters now s = s { nsAddrs = addrs', nsRouters = routers' }
+-- @maxRouterAge@ seconds ago and exit test results older than @maxExitTestAge@.
+expireOldInfo :: UTCTime -> NetworkState -> NetworkState
+expireOldInfo now s = s { nsAddrs = addrs'', nsRouters = routers'' }
   where
-    (oldRouters,routers') = M.partition isOld (nsRouters s)
+    (addrs'',routers'') = M.mapAccumWithKey updateTests addrs' routers'
+    updateTests addrs fp r@(Router d (Just test) _ _)
+      | M.null oldExits    = (addrs, r)
+      | M.null recentExits = update Nothing
+      | otherwise          = update $ Just test { tstAddresses = recentExits }
+      where
+        update test' = (recentAddrs, r { rtrTestResults = test' })
+        recentAddrs =
+          foldl' (\as addr -> deleteAddress addr fp as) addrs
+                 (M.keys $ maybe id (M.delete . descListenAddr) d oldExits)
+        (oldExits,recentExits) = M.partition isTestOld (tstAddresses test)
+    updateTests addrs _ r = (addrs, r)
+    (oldRouters,routers') = M.partition isRouterOld (nsRouters s)
     addrs' = foldl' deleteAddrs (nsAddrs s) (M.toList oldRouters)
-    isOld r = now `diffUTCTime` rtrLastStatus r > routerMaxAge
+    isRouterOld r = now `diffUTCTime` rtrLastStatus r > maxRouterAge
+    isTestOld tested = now `diffUTCTime` tested > maxExitTestAge
     deleteAddrs addrs (fp,r) =
       maybe id (\d -> deleteAddress (descListenAddr d) fp) (rtrDescriptor r) .
-      maybe id (\t -> deleteAddress (trAddr t) fp) (rtrTest r) $ addrs
-    routerMaxAge = 60 * 60 * 48
+      maybe id (deleteExitAddresses fp) (rtrTestResults r) $ addrs
+    deleteExitAddresses fp test addrs =
+      foldl' (\as addr -> deleteAddress addr fp as) addrs
+             (M.keys $ tstAddresses test)
+    maxRouterAge = 48 * 60 * 60
+    maxExitTestAge = 24 * 60 * 60
 
 -- | Add a new router associated with an address to the address map.
 insertAddress :: HostAddress -> Fingerprint -> Map HostAddress (Set Fingerprint)
@@ -503,15 +523,16 @@ isRunning now d = now - descPublished d < routerMaxAge
 -- Exit tests
 
 -- | The exit test channel.
-newtype ExitTestChan = ExitTestChan { unETChan :: Chan Fingerprint }
+newtype ExitTestChan = ExitTestChan
+  { unETChan :: Chan (Fingerprint, Maybe Word16) }
 
 -- | Create a new exit test channel to be passed to 'newNetwork'.
 newExitTestChan :: IO ExitTestChan
 newExitTestChan = ExitTestChan `fmap` newChan
 
 -- | Schedule an exit test through a router.
-addExitTest :: ExitTestChan -> Fingerprint -> IO ()
-addExitTest = writeChan . unETChan
+addExitTest :: ExitTestChan -> Maybe Word16 -> Fingerprint -> IO ()
+addExitTest (ExitTestChan chan) port fp = writeChan chan (fp, port)
 
 -- | Bind the listening sockets we're going to use for incoming exit tests. This
 -- action exists so we can listen on privileged ports prior to dropping
@@ -574,8 +595,8 @@ startExitTests conf = do
   startTestListeners (etNetwork conf) (etListenSocks conf) (etConcTests conf)
 
   replicateM_ (etConcTests conf) . forkIO . forever $ do
-    fp <- readChan . unETChan . etChan $ conf
-    s  <- readNetworkState . etNetwork $ conf
+    (fp,mbPort) <- readChan . unETChan . etChan $ conf
+    s <- readNetworkState . etNetwork $ conf
     let mbTest = do
           rtr <- fp `M.lookup` nsRouters s
           guard $ rtrIsRunning rtr
@@ -587,33 +608,37 @@ startExitTests conf = do
     -- descriptor yet, or its exit policy doesn't allow connections to any of
     -- our listening ports.
     whenJust mbTest $ \(published, ports) ->
-      withCookie (etNetwork conf) (etRandom conf) fp published $ \cookie -> do
-        -- try to connect eight times before giving up
-        attempt . take 8 . map (testConnection cookie fp testHost) $ cycle ports
-        -- XXX log failure
-        return ()
-
-    testComplete (etNetwork conf) fp
+      case mbPort of
+        Nothing ->
+          -- perform one test for each port
+          mapM_ (writeChan (unETChan $ etChan conf) . (,) fp . Just) ports
+        Just port | port `elem` ports ->
+          withCookie (etNetwork conf) (etRandom conf) fp published port $
+            \cookie -> do
+              -- try to connect twice before giving up
+              attempt . replicate 2 $ testConnection cookie fp port
+              -- XXX log failure
+              return ()
+        _ -> return ()
 
   where
-    testConnection cookie fp host port =
+    testConnection cookie fp port =
       E.handleJust connExceptions (const $ return False) .
         fmap (maybe False (const True)) .
           timeout (2 * 60 * 10^6) $ do
             sock <- repeatConnectSocks
             withSocksConnection sock exitHost port $ \handle -> do
-              B.hPut handle $ createRequest host port cookie
+              B.hPut handle $ createRequest testHost port cookie
               B.hGet handle 1024 -- ignore response
               return ()
       where
-        exitHost =
-          B.concat [host, b 2 ".$"#, encodeBase16Fingerprint fp, b 5 ".exit"#]
+        exitHost = B.concat [ testHost, b 2 ".$"#, encodeBase16Fingerprint fp
+                            , b 5 ".exit"# ]
+        testHost = B.pack . inet_htoa . etTestAddr $ conf
 
     allowedPorts desc =
       [ p | p <- etTestPorts conf
           , exitPolicyAccepts (etTestAddr conf) p (descExitPolicy desc) ]
-
-    testHost = B.pack . inet_htoa . etTestAddr $ conf
 
     repeatConnectSocks = do
       r <- E.tryJust E.ioErrors $ do
@@ -717,51 +742,56 @@ cookieLen = 32
 data ExitAddress = ExitAddress
   { -- | The fingerprint of the exit node we tested through.
     eaFingerprint :: {-# UNPACK #-} !Fingerprint,
-    -- | The address from which our test connection originated.
-    eaExitAddress :: {-# UNPACK #-} !HostAddress,
     -- | The current descriptor published time when the test was initiated. We
     -- don't perform another test until a newer descriptor arrives.
     eaPublished   :: {-# UNPACK #-} !UTCTime,
-    -- | When the test completed.
-    eaTested      :: {-# UNPACK #-} !UTCTime,
     -- | When we last received a network status update for this router. This
     -- helps us decide when to discard a router.
-    eaLastStatus  :: {-# UNPACK #-} !UTCTime
-  }
+    eaLastStatus  :: {-# UNPACK #-} !UTCTime,
+    -- | A map from exit address to when the address was last seen.
+    eaAddresses   :: {-# UNPACK #-} !(Map HostAddress UTCTime) }
 
 -- | Exit test results are represented using the same document meta-format Tor
 -- uses for router descriptors and network status documents.
 renderExitAddress :: ExitAddress -> B.ByteString
-renderExitAddress x =
-  B.unlines
+renderExitAddress x = B.unlines $
   [ b 9 "ExitNode "# `B.append` renderFP (eaFingerprint x)
-  , b 12 "ExitAddress "# `B.append` (B.pack . inet_htoa . eaExitAddress $ x)
   , b 10 "Published "# `B.append` renderTime (eaPublished x)
-  , b 7 "Tested "# `B.append` renderTime (eaTested x)
-  , b 11 "LastStatus "# `B.append` renderTime (eaLastStatus x) ]
+  , b 11 "LastStatus "# `B.append` renderTime (eaLastStatus x) ] ++
+  (map renderTest . sortBy (compare `on` snd) . M.assocs . eaAddresses $ x)
   where
-    renderFP = B.unwords . split 4 . B.map toUpper . encodeBase16Fingerprint
+    renderFP = B.map toUpper . encodeBase16Fingerprint
+    renderTest (addr,time) =
+      B.unwords [b 11 "ExitAddress"#, B.pack $ inet_htoa addr, renderTime time]
     renderTime = B.pack . take 19 . show
 
 -- | Parse a single exit address entry, 'fail'ing in the monad if parsing fails.
 parseExitAddress :: Monad m => Document -> m ExitAddress
 parseExitAddress items = do
-  fp         <- decodeBase16Fingerprint . B.filter (/= ' ')
+  fp         <- decodeBase16Fingerprint
                           =<< findArg (b 8  "ExitNode"#    ==) items
-  addr       <- inet_atoh =<< findArg (b 11 "ExitAddress"# ==) items
   published  <- parseTime =<< findArg (b 9  "Published"#   ==) items
-  tested     <- parseTime =<< findArg (b 6  "Tested"#      ==) items
   lastStatus <- parseTime =<< findArg (b 10 "LastStatus"#  ==) items
-  return $! ExitAddress fp addr published tested lastStatus
+  addrs <- mapM parseAddr . filter ((b 11 "ExitAddress"# ==) . iKey) $ items
+  return $! ExitAddress fp published lastStatus (M.fromList addrs)
+  where
+    parseAddr item = do
+      (addr,tested) <- B.break isSpace `liftM` liftArg (iArg item)
+      liftM2 (,) (inet_atoh addr) (parseTime $ B.dropWhile isSpace tested)
+    liftArg (Just arg) = return arg
+    liftArg _          = fail "no argument"
 
 -- | On startup, read the exit test results from the state directory. Return the
 -- results in ascending order of their fingerprints.
 readExitAddresses :: FilePath -> IO [ExitAddress]
 readExitAddresses stateDir =
-  fmap (M.elems . M.fromList . map (eaFingerprint &&& id))
-       (liftM2 (++) (addrs "/exit-addresses") (addrs "/exit-addresses.new"))
+  M.elems `fmap`
+    liftM2 (M.unionWith merge)
+           (M.fromListWith merge `fmap` addrs "/exit-addresses.new")
+           (M.fromDistinctAscList `fmap` addrs "/exit-addresses")
   where
-    addrs = fmap parseAddrs . readAddrs
+    merge new old = new { eaAddresses = (M.union `on` eaAddresses) new old }
+    addrs = fmap (map (eaFingerprint &&& id) . parseAddrs) . readAddrs
     parseAddrs =
       parseSubDocs (b 8 "ExitNode"#) parseExitAddress . parseDocument . B.lines
     readAddrs fp = B.readFile (stateDir ++ fp) `E.catch` const (return B.empty)
@@ -782,9 +812,8 @@ replaceExitAddresses stateDir routers = do
 -- | Return an exit address entry if we have enough information to create one.
 mkExitAddress :: (Fingerprint, Router) -> Maybe ExitAddress
 mkExitAddress (fp,r) = do
-  t <- rtrTest r
-  return $! ExitAddress fp (trAddr t) (trPublished t) (trTested t)
-                        (rtrLastStatus r)
+  t <- rtrTestResults r
+  return $! ExitAddress fp (tstPublished t) (rtrLastStatus r) (tstAddresses t)
 
 -- | Add an exit address entry to the journal. Return the entry's length in
 -- bytes.
@@ -799,13 +828,13 @@ appendExitAddressToJournal journal fp r
 -- | Is the exit address journal large enough that it should be cleared?
 isJournalTooLarge :: Integral a => a -> a -> Bool
 isJournalTooLarge addrLen journalLen
-  | addrLen > 16384 = journalLen > addrLen `div` 2
-  | otherwise       = journalLen > 8192
+  | addrLen > 65536 = journalLen > addrLen
+  | otherwise       = journalLen > 65536
 
 --------------------------------------------------------------------------------
 -- Bounded transactional channels
 
--- | An abstract type representing a transactional channel of bounded size.
+-- | An abstract type representing a transactional FIFO channel of bounded size.
 data BoundedTChan a = BTChan (TChan a) (TVar Int) Int
 
 -- | Create a new bounded channel of a given size.

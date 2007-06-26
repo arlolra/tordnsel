@@ -65,9 +65,8 @@
 ## Make at most this number of concurrent test connections through exit
 ## nodes. By default this is set to 0, that is, we don't perform any tests.
 ## If this is set higher than about (FD_SETSIZE-80)/2, the runtime will
-## crash due to limitations of select(2). Setting it higher than the number
-## of exit nodes has no benefit, so a reasonable maximum might be 384.
-#ConcurrentExitTests 128
+## crash due to limitations of select(2).
+#ConcurrentExitTests 384
 
 ## Store exit test results in this directory. This should be an absolute
 ## path accessible inside the chroot (if one is configured).
