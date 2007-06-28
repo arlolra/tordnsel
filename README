@@ -73,8 +73,8 @@ Building TorDNSEL
 Configuring TorDNSEL
 
   Copy config/tordnsel.conf.sample. At the very least, you'll need to uncomment
-  and modify AuthoritativeZone, DomainName, SOARName, and probably
-  DNSListenAddress.
+  and modify AuthoritativeZone, DomainName, SOARName, StateDirectory, and
+  probably DNSListenAddress.
 
   To run exit tests, you need to specify at least ConcurrentExitTests,
   StateDirectory, TestListenAddress, and TestDestinationAddress.

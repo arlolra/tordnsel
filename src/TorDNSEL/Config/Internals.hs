@@ -76,11 +76,11 @@ knownConfigItems
 fillInConfig :: Monad m => Config -> m Config
 fillInConfig conf = do
   mapM_ (checkForItem " is a required option.")
-    ["AuthoritativeZone", "DomainName", "SOARName"]
+    ["AuthoritativeZone", "DomainName", "SOARName", "StateDirectory"]
   concTests <- parse $ conf' ! b "concurrentexittests"#
   when (concTests > (0 :: Int)) .
     mapM_ (checkForItem " is required for exit tests.") $
-      ["StateDirectory", "TestListenAddress", "TestDestinationAddress"]
+      ["TestListenAddress", "TestDestinationAddress"]
   return conf'
   where
     conf' = M.union conf . M.fromList . map (toItem *** toItem) $

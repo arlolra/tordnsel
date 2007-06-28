@@ -18,6 +18,13 @@
 ## fully-qualified domain name. This option is required.
 #SOARName hostmaster.example.com.
 
+## Store exit test results and place the statistics socket in this
+## directory. This should be an absolute path accessible inside the chroot
+## (if one is configured). This option is required.
+##
+## This example assumes you've specified ChangeRootDirectory.
+#StateDirectory /state
+
 ## Bind the name server to this IP address and UDP port. If you want to
 ## bind to all interfaces, you might set the address to "0.0.0.0". This
 ## port is bound before dropping privileges. Leave it commented to use the
@@ -67,12 +74,6 @@
 ## If this is set higher than about (FD_SETSIZE-80)/2, the runtime will
 ## crash due to limitations of select(2).
 #ConcurrentExitTests 384
-
-## Store exit test results in this directory. This should be an absolute
-## path accessible inside the chroot (if one is configured).
-##
-## This example assumes you've specified ChangeRootDirectory.
-#StateDirectory /state
 
 ## Make exit test connections through Tor's SocksPort on this IP address
 ## and TCP port. Leave it commented to use the default.

@@ -38,9 +38,9 @@ module TorDNSEL.Main (
   , chroot
   ) where
 
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (forkIO, threadDelay, myThreadId)
 import qualified Control.Exception as E
-import Control.Monad (when, unless, liftM)
+import Control.Monad (when, unless, liftM, forM_)
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
@@ -65,7 +65,8 @@ import System.Posix.IO
   , defaultFileFlags, dupTo )
 import System.Posix.Process
   (forkProcess, createSession, exitImmediately, getProcessID)
-import System.Posix.Signals (installHandler, Handler(Ignore), sigHUP, sigPIPE)
+import System.Posix.Signals
+  (installHandler, Handler(Ignore, Catch), sigHUP, sigPIPE, sigINT, sigTERM)
 
 import System.Posix.Error (throwErrnoPathIfMinus1_)
 import System.Posix.Files
@@ -84,6 +85,7 @@ import TorDNSEL.DNS
 import TorDNSEL.DNS.Handler
 import TorDNSEL.NetworkState
 import TorDNSEL.Random
+import TorDNSEL.Statistics
 import TorDNSEL.Util
 
 -- | The main entry point for the server. This handles parsing config options,
@@ -99,19 +101,7 @@ main = do
   runAsDaemon     <- conf <! "runasdaemon"#
   address         <- exitLeft . parse `liftMb` b "address"# `M.lookup` conf
 
-  let authLabels  = toLabels $ conf ! b "authoritativezone"#
-      authZone    = DomainName authLabels
-      revAuthZone = DomainName $ reverse authLabels
-      rName       = DomainName . toLabels $ conf ! b "soarname"#
-      myName      = DomainName . toLabels $ conf ! b "domainname"#
-      dnsConf = DNSConfig
-        { dnsAuthZone = revAuthZone
-        , dnsMyName   = myName
-        , dnsSOA      = SOA authZone ttl myName rName 0 ttl ttl ttl ttl
-        , dnsNS       = NS authZone ttl myName
-        , dnsA        = A authZone ttl `fmap` address }
-
-      [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
+  let [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
         [ b "user"#, b "group"#, b "changerootdirectory"#, b "pidfile"#
         , b "tordatadirectory"#, b "torcontrolpassword"# ]
 
@@ -119,15 +109,16 @@ main = do
   when (any isJust [user, group, newRoot] && euid /= 0) $
     failMsg "You must be root to drop privileges or chroot."
 
-  tcp <- getProtocolNumber "tcp"
   ids <- getIDs user group
+
+  stateDir <- conf <! "statedirectory"#
+  checkStateDirectory (fst ids) newRoot stateDir
+
+  tcp <- getProtocolNumber "tcp"
 
   concTests <- conf <! "concurrentexittests"#
   testConf <- do
     if concTests <= 0 then return Nothing else do
-
-    stateDir <- conf <! "statedirectory"#
-    checkStateDirectory (fst ids) newRoot stateDir
 
     socksSockAddr <- conf <! "torsocksaddress"#
     (testListenAddr,testListenPorts) <- conf <! "testlistenaddress"#
@@ -138,7 +129,7 @@ main = do
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
 
-    return . Just . ((,) stateDir) $ \c -> c
+    return . Just $ \c -> c
       { etConcTests   = concTests
       , etSocksServer = socksSockAddr
       , etListenSocks = testSockets
@@ -173,8 +164,29 @@ main = do
 
     dropPrivileges ids
 
+    topLevelThread <- myThreadId
+    forM_ [sigINT, sigTERM] $ \signal ->
+      flip (installHandler signal) Nothing . Catch $ do
+        unlinkStatsSocket stateDir
+        E.throwTo topLevelThread (E.ExitException ExitSuccess)
+
+    statsHandle <- openStatsListener stateDir
+
+    let authLabels  = toLabels $ conf ! b "authoritativezone"#
+        authZone    = DomainName authLabels
+        revAuthZone = DomainName $ reverse authLabels
+        rName       = DomainName . toLabels $ conf ! b "soarname"#
+        myName      = DomainName . toLabels $ conf ! b "domainname"#
+        dnsConf = DNSConfig
+          { dnsAuthZone = revAuthZone
+          , dnsMyName   = myName
+          , dnsSOA      = SOA authZone ttl myName rName 0 ttl ttl ttl ttl
+          , dnsNS       = NS authZone ttl myName
+          , dnsA        = A authZone ttl `fmap` address
+          , dnsStats    = incrementResponses statsHandle }
+
     net <- case testConf of
-      Just (stateDir, testConf') -> do
+      Just testConf' -> do
         exitTestChan <- newExitTestChan
         net <- newNetwork $ Just (exitTestChan, stateDir)
         startExitTests . testConf' $ ExitTestConfig
@@ -195,11 +207,12 @@ main = do
 
     -- start the DNS server
     forever . E.catchJust E.ioErrors
-      (runServer sock $ dnsHandler net dnsConf) $ \e -> do
-        -- XXX this should be logged
-        unless runAsDaemon $
-          hPutStrLn stderr (show e) >> hFlush stderr
-        threadDelay (5 * 10^6)
+      (runServer sock (incrementBytes statsHandle) (dnsHandler dnsConf net)) $
+        \e -> do
+          -- XXX this should be logged
+          unless runAsDaemon $
+            hPutStrLn stderr (show e) >> hFlush stderr
+          threadDelay (5 * 10^6)
   where
     connExceptions e@(E.IOException _)                = Just e
     connExceptions e@(E.DynException e')

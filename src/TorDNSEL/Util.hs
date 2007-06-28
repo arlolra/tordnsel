@@ -17,6 +17,7 @@
 
 module TorDNSEL.Util where
 
+import qualified Control.Exception as E
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Char (intToDigit)
 import Data.List (foldl', intersperse)
@@ -82,6 +83,10 @@ parseTime bs = do
 -- | Split a 'ByteString' into blocks of @x@ length.
 split :: Int -> ByteString -> [ByteString]
 split x = takeWhile (not . B.null) . map (B.take x) . iterate (B.drop x)
+
+-- | Catch and discard exceptions matching the predicate.
+ignoreJust :: (E.Exception -> Maybe a) -> IO () -> IO ()
+ignoreJust p = E.handleJust p . const . return $ ()
 
 -- | Lift an @Either String@ computation into the 'IO' monad by printing
 -- @Left e@ as an error message and exiting.

@@ -18,6 +18,8 @@ module TorDNSEL.NetworkState (
   -- * Network state
     Network
   , newNetwork
+  , NetworkState
+  , readNetworkState
 
   -- * State events
   , updateDescriptors

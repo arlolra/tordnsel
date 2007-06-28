@@ -1,22 +1,23 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      : TorDNSEL.DNS.Handler
+-- Module      : TorDNSEL.Statistics
 -- Copyright   : (c) tup 2007
 -- License     : Public domain (see LICENSE)
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (pattern guards)
+-- Portability : non-portable (GHC primitives)
 --
--- Handling DNS queries for exit list information.
+-- Making load information available external to the process.
 --
 -----------------------------------------------------------------------------
 
-module TorDNSEL.DNS.Handler (
-    DNSConfig(..)
-  , ResponseType(..)
-  , dnsHandler
-  , ttl
+module TorDNSEL.Statistics (
+    StatsHandle
+  , openStatsListener
+  , unlinkStatsSocket
+  , incrementBytes
+  , incrementResponses
   ) where
 
-import TorDNSEL.DNS.Handler.Internals
+import TorDNSEL.Statistics.Internals

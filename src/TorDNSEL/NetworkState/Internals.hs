@@ -81,12 +81,6 @@ module TorDNSEL.NetworkState.Internals (
   , appendExitAddressToJournal
   , isJournalTooLarge
 
-  -- ** Bounded transactional channels
-  , BoundedTChan(..)
-  , newBoundedTChan
-  , readBoundedTChan
-  , writeBoundedTChan
-
   -- * Helpers
   , b
   ) where
@@ -96,9 +90,7 @@ import Control.Monad (liftM, liftM2, forM, forM_, replicateM_, guard, unless)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
-import Control.Concurrent.STM
-  ( STM, atomically, check, TVar, newTVar, readTVar, writeTVar
-  , TChan, newTChan, readTChan, writeTChan )
+import Control.Concurrent.STM (atomically)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as L
@@ -111,7 +103,7 @@ import Data.Map (Map)
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
-import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime, posixSecondsToUTCTime)
+import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
 import Data.Word (Word16)
 import Network.Socket
   ( Socket, ProtocolNumber, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
@@ -128,6 +120,7 @@ import TorDNSEL.Directory
 import TorDNSEL.Document
 import TorDNSEL.Random
 import TorDNSEL.Socks
+import TorDNSEL.STM.BoundedTChan
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
@@ -524,17 +517,14 @@ instance Show ExitListQuery where
 
 -- | Does a query represent a Tor exit node cabable of exiting to a particular
 -- network service in our current view of the Tor network?
-isExitNode :: Network -> ExitListQuery -> IO Bool
+isExitNode :: POSIXTime -> NetworkState -> ExitListQuery -> Bool
 {-# INLINE isExitNode #-}
-isExitNode net q = do
-  s <- readNetworkState net
-  now <- getPOSIXTime
-  return $! maybe False (anyExit now s) $ queryAddr q `M.lookup` nsAddrs s
+isExitNode now s q = maybe False (any isExit . mapMaybe lookupDesc . S.elems) ns
   where
-    anyExit t s = any (isExit t) . mapMaybe (lookupDesc $ nsRouters s) . S.elems
-    lookupDesc routers fp = M.lookup fp routers >>= rtrDescriptor
-    isExit t d = isRunning t d &&
-                 exitPolicyAccepts (destAddr q) (destPort q) (descExitPolicy d)
+    ns = queryAddr q `M.lookup` nsAddrs s
+    lookupDesc fp = rtrDescriptor =<< fp `M.lookup` nsRouters s
+    isExit d = isRunning now d &&
+               exitPolicyAccepts (destAddr q) (destPort q) (descExitPolicy d)
 
 -- | We consider a router to be running if it last published a descriptor less
 -- than 48 hours ago. Descriptors hold an unboxed 'POSIXTime' instead of a
@@ -612,8 +602,6 @@ startTestListeners net listenSockets concTests = do
                                \Connection: close\r\n\r\n"#
     ignoreJust E.ioErrors $ hClose handle
 
-  where ignoreJust p = E.handleJust p (const $ return ())
-
 -- | Fork all our exit test listeners and initiators.
 startExitTests :: ExitTestConfig -> IO ()
 startExitTests conf = do
@@ -670,11 +658,9 @@ startExitTests conf = do
           , exitPolicyAccepts (etTestAddr conf) p (descExitPolicy desc) ]
 
     repeatConnectSocks = do
-      r <- E.tryJust E.ioErrors $ do
-        sock <- socket AF_INET Stream (etTcp conf)
-        connect sock (etSocksServer conf)
-          `E.catch` \e -> sClose sock >> E.throwIO e
-        return sock
+      r <- E.tryJust E.ioErrors $
+        E.bracketOnError (socket AF_INET Stream (etTcp conf)) sClose $ \sock ->
+          connect sock (etSocksServer conf) >> return sock
       -- When connecting to Tor's socks port fails, wait five seconds
       -- and try again.
       -- XXX this should be logged
@@ -859,35 +845,6 @@ isJournalTooLarge :: Integral a => a -> a -> Bool
 isJournalTooLarge addrLen journalLen
   | addrLen > 65536 = journalLen > addrLen
   | otherwise       = journalLen > 65536
-
---------------------------------------------------------------------------------
--- Bounded transactional channels
-
--- | An abstract type representing a transactional FIFO channel of bounded size.
-data BoundedTChan a = BTChan (TChan a) (TVar Int) Int
-
--- | Create a new bounded channel of a given size.
-newBoundedTChan :: Int -> STM (BoundedTChan a)
-newBoundedTChan maxSize = do
-  currentSize <- newTVar 0
-  chan <- newTChan
-  return (BTChan chan currentSize maxSize)
-
--- | Read from a bounded channel, blocking until an item is available.
-readBoundedTChan :: BoundedTChan a -> STM a
-readBoundedTChan (BTChan chan currentSize _) = do
-  size <- readTVar currentSize
-  writeTVar currentSize (size - 1)
-  readTChan chan
-
--- | Write to a bounded channel, blocking until the channel is smaller than its
--- maximum size.
-writeBoundedTChan :: BoundedTChan a -> a -> STM ()
-writeBoundedTChan (BTChan chan currentSize maxSize) x = do
-  size <- readTVar currentSize
-  check (size < maxSize)
-  writeTVar currentSize (size + 1)
-  writeTChan chan x
 
 --------------------------------------------------------------------------------
 -- Helpers

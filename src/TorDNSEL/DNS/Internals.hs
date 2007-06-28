@@ -90,49 +90,64 @@ import TorDNSEL.Util
 
 -- | Run a DNS server using a bound UDP socket. Pass received messages to the
 -- handler and send back responses returned by the handler.
-runServer :: Socket -> (Message -> IO (Maybe Message)) -> IO ()
+runServer
+  :: Socket -> (Int -> Int -> IO ()) -> (Message -> IO (Maybe Message)) -> IO ()
 {-# INLINE runServer #-} -- critical
-runServer sock handler = forever $ recvMessageFrom sock >>= handleQuery
+runServer sock stats handler = forever $ do
+  (msg,inBytes,addr) <- recvMessageFrom sock
+  outBytes <- handleQuery msg addr
+  stats inBytes outBytes
   where
-    handleQuery (Just query, sockAddr@(SockAddrInet port _))
+    handleQuery (Just query) sockAddr@(SockAddrInet port _)
       | (fromIntegral port :: Int) >= 1024 = do
           response <- handler query
           case response of
             Just r  -> sendMessageTo sock r sockAddr
-            Nothing -> return ()
-    handleQuery _ = return ()
+            Nothing -> return 0
+    handleQuery _ _ = return 0
 
--- | Read a DNS message from a bound UDP socket. Return the source 'SockAddr'
--- and @'Just' _@ if parsing the message succeeded, or 'Nothing' if it failed.
-recvMessageFrom :: Socket -> IO (Maybe Message, SockAddr)
+-- | Read a DNS message from a bound UDP socket. Return the source 'SockAddr',
+-- the number of bytes read, and @'Just' msg@ if parsing the message succeeded.
+recvMessageFrom :: Socket -> IO (Maybe Message, Int, SockAddr)
 recvMessageFrom sock = do
-  (pkt,_,sockAddr) <- recvFrom sock 512
+  (pkt,sockAddr) <- recvFrom sock 512
   msg <- decodeMessage $ Packet pkt
-  return (msg, sockAddr)
+  return (msg, B.length pkt, sockAddr)
+
+{-
+-- avoids an extra memcpy
+recvMessageFrom sock = do
+  fp <- B.mallocByteString 512
+  withForeignPtr fp $ \p -> do
+    (l,addr) <- recvBufFrom sock p 512
+    E.assert (l <= 512) $ do
+      msg <- decodeMessage . Packet $ B.PS fp 0 l
+      return (msg, l, addr)
+-}
 
 -- | Send a DNS message to a 'SockAddr' with a UDP socket. If the encoded
 -- message is larger than 512 bytes and is a response, remove any resource
 -- records it contains and change its 'RCode' to 'ServerFailure'. If it's
 -- a query, drop it silently.
-sendMessageTo :: Socket -> Message -> SockAddr -> IO ()
+sendMessageTo :: Socket -> Message -> SockAddr -> IO Int
 sendMessageTo sock msg sockAddr
   |              B.length datagram      <= 512 = sendBS datagram
   | msgQR msg && B.length truncatedResp <= 512 = sendBS truncatedResp
-  | otherwise                                  = return ()
+  | otherwise                                  = return 0
   where
     datagram      = toBS msg
     truncatedResp = toBS msg { msgRCode = ServerFailure, msgAnswers = []
                              , msgAuthority = [], msgAdditional = [] }
-    sendBS bs = sendTo sock bs sockAddr >> return ()
+    sendBS bs = sendTo sock bs sockAddr >> return (B.length bs)
     toBS = unPacket . encodeMessage
 
 -- | A wrapper for using 'recvBufFrom' with 'ByteString's.
-recvFrom :: Socket -> Int -> IO (ByteString, Int, SockAddr)
+recvFrom :: Socket -> Int -> IO (ByteString, SockAddr)
 recvFrom sock i = do
-  (bs, (l, sockAddr)) <- B.createAndTrim' i $ \p -> do
-    r@(l,_) <- recvBufFrom sock p i
-    return (0, l, r)
-  return (bs, l, sockAddr)
+  (bs, sockAddr) <- B.createAndTrim' i $ \p -> do
+    (l,addr) <- recvBufFrom sock p i
+    return (0, l, addr)
+  return (bs, sockAddr)
 
 -- | A wrapper for using 'sendBufTo' with 'ByteString's.
 sendTo :: Socket -> ByteString -> SockAddr -> IO Int

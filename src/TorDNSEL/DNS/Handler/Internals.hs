@@ -20,6 +20,7 @@
 -- #not-home
 module TorDNSEL.DNS.Handler.Internals (
     DNSConfig(..)
+  , ResponseType(..)
   , dnsHandler
   , dropAuthZone
   , parseExitListQuery
@@ -27,12 +28,13 @@ module TorDNSEL.DNS.Handler.Internals (
   , b
   ) where
 
-import Control.Monad (guard)
+import Control.Monad (guard, liftM2)
 import Data.Bits ((.|.), shiftL)
 import qualified Data.ByteString.Char8 as B
 import Data.Char (toLower)
 import Data.List (foldl')
 import Data.Maybe (isNothing, maybeToList)
+import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Data.Word (Word32)
 
 import GHC.Prim (Addr#)
@@ -50,65 +52,71 @@ data DNSConfig
   , dnsNS       :: !ResourceRecord -- ^ Our own NS record.
   -- | The A record we return for our authoritative zone.
   , dnsA        :: !(Maybe ResourceRecord)
+  -- | A statistics tracking action invoked with each response.
+  , dnsStats    :: !(ResponseType -> IO ())
   }
+
+-- | The response type reported in statistics. 'Positive' and 'Negative' are for
+-- valid DNSEL queries.
+data ResponseType = Positive | Negative | Other
+
+-- | A stateful wrapper for 'dnsResponse'.
+dnsHandler :: DNSConfig -> Network -> Message -> IO (Maybe Message)
+dnsHandler c net msg
+  -- draft-arends-dnsext-qr-clarification-00
+  | msgQR msg = return Nothing
+  | otherwise = do
+      (typ,resp) <- liftM2 (dnsResponse c msg) getPOSIXTime
+                                               (readNetworkState net)
+      dnsStats c typ
+      return $ Just resp
 
 -- | Given our config data and a DNS query, parse the exit list query contained
 -- therein and generate an appropriate DNS response based on our knowledge of
 -- the current state of the Tor network.
-dnsHandler :: Network -> DNSConfig -> Message -> IO (Maybe Message)
+dnsResponse :: DNSConfig -> Message -> POSIXTime -> NetworkState
+            -> (ResponseType, Message)
 {-# INLINE dnsHandler #-}
--- XXX profiling info is old
--- Profiling shows about 33% of time is spent in this handler for positive
--- results, with 33% spent in deserialization and 33% in serialization.
-dnsHandler net c msg
-  -- draft-arends-dnsext-qr-clarification-00
-  | msgQR msg                      = return Nothing
-  | msgOpCode msg /= StandardQuery = return notImpl -- RFC 3425
+dnsResponse c msg now ns
+  | msgOpCode msg /= StandardQuery -- RFC 3425
+  = (Other, r { msgAA = False, msgRCode = NotImplemented
+              , msgAnswers = [], msgAuthority = [dnsSOA c] })
   -- draft-koch-dns-unsolicited-queries-01
-  | isNothing mbQLabels            = return refused
-  | qc /= IN                       = return nxDomain
+  | isNothing mbQLabels
+  = (Other, r { msgAA = False, msgRCode = Refused
+              , msgAnswers = [], msgAuthority = [dnsSOA c] })
+  | qc /= IN = (Other, nxDomain)
   -- a request matching our authoritative zone
   | Just [] <- mbQLabels = case qt of
-      TA | Just a <- dnsA c -> return $ aRec a
-      TNS                   -> return nsAnswer
-      TSOA                  -> return soaResp
-      TAny                  -> return allAns
-      _                     -> return noData -- RFC 2308
+      TA | Just a <- dnsA c
+           -> (Other, noErr { msgAnswers = [a], msgAuthority = [dnsNS c] })
+      TNS  -> (Other, noErr { msgAnswers = [dnsNS c], msgAuthority = [] })
+      TSOA -> (Other, noErr { msgAnswers = [dnsSOA c], msgAuthority = [] })
+      TAny -> (Other, noErr { msgAnswers = [dnsSOA c, dnsNS c] ++
+                                maybeToList (dnsA c), msgAuthority = [] })
+      _    -> (Other, noErr { msgAnswers = [], msgAuthority = [dnsSOA c] })
   | Just qLabels <- mbQLabels
-  , Just query   <- parseExitListQuery qLabels = do
-      isExit <- isExitNode net query
-      if isExit || isTest query then
-        if qt == TA || qt == TAny
-          then return $ aRec positive -- draft-irtf-asrg-dnsbl-02
-          else return noData
-        else return nxDomain
-  | otherwise                      = return nxDomain
+  , Just query   <- parseExitListQuery qLabels
+  = if isTest query || isExitNode now ns query
+      then if qt == TA || qt == TAny
+        -- draft-irtf-asrg-dnsbl-02
+        then (Positive, noErr { msgAnswers = [positive]
+                              , msgAuthority = [dnsNS c] })
+        -- RFC 2308
+        else (Other, noErr { msgAnswers = [], msgAuthority = [dnsSOA c] })
+      else (Negative, nxDomain)
+  | otherwise = (Other, nxDomain)
   where
     isTest q = queryAddr q == 0x7f000002
     mbQLabels = dropAuthZone (dnsAuthZone c) (qName question)
     positive = A (qName question) ttl 0x7f000002
-    allAns   = Just r { msgAA = True, msgRCode = NoError
-                      , msgAnswers = [dnsSOA c, dnsNS c] ++ maybeToList (dnsA c)
-                      , msgAuthority = [] }
-    nsAnswer = Just r { msgAA = True, msgRCode = NoError, msgAnswers = [dnsNS c]
-                      , msgAuthority = [] }
-    aRec a   = Just r { msgAA = True, msgRCode = NoError, msgAnswers = [a]
-                      , msgAuthority = [dnsNS c] }
-    noData   = Just r { msgAA = True, msgRCode = NoError, msgAnswers = []
-                      , msgAuthority = [dnsSOA c] }
-    nxDomain = Just r { msgAA = True, msgRCode = NXDomain, msgAnswers = []
-                      , msgAuthority = [dnsSOA c] }
-    notImpl  = Just r { msgAA = False, msgRCode = NotImplemented
-                      , msgAnswers = [], msgAuthority = [dnsSOA c] }
-    refused  = Just r { msgAA = False, msgRCode = Refused
-                      , msgAnswers = [], msgAuthority = [dnsSOA c] }
-    soaResp  = Just r { msgAA = True, msgRCode = NoError
-                      , msgAnswers = [dnsSOA c], msgAuthority = [dnsNS c] }
+    noErr = r { msgAA = True, msgRCode = NoError }
+    nxDomain = r { msgAA = True, msgRCode = NXDomain, msgAnswers = []
+                 , msgAuthority = [dnsSOA c] }
     r = msg { msgQR = True, msgTC = False, msgRA = False, msgAD = False
             , msgAdditional = [] }
     question = msgQuestion msg
-    qt = qType question
-    qc = qClass question
+    (qt,qc) = (qType question, qClass question)
 
 -- | Given @authZone@, a sequence of labels ordered from top to bottom
 -- representing our authoritative zone, return @Just labels@ if @name@ is a
@@ -155,7 +163,7 @@ parseExitListQuery labels = do
 
 -- | The time-to-live set for caching.
 ttl :: Word32
-ttl = 60 * 30
+ttl = 30 * 60
 
 -- | An alias for unsafePackAddress.
 b :: Int -> Addr# -> B.ByteString
