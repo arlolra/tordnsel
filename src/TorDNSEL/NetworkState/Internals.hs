@@ -477,7 +477,7 @@ expireOldInfo now s = s { nsAddrs = addrs'', nsRouters = routers'' }
       foldl' (\as addr -> deleteAddress addr fp as) addrs
              (M.keys $ tstAddresses test)
     maxRouterAge = 48 * 60 * 60
-    maxExitTestAge = 24 * 60 * 60
+    maxExitTestAge = 48 * 60 * 60
 
 -- | Add a new router associated with an address to the address map.
 insertAddress :: HostAddress -> Fingerprint -> Map HostAddress (Set Fingerprint)
