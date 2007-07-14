@@ -91,9 +91,10 @@ dnsResponse c msg now ns
       TA | Just a <- dnsA c
            -> (Other, noErr { msgAnswers = [a], msgAuthority = [dnsNS c] })
       TNS  -> (Other, noErr { msgAnswers = [dnsNS c], msgAuthority = [] })
-      TSOA -> (Other, noErr { msgAnswers = [dnsSOA c], msgAuthority = [] })
+      TSOA -> (Other, noErr { msgAnswers = [dnsSOA c]
+                            , msgAuthority = [dnsNS c] })
       TAny -> (Other, noErr { msgAnswers = [dnsSOA c, dnsNS c] ++
-                                maybeToList (dnsA c), msgAuthority = [] })
+                              maybeToList (dnsA c), msgAuthority = [dnsNS c] })
       _    -> (Other, noErr { msgAnswers = [], msgAuthority = [dnsSOA c] })
   | Just qLabels <- mbQLabels
   , Just query   <- parseExitListQuery qLabels
