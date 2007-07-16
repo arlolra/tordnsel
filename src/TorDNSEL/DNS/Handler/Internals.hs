@@ -28,14 +28,14 @@ module TorDNSEL.DNS.Handler.Internals (
   , b
   ) where
 
-import Control.Monad (guard, liftM2)
+import Control.Monad (guard, liftM2, liftM3)
 import Data.Bits ((.|.), shiftL)
 import qualified Data.ByteString.Char8 as B
 import Data.Char (toLower)
 import Data.List (foldl')
 import Data.Maybe (isNothing, maybeToList)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
-import Data.Word (Word32)
+import Data.Word (Word8, Word32)
 
 import GHC.Prim (Addr#)
 
@@ -150,17 +150,12 @@ parseExitListQuery :: [Label] -> Maybe ExitListQuery
 parseExitListQuery labels = do
   (queryType:ip2,port:ip1) <- return . splitAt 5 . map unLabel $ labels
   guard $ length ip1 == 4 && B.map toLower queryType == b 7 "ip-port"#
-  [ip1',ip2'] <- mapM ((toAddress =<<) . mapM readInt) [ip1, ip2]
-  port'       <- toPort =<< readInt port
-  return $! IPPort { queryAddr = ip1', destAddr = ip2', destPort = port' }
+  liftM3 IPPort (toAddress ip1) (toAddress ip2) (parsePort port)
   where
-    toAddress l = do
-      guard $ all (\o -> 0 <= o && o <= 0xff) l
-      return $! foldl' (.|.) 0 . zipWith shiftL l' $ [24,16..]
-      where l' = map fromIntegral l
-    toPort p = do
-      guard $ 0 <= p && p <= 0xffff
-      return $! fromIntegral p
+    toAddress xs = do
+      os <- mapM (fmap fromIntegral . readInt) xs
+      guard $ all (`inBoundsOf` (undefined :: Word8)) os
+      return $! foldl' (.|.) 0 . zipWith shiftL os $ [24,16..]
 
 -- | The time-to-live set for caching.
 ttl :: Word32

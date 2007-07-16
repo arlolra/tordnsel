@@ -35,6 +35,16 @@ module TorDNSEL.Util (
   , htonl
   , ntohl
 
+  -- * Address
+  , Address(..)
+  , putAddress
+  , showAddress
+  , readAddress
+
+  -- * Ports
+  , Port(..)
+  , parsePort
+
   -- * Bounded transactional FIFO channels
   , BoundedTChan
   , newBoundedTChan
@@ -47,12 +57,14 @@ module TorDNSEL.Util (
   , resolve
   ) where
 
+import Control.Arrow ((&&&))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, withMVar)
 import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
+import Control.Monad (liftM)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Char (intToDigit)
 import Data.List (foldl', intersperse)
@@ -62,11 +74,15 @@ import Data.ByteString (ByteString)
 import Data.Time
   ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
   , timeOfDayToTime, timeToTimeOfDay )
-import Data.Word (Word32)
+import Data.Word (Word16, Word32)
 import Network.Socket (HostAddress)
 import System.Environment (getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, stderr)
+
+import Data.Binary (Binary(..), Put)
+
+import TorDNSEL.DeepSeq
 
 --------------------------------------------------------------------------------
 -- Parsing functions
@@ -76,14 +92,14 @@ import System.IO (hPutStr, stderr)
 readInt :: Monad m => B.ByteString -> m Int
 readInt bs = case B.readInt bs of
   Just (x,_) -> return x
-  _          -> fail ("readInt \"" ++ B.unpack bs ++ "\": failed")
+  _          -> fail ("Parsing integer " ++ show bs ++ " failed.")
 
 -- | Convert an IPv4 address in dotted-quad form to a 'HostAddress'. Returns the
 -- result or 'fail' in the monad if the format is invalid.
 inet_atoh :: Monad m => B.ByteString -> m HostAddress
 inet_atoh bs
   | Just os@[_,_,_,_] <- mapM readInt $ B.split '.' bs
-  , all (\o -> 0 <= o && o <= 255) os
+  , all (\o -> 0 <= o && o <= 0xff) os
   = return . foldl' (.|.) 0 . zipWith shiftL (map fromIntegral os) $ [24,16..]
 inet_atoh bs = fail ("Invalid IP address " ++ show bs)
 
@@ -161,6 +177,52 @@ instance Monad (Either String) where
 
 foreign import ccall unsafe "htonl" htonl :: Word32 -> Word32
 foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32
+
+--------------------------------------------------------------------------------
+-- Addresses
+
+data Address = IPv4Addr HostAddress | Addr ByteString
+
+instance Show Address where
+  show (IPv4Addr addr) = inet_htoa addr
+  show (Addr addr)     = B.unpack addr
+
+putAddress :: Address -> Put
+putAddress (IPv4Addr addr) = put addr
+putAddress (Addr addr)     = put addr
+
+showAddress :: Address -> ByteString
+showAddress (IPv4Addr addr) = B.pack $ inet_htoa addr
+showAddress (Addr addr)     = addr
+
+readAddress :: ByteString -> Address
+readAddress bs
+  | Just addr <- inet_atoh bs = IPv4Addr addr
+  | otherwise                 = Addr bs
+
+--------------------------------------------------------------------------------
+-- Ports
+
+-- XXX replace all uses of Word16 for a port with Port
+newtype Port = Port { unPort :: Word16 }
+  deriving (Eq, Ord, Bounded, Num, Real, Enum, Integral)
+
+instance Show Port where
+  show (Port port) = show port
+
+instance Binary Port where
+  get = Port `fmap` get
+  put = put . unPort
+
+instance DeepSeq Port where
+  deepSeq = seq . unPort
+
+parsePort :: Monad m => ByteString -> m Port
+parsePort bs = do
+  (port,int) <- (fromIntegral &&& id) `liftM` readInt bs
+  if int `inBoundsOf` port
+    then return port
+    else fail ("Port " ++ show int ++ " is out of range.")
 
 --------------------------------------------------------------------------------
 -- Bounded transactional FIFO channels

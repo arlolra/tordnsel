@@ -104,7 +104,6 @@ import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
-import Data.Word (Word16)
 import Network.Socket
   ( Socket, ProtocolNumber, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
   , SocketOption(ReuseAddr), SocketType(Stream), socket, connect, bindSocket
@@ -187,7 +186,7 @@ updateNetworkStatus net = writeChan (nChan net) . NewNS
 -- | Register a mapping from cookie to fingerprint and descriptor published
 -- time, passing the cookie to the given 'IO' action. The cookie is guaranteed
 -- to be released when the action terminates.
-withCookie :: Network -> Handle -> RouterID -> UTCTime -> Word16
+withCookie :: Network -> Handle -> RouterID -> UTCTime -> Port
            -> (Cookie -> IO a) -> IO a
 withCookie net random rid published port =
   E.bracket addNewCookie (writeChan (nChan net) . DeleteCookie)
@@ -216,7 +215,7 @@ data StateEvent
   -- | Map a new cookie to an exit node identity, descriptor published time,
   -- and port.
   | AddCookie {-# UNPACK #-} !Cookie  {-# UNPACK #-} !RouterID
-              {-# UNPACK #-} !UTCTime {-# UNPACK #-} !Word16
+              {-# UNPACK #-} !UTCTime {-# UNPACK #-} !Port
   -- | Remove a cookie to exit node identity mapping.
   | DeleteCookie {-# UNPACK #-} !Cookie
   -- | We've received a cookie from an incoming test connection.
@@ -229,7 +228,7 @@ data StateEvent
 
 -- | An internal type representing the current exit test state.
 data TestState = TestState
-  { tsCookies    :: !(Map Cookie (RouterID, UTCTime, Word16))
+  { tsCookies    :: !(Map Cookie (RouterID, UTCTime, Port))
   , tsAddrLen
   , tsJournalLen :: !Integer
   , tsJournal    :: !Handle }
@@ -507,7 +506,7 @@ data ExitListQuery
     -- | The destination address.
     destAddr  :: {-# UNPACK #-} !HostAddress,
     -- | The destination port.
-    destPort  :: {-# UNPACK #-} !Word16
+    destPort  :: {-# UNPACK #-} !Port
   } deriving Eq
 
 instance Show ExitListQuery where
@@ -538,20 +537,20 @@ isRunning now d = now - descPublished d < maxRouterAge
 
 -- | The exit test channel.
 newtype ExitTestChan = ExitTestChan
-  { unETChan :: Chan (RouterID, Maybe Word16) }
+  { unETChan :: Chan (RouterID, Maybe Port) }
 
 -- | Create a new exit test channel to be passed to 'newNetwork'.
 newExitTestChan :: IO ExitTestChan
 newExitTestChan = ExitTestChan `fmap` newChan
 
 -- | Schedule an exit test through a router.
-addExitTest :: ExitTestChan -> Maybe Word16 -> RouterID -> IO ()
+addExitTest :: ExitTestChan -> Maybe Port -> RouterID -> IO ()
 addExitTest (ExitTestChan chan) port rid = writeChan chan (rid, port)
 
 -- | Bind the listening sockets we're going to use for incoming exit tests. This
 -- action exists so we can listen on privileged ports prior to dropping
 -- privileges. The address and ports should be in host order.
-bindListeningSockets :: ProtocolNumber -> HostAddress -> [Word16] -> IO [Socket]
+bindListeningSockets :: ProtocolNumber -> HostAddress -> [Port] -> IO [Socket]
 bindListeningSockets tcp listenAddr listenPorts =
   forM listenPorts $ \port -> do
     sock <- socket AF_INET Stream tcp
@@ -569,7 +568,7 @@ data ExitTestConfig = ExitTestConfig
   , etSocksServer :: SockAddr
   , etListenSocks :: [Socket]
   , etTestAddr    :: HostAddress
-  , etTestPorts   :: [Word16]
+  , etTestPorts   :: [Port]
   , etRandom      :: Handle }
 
 -- | Fork all our exit test listeners.
@@ -643,7 +642,7 @@ startExitTests conf = do
         fmap (maybe False (const True)) .
           timeout (2 * 60 * 10^6) $ do
             sock <- repeatConnectSocks
-            withSocksConnection sock exitHost port $ \handle -> do
+            withSocksConnection sock (Addr exitHost) port $ \handle -> do
               B.hPut handle $ createRequest testHost port cookie
               B.hGet handle 1024 -- ignore response
               return ()
@@ -680,7 +679,7 @@ startExitTests conf = do
 -- HTTP requests
 
 -- | Create an HTTP request that POSTs a cookie to one of our listening ports.
-createRequest :: B.ByteString -> Word16 -> Cookie -> B.ByteString
+createRequest :: B.ByteString -> Port -> Cookie -> B.ByteString
 createRequest host port cookie =
   B.join (b 2 "\r\n"#)
   -- POST should force caching proxies to forward the request.

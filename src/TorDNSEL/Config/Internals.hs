@@ -32,7 +32,7 @@ module TorDNSEL.Config.Internals (
   ) where
 
 import Control.Arrow ((***))
-import Control.Monad (liftM, when, unless, forM)
+import Control.Monad (liftM, liftM2, when, unless)
 import Data.Char (isSpace, toLower)
 import Data.Maybe (catMaybes)
 import qualified Data.ByteString.Char8 as B
@@ -41,7 +41,6 @@ import qualified Data.Map as M
 import Data.Map (Map, (!))
 import qualified Data.Set as S
 import Data.Set (Set)
-import Data.Word (Word16)
 import Network.Socket (HostAddress, SockAddr(SockAddrInet))
 
 import GHC.Prim (Addr#)
@@ -130,17 +129,11 @@ instance ConfigValue SockAddr where
     return $! SockAddrInet (fromIntegral port') (htonl addr')
     where [addr,port] = B.split ':' bs
 
-instance ConfigValue (HostAddress, [Word16]) where
+instance ConfigValue (HostAddress, [Port]) where
   parse bs = do
     unless (':' `B.elem` bs) $
       fail ("Address/ports " ++ show bs ++ " is invalid.")
-    addr' <- inet_atoh addr
-    ports' <- forM ports $ \port -> do
-      port' <- readInt port
-      unless (0 <= port' && port' <= 0xffff) $
-        fail ("Port " ++ show port ++ " is invalid.")
-      return (fromIntegral port')
-    return (addr', ports')
+    liftM2 (,) (inet_atoh addr) (mapM parsePort ports)
     where
       [addr,rest] = B.split ':' bs
       ports = B.split ',' rest

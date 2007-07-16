@@ -61,7 +61,6 @@ import Data.ByteString (ByteString)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX
   (POSIXTime, utcTimeToPOSIXSeconds, posixSecondsToUTCTime)
-import Data.Word (Word16)
 import Network.Socket (HostAddress)
 
 import GHC.Prim (Addr#)
@@ -212,9 +211,9 @@ data Rule = Rule
     -- | The IPv4 address mask part of the pattern.
     ruleMask      :: {-# UNPACK #-} !HostAddress,
     -- | The first port in the pattern's port range.
-    ruleBeginPort :: {-# UNPACK #-} !Word16,
+    ruleBeginPort :: {-# UNPACK #-} !Port,
     -- | The last port in the pattern's port range.
-    ruleEndPort   :: {-# UNPACK #-} !Word16 }
+    ruleEndPort   :: {-# UNPACK #-} !Port }
 
 instance Show Rule where
   showsPrec _ p = shows (ruleType p) . (" " ++) .
@@ -270,7 +269,7 @@ parseExitPolicy = mapM parseRule
 -- | Return whether the exit policy allows an exit connection to the given IPv4
 -- address and port. The first matching rule determines the result. If no rule
 -- matches, the address\/port are accepted.
-exitPolicyAccepts :: HostAddress -> Word16 -> ExitPolicy -> Bool
+exitPolicyAccepts :: HostAddress -> Port -> ExitPolicy -> Bool
 {-# INLINE exitPolicyAccepts #-}
 exitPolicyAccepts addr port exitPolicy
   | Reject:_ <- matchingRules = False

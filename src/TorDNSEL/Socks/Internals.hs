@@ -50,11 +50,12 @@ import System.IO
   ( Handle, IOMode(ReadWriteMode), BufferMode(NoBuffering)
   , hClose, hSetBuffering )
 
-import Data.Binary (Binary(..), getWord8, putWord8, Word16)
+import Data.Binary (Binary(..), getWord8, putWord8)
 import Data.Binary.Get (runGet)
-import Data.Binary.Put (runPut, putByteString)
+import Data.Binary.Put (runPut)
 
 import TorDNSEL.DeepSeq
+import TorDNSEL.Util
 
 --------------------------------------------------------------------------------
 -- Connections
@@ -63,11 +64,11 @@ import TorDNSEL.DeepSeq
 -- will be closed if an exception occurs during the given 'IO' action. Throw a
 -- 'SocksError' if the connection request fails.
 withSocksConnection
-  :: Socket -> ByteString -> Word16 -> (Handle -> IO a) -> IO a
-withSocksConnection sock domain port io =
+  :: Socket -> Address -> Port -> (Handle -> IO a) -> IO a
+withSocksConnection sock addr port io =
   E.bracket (socketToHandle sock ReadWriteMode) hClose $ \handle -> do
     hSetBuffering handle NoBuffering
-    B.hPut handle . encodeRequest $ Request Connect (Right domain) port
+    B.hPut handle . encodeRequest $ Request Connect addr port
     r <- decodeResponse =<< B.hGet handle 8
     case r of
       Just (Response Granted _ _) -> io handle
@@ -82,9 +83,9 @@ data Request = Request
   { -- | The Socks4 command code (with Tor extensions).
     soCommand :: {-# UNPACK #-} !Command,
     -- | The requested destination: either an IPv4 address or a domain name.
-    soReqDest :: {-# UNPACK #-} !(Either HostAddress ByteString),
+    soReqDest :: {-# UNPACK #-} !Address,
     -- | The requested destination port.
-    soReqPort :: {-# UNPACK #-} !Word16 }
+    soReqPort :: {-# UNPACK #-} !Port }
 
 -- A Socks4a command (with Tor extensions).
 data Command
@@ -96,7 +97,7 @@ data Command
 data Response = Response
   { soResult   :: {-# UNPACK #-} !Result      -- ^ The result code.
   , soRespAddr :: {-# UNPACK #-} !HostAddress -- ^ The destination address.
-  , soRespPort :: {-# UNPACK #-} !Word16      -- ^ The destination port.
+  , soRespPort :: {-# UNPACK #-} !Port        -- ^ The destination port.
   }
 
 instance DeepSeq Response where
@@ -136,11 +137,11 @@ encodeRequest = B.concat . L.toChunks . runPut . putRequest
         Resolve    -> 0xf0
         ConnectDir -> 0xf2
       put $ soReqPort req
-      put $ either id (const 1) (soReqDest req)
+      putAddress $ soReqDest req
       putWord8 0
       case soReqDest req of
-        Right domain -> putByteString domain >> putWord8 0
-        _            -> return ()
+        IPv4Addr _ -> return ()
+        Addr addr  -> put addr >> putWord8 0
 
 -- | Decode a Socks4 response.
 decodeResponse :: ByteString -> IO (Maybe Response)
