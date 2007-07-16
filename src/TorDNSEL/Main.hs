@@ -55,8 +55,9 @@ import System.IO
   , IOMode(WriteMode, ReadWriteMode) )
 import Network.BSD (getProtocolNumber, ProtocolNumber)
 import Network.Socket
-  ( socket, connect, bindSocket, setSocketOption, socketToHandle, SockAddr
-  , Family(AF_INET), SocketType(Datagram, Stream), SocketOption(ReuseAddr) )
+  ( socket, sClose, connect, bindSocket, setSocketOption, socketToHandle
+  , SockAddr, Family(AF_INET), SocketType(Datagram, Stream)
+  , SocketOption(ReuseAddr) )
 
 import System.Exit (ExitCode(ExitSuccess))
 import System.Directory (setCurrentDirectory, createDirectoryIfMissing)
@@ -238,8 +239,8 @@ main = do
 torController
   :: Network -> SockAddr -> Maybe ByteString -> ProtocolNumber -> IO ()
 torController net control authSecret tcp = do
-  sock <- socket AF_INET Stream tcp
-  connect sock control
+  sock <- E.bracketOnError (socket AF_INET Stream tcp) sClose $ \sock ->
+            connect sock control >> return sock
   handle <- socketToHandle sock ReadWriteMode
   withConnection handle $ \conn -> do
     authenticate authSecret conn
