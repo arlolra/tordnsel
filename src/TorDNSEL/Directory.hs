@@ -27,10 +27,10 @@ module TorDNSEL.Directory (
   , parseRouterStatus
   , parseRouterStatuses
 
-  -- * Identity fingerprints
-  , Fingerprint
-  , decodeBase16Fingerprint
-  , encodeBase16Fingerprint
+  -- * Router identifiers
+  , RouterID
+  , decodeBase16RouterID
+  , encodeBase16RouterID
 
   -- * Exit policies
   , ExitPolicy

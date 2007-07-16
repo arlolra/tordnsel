@@ -32,11 +32,11 @@ module TorDNSEL.Directory.Internals (
   , parseRouterStatus
   , parseRouterStatuses
 
-  -- * Identity fingerprints
-  , Fingerprint(..)
-  , decodeBase16Fingerprint
-  , decodeBase64Fingerprint
-  , encodeBase16Fingerprint
+  -- * Router identifiers
+  , RouterID(..)
+  , decodeBase16RouterID
+  , decodeBase64RouterID
+  , encodeBase16RouterID
 
   -- * Exit policies
   , ExitPolicy
@@ -75,16 +75,16 @@ import TorDNSEL.Util
 -- | A router descriptor.
 data Descriptor = Desc
   { -- | The IPv4 address at which this router accepts connections.
-    descListenAddr  :: {-# UNPACK #-} !HostAddress,
+    descListenAddr :: {-# UNPACK #-} !HostAddress,
     -- | The time when this descriptor was generated.
-    descPublished   :: {-# UNPACK #-} !POSIXTime,
-    -- | This router's identity fingerprint.
-    descFingerprint :: {-# UNPACK #-} !Fingerprint,
+    descPublished  :: {-# UNPACK #-} !POSIXTime,
+    -- | This router's identifier.
+    descRouterID   :: {-# UNPACK #-} !RouterID,
     -- | This router's exit policy.
-    descExitPolicy  :: {-# UNPACK #-} !ExitPolicy }
+    descExitPolicy :: {-# UNPACK #-} !ExitPolicy }
 
 instance Show Descriptor where
-  showsPrec _ d = shows (descFingerprint d) . (" " ++) .
+  showsPrec _ d = shows (descRouterID d) . (" " ++) .
     (inet_htoa (descListenAddr d) ++) . (" " ++) .
     shows (posixSecondsToUTCTime $ descPublished d) . ("\n" ++) .
     foldl' (.) id (map (\p -> shows p . ("\n" ++)) (descExitPolicy d))
@@ -93,9 +93,9 @@ instance Show Descriptor where
 -- format is invalid.
 parseDescriptor :: Monad m => Document -> m Descriptor
 parseDescriptor items = do
-  address    <- parseRouter      =<< findArg (b 6 "router"# ==) items
-  time       <- parsePOSIXTime   =<< findArg (b 9 "published"# ==) items
-  fp         <- parseFingerprint =<< findArg (b 11 "fingerprint"# ==) items
+  address    <- parseRouter    =<< findArg (b 6  "router"#      ==) items
+  time       <- parsePOSIXTime =<< findArg (b 9  "published"#   ==) items
+  fp         <- parseRouterID  =<< findArg (b 11 "fingerprint"# ==) items
   exitPolicy <- parseExitPolicy . filter isRule $ items
   return $! Desc address time fp exitPolicy
   where
@@ -105,9 +105,9 @@ parseDescriptor items = do
       _:address:_ <- return $ B.splitWith isSpace router
       inet_atoh address
 
-    parsePOSIXTime = liftM utcTimeToPOSIXSeconds . parseTime . B.take 19
+    parsePOSIXTime = liftM utcTimeToPOSIXSeconds . parseUTCTime . B.take 19
 
-    parseFingerprint = decodeBase16Fingerprint . B.filter (/= ' ')
+    parseRouterID = decodeBase16RouterID . B.filter (/= ' ')
 
 -- | Parse a 'Document' containing multiple router descriptors.
 parseDescriptors :: Document -> [Descriptor]
@@ -118,26 +118,26 @@ parseDescriptors = parseSubDocs (b 6 "router"#) parseDescriptor
 
 -- | A router status entry.
 data RouterStatus = RS
-  { -- | This router's identity fingerprint.
-    rsFingerprint :: {-# UNPACK #-} !Fingerprint,
+  { -- | This router's identifier.
+    rsRouterID  :: {-# UNPACK #-} !RouterID,
     -- | When this router's most recent descriptor was published.
-    rsPublished   :: {-# UNPACK #-} !UTCTime,
+    rsPublished :: {-# UNPACK #-} !UTCTime,
     -- | Is this router running?
-    rsIsRunning   :: {-# UNPACK #-} !Bool }
+    rsIsRunning :: {-# UNPACK #-} !Bool }
   deriving Show
 
 -- | Parse a router status entry. Returns the result or 'fail' in the monad if
 -- the format is invalid.
 parseRouterStatus :: Monad m => Document -> m RouterStatus
 parseRouterStatus items = do
-  (fingerprint,published) <- parseRouter =<< findArg (b 1 "r"# ==) items
-  return $! RS fingerprint published (parseStatus $ findArg (b 1 "s"# ==) items)
+  (rid,published) <- parseRouter =<< findArg (b 1 "r"# ==) items
+  return $! RS rid published (parseStatus $ findArg (b 1 "s"# ==) items)
   where
     parseRouter router = do
-      _:base64Fingerprint:_:date:time:_ <- return $ B.splitWith isSpace router
-      fingerprint <- decodeBase64Fingerprint base64Fingerprint
-      published   <- parseTime $ B.unwords [date, time]
-      return (fingerprint, published)
+      _:base64RouterID:_:date:time:_ <- return $ B.splitWith isSpace router
+      rid <- decodeBase64RouterID base64RouterID
+      published <- parseUTCTime $ B.unwords [date, time]
+      return (rid, published)
 
     parseStatus = maybe False (elem (b 7 "Running"#) . B.splitWith isSpace)
 
@@ -148,34 +148,34 @@ parseRouterStatuses :: Document -> [RouterStatus]
 parseRouterStatuses = parseSubDocs (b 1 "r"#) parseRouterStatus
 
 --------------------------------------------------------------------------------
--- Identity fingerprints
+-- Router identifiers
 
--- | A fingerprint for a router's identity key.
-newtype Fingerprint = FP { unFP :: ByteString }
+-- | A digest of a router's identity key.
+newtype RouterID = RtrId { unRtrId :: ByteString }
   deriving (Eq, Ord)
 
-instance Show Fingerprint where
-  show = B.unpack . encodeBase16Fingerprint
+instance Show RouterID where
+  show = B.unpack . encodeBase16RouterID
 
--- | Decode a 'Fingerprint' encoded in base16. Returns the result or 'fail' in
+-- | Decode a 'RouterID' encoded in base16. Returns the result or 'fail' in
 -- the monad if the format is invalid.
-decodeBase16Fingerprint :: Monad m => ByteString -> m Fingerprint
-decodeBase16Fingerprint bs = do
+decodeBase16RouterID :: Monad m => ByteString -> m RouterID
+decodeBase16RouterID bs = do
   unless (B.length bs == 40 && B.all isHexDigit bs) $
-    fail "decodeBase16Fingerprint: failed"
-  return $! FP . fst . W.unfoldrN 20 toBytes . B.unpack $ bs
+    fail "decodeBase16RouterID: failed"
+  return $! RtrId . fst . W.unfoldrN 20 toBytes . B.unpack $ bs
   where
     toBytes (x:y:ys) = Just (fromBase16 x `shiftL` 4 .|. fromBase16 y, ys)
     toBytes _        = Nothing
     fromBase16 = fromIntegral . digitToInt
 
--- | Decode a 'Fingerprint' encoded in base64 with trailing \'=\' signs removed.
+-- | Decode a 'RouterID' encoded in base64 with trailing \'=\' signs removed.
 -- Returns the result or 'fail' in the monad if the format is invalid.
-decodeBase64Fingerprint :: Monad m => ByteString -> m Fingerprint
-decodeBase64Fingerprint bs = do
+decodeBase64RouterID :: Monad m => ByteString -> m RouterID
+decodeBase64RouterID bs = do
   unless (B.length bs == 27 && B.all isBase64Char bs) $
-    fail "decodeBase64Fingerprint: failed"
-  return $! FP . B.init . toBytes . split 4 $ bs
+    fail "decodeBase64RouterID: failed"
+  return $! RtrId . B.init . toBytes . split 4 $ bs
   where
     toBytes = W.pack . concatMap (indicesToBytes . map base64Index . B.unpack)
 
@@ -192,9 +192,9 @@ decodeBase64Fingerprint bs = do
 
     isBase64Char x = isAscii x && or [isAlpha x, isDigit x, x `elem` "+/"]
 
--- | Encode a 'Fingerprint' in base16.
-encodeBase16Fingerprint :: Fingerprint -> ByteString
-encodeBase16Fingerprint = encodeBase16 . unFP
+-- | Encode a 'RouterID' in base16.
+encodeBase16RouterID :: RouterID -> ByteString
+encodeBase16RouterID = encodeBase16 . unRtrId
 
 --------------------------------------------------------------------------------
 -- Exit policies
