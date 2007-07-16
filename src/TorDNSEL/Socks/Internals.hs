@@ -45,10 +45,8 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString (ByteString)
 import Data.Typeable (Typeable)
-import Network.Socket (HostAddress, Socket, socketToHandle)
-import System.IO
-  ( Handle, IOMode(ReadWriteMode), BufferMode(NoBuffering)
-  , hClose, hSetBuffering )
+import Network.Socket (HostAddress)
+import System.IO (Handle, BufferMode(NoBuffering), hClose, hSetBuffering)
 
 import Data.Binary (Binary(..), getWord8, putWord8)
 import Data.Binary.Get (runGet)
@@ -63,17 +61,15 @@ import TorDNSEL.Util
 -- | Open a Socks connection to an IP address\/domain name and port. The handle
 -- will be closed if an exception occurs during the given 'IO' action. Throw a
 -- 'SocksError' if the connection request fails.
-withSocksConnection
-  :: Socket -> Address -> Port -> (Handle -> IO a) -> IO a
-withSocksConnection sock addr port io =
-  E.bracket (socketToHandle sock ReadWriteMode) hClose $ \handle -> do
-    hSetBuffering handle NoBuffering
-    B.hPut handle . encodeRequest $ Request Connect addr port
-    r <- decodeResponse =<< B.hGet handle 8
-    case r of
-      Just (Response Granted _ _) -> io handle
-      Just (Response result _ _)  -> E.throwDyn (SocksError result)
-      _                           -> E.throwDyn SocksProtocolError
+withSocksConnection :: Handle -> Address -> Port -> IO a -> IO a
+withSocksConnection handle addr port io = (`E.finally` hClose handle) $ do
+  hSetBuffering handle NoBuffering
+  B.hPut handle . encodeRequest $ Request Connect addr port
+  r <- decodeResponse =<< B.hGet handle 8
+  case r of
+    Just (Response Granted _ _) -> io
+    Just (Response result _ _)  -> E.throwDyn (SocksError result)
+    _                           -> E.throwDyn SocksProtocolError
 
 --------------------------------------------------------------------------------
 -- Data types

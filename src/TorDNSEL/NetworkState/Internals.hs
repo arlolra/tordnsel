@@ -641,8 +641,8 @@ startExitTests conf = do
       E.handleJust connExceptions (const $ return False) .
         fmap (maybe False (const True)) .
           timeout (2 * 60 * 10^6) $ do
-            sock <- repeatConnectSocks
-            withSocksConnection sock (Addr exitHost) port $ \handle -> do
+            handle <- repeatConnectSocks
+            withSocksConnection handle (Addr exitHost) port $ do
               B.hPut handle $ createRequest testHost port cookie
               B.hGet handle 1024 -- ignore response
               return ()
@@ -658,7 +658,7 @@ startExitTests conf = do
     repeatConnectSocks = do
       r <- E.tryJust E.ioErrors $
         E.bracketOnError (socket AF_INET Stream (etTcp conf)) sClose $ \sock ->
-          connect sock (etSocksServer conf) >> return sock
+          connect sock (etSocksServer conf) >> socketToHandle sock ReadWriteMode
       -- When connecting to Tor's socks port fails, wait five seconds
       -- and try again.
       -- XXX this should be logged
