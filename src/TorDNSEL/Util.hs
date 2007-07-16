@@ -9,14 +9,49 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (pattern guards, FFI)
+-- Portability : non-portable (pattern guards, concurrency, STM, FFI)
 --
 -- Common utility functions.
 --
 -----------------------------------------------------------------------------
 
-module TorDNSEL.Util where
+module TorDNSEL.Util (
+  -- * Parsing functions
+    readInt
+  , inet_atoh
+  , parseUTCTime
+  , parseLocalTime
 
+  -- * Miscellaneous functions
+  , on
+  , whenJust
+  , forever
+  , inet_htoa
+  , encodeBase16
+  , split
+  , ignoreJust
+  , exitLeft
+  , inBoundsOf
+  , htonl
+  , ntohl
+
+  -- * Bounded transactional FIFO channels
+  , BoundedTChan
+  , newBoundedTChan
+  , readBoundedTChan
+  , writeBoundedTChan
+
+  -- * Concurrent futures
+  , Future
+  , spawn
+  , resolve
+  ) where
+
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, withMVar)
+import Control.Concurrent.STM
+  ( STM, check, TVar, newTVar, readTVar, writeTVar
+  , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Char (intToDigit)
@@ -24,17 +59,17 @@ import Data.List (foldl', intersperse)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
 import Data.ByteString (ByteString)
-import Data.Time (fromGregorian, UTCTime(..), addUTCTime)
+import Data.Time
+  ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
+  , timeOfDayToTime, timeToTimeOfDay )
 import Data.Word (Word32)
 import Network.Socket (HostAddress)
 import System.Environment (getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, stderr)
 
--- | A useful combinator for applying a binary function to the result of
--- applying a unary function to each of two arguments.
-on :: (b -> b -> c) -> (a -> b) -> a -> a -> c
-on f g x y = g x `f` g y
+--------------------------------------------------------------------------------
+-- Parsing functions
 
 -- | Parse an 'Int' from a 'B.ByteString'. Return the result or 'fail' in the
 -- monad if parsing fails.
@@ -42,6 +77,39 @@ readInt :: Monad m => B.ByteString -> m Int
 readInt bs = case B.readInt bs of
   Just (x,_) -> return x
   _          -> fail ("readInt \"" ++ B.unpack bs ++ "\": failed")
+
+-- | Convert an IPv4 address in dotted-quad form to a 'HostAddress'. Returns the
+-- result or 'fail' in the monad if the format is invalid.
+inet_atoh :: Monad m => B.ByteString -> m HostAddress
+inet_atoh bs
+  | Just os@[_,_,_,_] <- mapM readInt $ B.split '.' bs
+  , all (\o -> 0 <= o && o <= 255) os
+  = return . foldl' (.|.) 0 . zipWith shiftL (map fromIntegral os) $ [24,16..]
+inet_atoh bs = fail ("Invalid IP address " ++ show bs)
+
+-- | Parse a UTCTime in this format: \"YYYY-MM-DD HH:MM:SS\".
+parseUTCTime :: Monad m => ByteString -> m UTCTime
+parseUTCTime bs = do
+  LocalTime day timeOfDay <- parseLocalTime bs
+  return $! UTCTime day (timeOfDayToTime timeOfDay)
+
+-- | Parse a LocalTime in this format: \"YYYY-MM-DD HH:MM:SS\".
+parseLocalTime :: Monad m => ByteString -> m LocalTime
+parseLocalTime bs = do
+  [date,time]       <- return       $ B.split ' ' bs
+  [year,month,day]  <- mapM readInt $ B.split '-' date
+  [hour,minute,sec] <- mapM readInt $ B.split ':' time
+  let diff = fromInteger . toInteger $ hour * 3600 + minute * 60 + sec
+  return $! LocalTime (fromGregorian (toInteger year) month day)
+                      (timeToTimeOfDay diff)
+
+--------------------------------------------------------------------------------
+-- Miscellaneous functions
+
+-- | A useful combinator for applying a binary function to the result of
+-- applying a unary function to each of two arguments.
+on :: (b -> b -> c) -> (a -> b) -> a -> a -> c
+on f g x y = g x `f` g y
 
 -- | When the argument matches @Just x@, pass @x@ to a monadic action.
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
@@ -56,29 +124,10 @@ inet_htoa :: HostAddress -> String
 inet_htoa addr =
   concat . intersperse "." . map (show . (0xff .&.) . shiftR addr) $ [24,16..0]
 
--- | Convert an IPv4 address in dotted-quad form to a 'HostAddress'. Returns the
--- result or 'fail' in the monad if the format is invalid.
-inet_atoh :: Monad m => B.ByteString -> m HostAddress
-inet_atoh bs
-  | Just os@[_,_,_,_] <- mapM readInt $ B.split '.' bs
-  , all (\o -> 0 <= o && o <= 255) os
-  = return . foldl' (.|.) 0 . zipWith shiftL (map fromIntegral os) $ [24,16..]
-inet_atoh bs = fail ("Invalid IP address " ++ show bs)
-
 -- | Encode a 'ByteString' in base16.
 encodeBase16 :: ByteString -> ByteString
 encodeBase16 = B.pack . concat . W.foldr ((:) . toBase16) []
   where toBase16 x = map (intToDigit . fromIntegral) [x `shiftR` 4, x .&. 0xf]
-
--- | Parse a UTCTime in this format: \"YYYY-MM-DD HH:MM:SS\".
-parseTime :: Monad m => ByteString -> m UTCTime
-parseTime bs = do
-  [date,time]          <- return       $ B.split ' ' bs
-  [year,month,day]     <- mapM readInt $ B.split '-' date
-  [hour,minute,second] <- mapM readInt $ B.split ':' time
-  let utcDay = fromGregorian (fromIntegral year) month day
-      utcDayTime = hour * 3600 + minute * 60 + second
-  return $! addUTCTime (fromIntegral utcDayTime) (UTCTime utcDay 0)
 
 -- | Split a 'ByteString' into blocks of @x@ length.
 split :: Int -> ByteString -> [ByteString]
@@ -96,6 +145,12 @@ exitLeft = either (\e -> err e >> exitFailure) return
     err e = hPutStr stderr . unlines . (\u -> [e,u]) . usage =<< getProgName
     usage progName = "Usage: " ++ progName ++ " [-f <config file>] [options...]"
 
+-- | Is an integral value inside the bounds of another integral type?
+-- Unchecked precondition: @b@ is a subset of @a@.
+inBoundsOf :: (Integral a, Integral b, Bounded b) => a -> b -> Bool
+x `inBoundsOf` y = x >= fromIntegral (minBound `asTypeOf` y) &&
+                   x <= fromIntegral (maxBound `asTypeOf` y)
+
 instance Functor (Either String) where
   fmap f = either Left (Right . f)
 
@@ -106,3 +161,52 @@ instance Monad (Either String) where
 
 foreign import ccall unsafe "htonl" htonl :: Word32 -> Word32
 foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32
+
+--------------------------------------------------------------------------------
+-- Bounded transactional FIFO channels
+
+-- | An abstract type representing a transactional FIFO channel of bounded size.
+data BoundedTChan a = BTChan (TChan a) (TVar Int) Int
+
+-- | Create a new bounded channel of a given size.
+newBoundedTChan :: Int -> STM (BoundedTChan a)
+newBoundedTChan maxSize = do
+  currentSize <- newTVar 0
+  chan <- newTChan
+  return (BTChan chan currentSize maxSize)
+
+-- | Read from a bounded channel, blocking until an item is available.
+readBoundedTChan :: BoundedTChan a -> STM a
+readBoundedTChan (BTChan chan currentSize _) = do
+  size <- readTVar currentSize
+  writeTVar currentSize (size - 1)
+  readTChan chan
+
+-- | Write to a bounded channel, blocking until the channel is smaller than its
+-- maximum size.
+writeBoundedTChan :: BoundedTChan a -> a -> STM ()
+writeBoundedTChan (BTChan chan currentSize maxSize) x = do
+  size <- readTVar currentSize
+  check (size < maxSize)
+  writeTVar currentSize (size + 1)
+  writeTChan chan x
+
+--------------------------------------------------------------------------------
+-- Concurrent futures
+
+-- | An abstract type representing a value being evaluated concurrently in
+-- another thread of execution.
+newtype Future a = Future (MVar (Either E.Exception a))
+
+-- | Evaluate the given 'IO' action in a separate thread and return a future of
+-- its result immediately.
+spawn :: IO a -> IO (Future a)
+spawn io = do
+  mv <- newEmptyMVar
+  forkIO (E.try io >>= putMVar mv)
+  return $ Future mv
+
+-- | Explicitly unwrap the value contained within a future. Block until the
+-- value has been evaluated, throwing an exception if the future failed.
+resolve :: Future a -> IO a
+resolve (Future mv) = withMVar mv (either E.throwIO return)

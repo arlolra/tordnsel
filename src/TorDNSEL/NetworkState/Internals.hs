@@ -120,7 +120,6 @@ import TorDNSEL.Directory
 import TorDNSEL.Document
 import TorDNSEL.Random
 import TorDNSEL.Socks
-import TorDNSEL.STM.BoundedTChan
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
