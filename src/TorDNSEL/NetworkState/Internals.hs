@@ -304,9 +304,9 @@ testingEventHandler net (testChan,stateDir) = do
           loop ns' ts
 
         RunPeriodicTests -> do
-          let (up,down) = M.partition rtrIsRunning .
+          let (up,_{-down-}) = M.partition rtrIsRunning .
                             M.filter (isPeriodicTestable now) . nsRouters $ ns
-          mapM_ (mapM_ (addExitTest testChan Nothing) . M.keys) [up,down]
+          mapM_ (mapM_ (addExitTest testChan Nothing) . M.keys) [up{-,down-}]
           loop ns ts
 
         ExpireOldInfo ->
@@ -342,9 +342,9 @@ testingEventHandler net (testChan,stateDir) = do
         ReplaceExitAddresses -> rebuildExitStorage ns ts >>= loop ns
 
     addExitTests rids ns =
-      mapM_ (mapM_ (addExitTest testChan Nothing . fst)) [up,down]
+      mapM_ (mapM_ (addExitTest testChan Nothing . fst)) [up{-,down-}]
       where
-        (up,down) =
+        (up,_{-down-}) =
           partition (rtrIsRunning . snd) . filter (isTestable . snd) .
           mapMaybe (\rid -> (,) rid `fmap` M.lookup rid (nsRouters ns)) $ rids
 
