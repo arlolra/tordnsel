@@ -54,9 +54,16 @@ module TorDNSEL.Util (
   , Future
   , spawn
   , resolve
+
+  -- * Escaped strings
+  , EscapedString
+  , escaped
+  , unescLen
+  , escape
+  , showEscaped
   ) where
 
-import Control.Arrow ((&&&))
+import Control.Arrow ((&&&), second)
 import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, withMVar)
 import Control.Concurrent.STM
@@ -65,7 +72,7 @@ import Control.Concurrent.STM
 import qualified Control.Exception as E
 import Control.Monad (liftM)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
-import Data.Char (intToDigit)
+import Data.Char (intToDigit, showLitChar, isPrint, isControl)
 import Data.List (foldl', intersperse)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
@@ -271,3 +278,33 @@ spawn io = do
 -- value has been evaluated, throwing an exception if the future failed.
 resolve :: Future a -> IO a
 resolve (Future mv) = withMVar mv (either E.throwIO return)
+
+--------------------------------------------------------------------------------
+-- Escaped strings
+
+-- | A string with non-printable characters escaped.
+data EscapedString = Escaped { escaped :: B.ByteString, unescLen :: Int }
+
+instance Show EscapedString where
+  show = B.unpack . escaped
+
+-- | Replace non-printable characters with standard Haskell escape sequences.
+escape :: ByteString -> EscapedString
+escape = uncurry Escaped . (B.concat . build &&& B.length)
+  where
+    build bs
+      | B.null bs    = []
+      | B.null unesc = [esc]
+      | otherwise    = esc : escape' unesc : build rest
+      where (esc,(unesc,rest)) = second (B.span isControl) . B.span isPrint $ bs
+    escape' = B.pack . flip (foldl' (.) id) "" . map showLitChar . B.unpack
+
+-- | Quote an 'EscapedString', truncating it if its escaped length exceeds
+-- @maxLen@. When truncated, append a \"[truncated, n total bytes]\" message
+-- after the end quote.
+showEscaped :: Int -> EscapedString -> ShowS
+showEscaped maxLen (Escaped s len)
+  | B.length s > maxLen = quote (B.unpack (B.take maxLen s) ++) .
+                          ("[truncated, " ++) . shows len . (" total bytes]" ++)
+  | otherwise           = quote (B.unpack s ++)
+  where quote f = ('"':) . f . ('"':)
