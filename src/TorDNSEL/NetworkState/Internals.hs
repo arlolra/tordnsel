@@ -57,6 +57,7 @@ module TorDNSEL.NetworkState.Internals (
   , ExitTestChan(..)
   , newExitTestChan
   , addExitTest
+  , isReadingExitTestChan
   , ExitTestConfig(..)
   , bindListeningSockets
   , startTestListeners
@@ -86,20 +87,23 @@ module TorDNSEL.NetworkState.Internals (
   ) where
 
 import Control.Arrow ((&&&))
-import Control.Monad (liftM, liftM2, forM, forM_, replicateM_, guard, unless)
+import Control.Monad (liftM, liftM2, forM, forM_, replicateM_, guard)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
-import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
+import Control.Concurrent.MVar
+  (MVar, newMVar, readMVar, swapMVar, withMVar, isEmptyMVar)
 import Control.Concurrent.STM (atomically)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as L
 import Data.Char (toLower, toUpper, isSpace)
 import Data.Dynamic (fromDynamic)
-import Data.List (foldl', sortBy, partition)
-import Data.Maybe (mapMaybe, fromMaybe)
+import Data.List (foldl', sortBy)
+import Data.Maybe (mapMaybe)
 import qualified Data.Map as M
 import Data.Map (Map)
+import qualified Data.Sequence as Seq
+import Data.Sequence (Seq, (<|), (|>), viewr, ViewR(..))
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
@@ -137,10 +141,10 @@ data Network = Network
 
 -- | Create a new network event handler given the exit test chan and the path to
 -- our state directory. This should only be called once.
-newNetwork :: Maybe (ExitTestChan, FilePath) -> IO Network
-newNetwork exitTests = do
+newNetwork :: Maybe (ExitTestChan, FilePath, ExitPolicy -> Bool) -> IO Network
+newNetwork testConf = do
   net <- liftM2 Network newChan (newMVar emptyNetworkState)
-  forkIO $ stateEventHandler net exitTests
+  forkIO $ stateEventHandler net testConf
   return net
 
 -- | Our current view of the Tor network.
@@ -223,18 +227,22 @@ data StateEvent
                    {-# UNPACK #-} !HostAddress
   -- | Rebuild the exit addresses storage.
   | ReplaceExitAddresses
-  -- | Perform periodic exit tests.
-  | RunPeriodicTests
+  -- | Schedule periodic exit tests.
+  | SchedulePeriodicTests
+  -- | Run a single scheduled exit test.
+  | RunExitTest
 
 -- | An internal type representing the current exit test state.
 data TestState = TestState
-  { tsCookies    :: !(Map Cookie (RouterID, UTCTime, Port))
+  { tsTests      :: Seq (RouterID, Maybe Port)
+  , tsCookies    :: !(Map Cookie (RouterID, UTCTime, Port))
   , tsAddrLen
   , tsJournalLen :: !Integer
   , tsJournal    :: !Handle }
 
 -- | Receive and carry out state update events.
-stateEventHandler :: Network -> Maybe (ExitTestChan, FilePath) -> IO ()
+stateEventHandler
+  :: Network -> Maybe (ExitTestChan, FilePath, ExitPolicy -> Bool) -> IO ()
 stateEventHandler net testConf = do
   forkIO . forever $ do
     -- check for and discard old routers every 30 minutes
@@ -263,8 +271,9 @@ eventHandler net = loop emptyNetworkState
         _ -> error "unexpected message" -- XXX log this
 
 -- | Handle testing events.
-testingEventHandler :: Network -> (ExitTestChan, FilePath) -> IO ()
-testingEventHandler net (testChan,stateDir) = do
+testingEventHandler
+  :: Network -> (ExitTestChan, FilePath, ExitPolicy -> Bool) -> IO ()
+testingEventHandler net (testChan,stateDir,allowsExit) = do
   -- initialize network state with test results from state directory
   exitAddrs <- readExitAddresses stateDir
   s <- flip expireOldInfo (initialNetState exitAddrs) `fmap` getCurrentTime
@@ -281,11 +290,16 @@ testingEventHandler net (testChan,stateDir) = do
     writeChan (nChan net) ReplaceExitAddresses
 
   forkIO . forever $ do
-    -- run periodic tests every 120 minutes
-    replicateM_ 4 $ threadDelay (30 * 60 * 10^6)
-    writeChan (nChan net) RunPeriodicTests
+    -- run periodic tests every 150 minutes
+    replicateM_ 5 $ threadDelay (30 * 60 * 10^6)
+    writeChan (nChan net) SchedulePeriodicTests
 
-  loop s (TestState M.empty addrLen 0 journal)
+  forkIO . forever $ do
+    -- rate-limit exit tests to one router every 3 seconds
+    threadDelay (3 * 10^6)
+    writeChan (nChan net) RunExitTest
+
+  loop s (TestState Seq.empty M.empty addrLen 0 journal)
   where
     loop ns ts = do
       event <- readChan $ nChan net
@@ -294,20 +308,29 @@ testingEventHandler net (testChan,stateDir) = do
         NewDesc ds -> do
           let ns' = foldl' (newDescriptor now) ns ds
           ns' `seq` swapMVar (nState net) ns'
-          addExitTests (map descRouterID ds) ns'
           loop ns' ts
+            { tsTests = scheduleExitTests (map descRouterID ds) (nsRouters ns')
+                                          (tsTests ts) }
 
         NewNS rss -> do
           let ns' = foldl' (newRouterStatus now) ns rss
           ns' `seq` swapMVar (nState net) ns'
-          addExitTests (map rsRouterID rss) ns'
           loop ns' ts
+            { tsTests = scheduleExitTests (map rsRouterID rss) (nsRouters ns')
+                                          (tsTests ts) }
 
-        RunPeriodicTests -> do
-          let (up,_{-down-}) = M.partition rtrIsRunning .
-                            M.filter (isPeriodicTestable now) . nsRouters $ ns
-          mapM_ (mapM_ (addExitTest testChan Nothing) . M.keys) [up{-,down-}]
-          loop ns ts
+        SchedulePeriodicTests ->
+          let canTest r = rtrIsRunning r && isPeriodicTestable allowsExit now r
+              rids = M.keys . M.filter canTest . nsRouters $ ns
+          in loop ns ts { tsTests = enqueueTests (tsTests ts) rids }
+
+        RunExitTest -> do
+          isReading <- isReadingExitTestChan testChan
+          case (isReading, viewr (tsTests ts)) of
+            (True, tests :> (rid, port)) -> do
+              addExitTest testChan port rid
+              loop ns ts { tsTests = tests }
+            _ -> loop ns ts
 
         ExpireOldInfo ->
           let ns' = expireOldInfo now ns
@@ -327,26 +350,29 @@ testingEventHandler net (testChan,stateDir) = do
           ns' `seq` swapMVar (nState net) ns'
 
           -- have we seen this exit address before?
-          unless (fromMaybe False . fmap (M.member addr . tstAddresses) $
-                  rtrTestResults r) $
-            -- test this port again in case exit addresses are rotated
-            addExitTest testChan (Just port) rid
+          let ts' = case (M.member addr . tstAddresses) `fmap` rtrTestResults r
+               of -- test this port again in case exit addresses vary
+                  Just False -> ts { tsTests = tsTests ts |> (rid, Just port) }
+                  _          -> ts
 
           len <- appendExitAddressToJournal (tsJournal ts) rid r'
           if isJournalTooLarge (tsAddrLen ts) (tsJournalLen ts + len)
-            then rebuildExitStorage ns' ts >>= loop ns'
-            else loop ns' ts { tsJournalLen = tsJournalLen ts + len }
+            then rebuildExitStorage ns' ts' >>= loop ns'
+            else loop ns' ts' { tsJournalLen = tsJournalLen ts + len }
 
           | otherwise -> loop ns ts -- XXX log this
 
         ReplaceExitAddresses -> rebuildExitStorage ns ts >>= loop ns
 
-    addExitTests rids ns =
-      mapM_ (mapM_ (addExitTest testChan Nothing . fst)) [up{-,down-}]
+    enqueueTests = foldl' (\a x -> (x, Nothing) <| a)
+
+    scheduleExitTests rids routers tests =
+      enqueueTests tests (mapMaybe isTestable' rids)
       where
-        (up,_{-down-}) =
-          partition (rtrIsRunning . snd) . filter (isTestable . snd) .
-          mapMaybe (\rid -> (,) rid `fmap` M.lookup rid (nsRouters ns)) $ rids
+        isTestable' rid = do
+          r <- M.lookup rid routers
+          guard $ rtrIsRunning r && isTestable allowsExit r
+          return rid
 
     rebuildExitStorage ns ts = do
       hClose $ tsJournal ts
@@ -365,23 +391,24 @@ testingEventHandler net (testChan,stateDir) = do
           (rid, Router Nothing (Just (TestResults pub exits)) False status)
 
 -- | Should a router be added to the test queue?
-isTestable :: Router -> Bool
-isTestable r
-  | Nothing <- rtrDescriptor r  = False
-  | Nothing <- rtrTestResults r = True
-  | Just d <- rtrDescriptor r, Just t <- rtrTestResults r
-  -- have we already done a test for this descriptor version?
-  = tstPublished t < posixSecondsToUTCTime (descPublished d)
-  | otherwise                   = False
+isTestable :: (ExitPolicy -> Bool) -> Router -> Bool
+isTestable allowsExit r =
+  case (rtrDescriptor r, rtrTestResults r) of
+    (Nothing,_)      -> False
+    (Just d,Nothing) -> allowsExit (descExitPolicy d)
+    (Just d,Just t)  -> allowsExit (descExitPolicy d) &&
+                     -- have we already done a test for this descriptor version?
+                        tstPublished t < posixSecondsToUTCTime (descPublished d)
 
 -- | A router is eligible for periodic testing if we have its descriptor and it
 -- hasn't been tested in the last @minTestInterval@ seconds.
-isPeriodicTestable :: UTCTime -> Router -> Bool
-isPeriodicTestable now r
-  | Nothing <- rtrDescriptor r = False
+isPeriodicTestable :: (ExitPolicy -> Bool) -> UTCTime -> Router -> Bool
+isPeriodicTestable allowsExit now r
+  | Nothing <- rtrDescriptor r                                       = False
+  | Just d <- rtrDescriptor r, not . allowsExit . descExitPolicy $ d = False
   | Just t <- rtrTestResults r
   = now `diffUTCTime` (maximum . M.elems . tstAddresses $ t) > minTestInterval
-  | otherwise                  = True
+  | otherwise                                                        = True
   where minTestInterval = 60 * 60
 
 -- | Update the network state with the results of an exit test. Return the
@@ -536,16 +563,19 @@ isRunning now d = now - descPublished d < maxRouterAge
 -- Exit tests
 
 -- | The exit test channel.
-newtype ExitTestChan = ExitTestChan
-  { unETChan :: Chan (RouterID, Maybe Port) }
+data ExitTestChan = ExitTestChan (Chan (RouterID, Maybe Port)) (MVar ())
 
 -- | Create a new exit test channel to be passed to 'newNetwork'.
 newExitTestChan :: IO ExitTestChan
-newExitTestChan = ExitTestChan `fmap` newChan
+newExitTestChan = liftM2 ExitTestChan newChan (newMVar ())
 
 -- | Schedule an exit test through a router.
 addExitTest :: ExitTestChan -> Maybe Port -> RouterID -> IO ()
-addExitTest (ExitTestChan chan) port rid = writeChan chan (rid, port)
+addExitTest (ExitTestChan chan _) port rid = writeChan chan (rid, port)
+
+-- | Is any thread reading from an exit test channel?
+isReadingExitTestChan :: ExitTestChan -> IO Bool
+isReadingExitTestChan (ExitTestChan _ reading) = isEmptyMVar reading
 
 -- | Bind the listening sockets we're going to use for incoming exit tests. This
 -- action exists so we can listen on privileged ports prior to dropping
@@ -602,11 +632,11 @@ startTestListeners net listenSockets concTests = do
 
 -- | Fork all our exit test listeners and initiators.
 startExitTests :: ExitTestConfig -> IO ()
-startExitTests conf = do
+startExitTests conf@ExitTestConfig { etChan = ExitTestChan chan reading } = do
   startTestListeners (etNetwork conf) (etListenSocks conf) (etConcTests conf)
 
   replicateM_ (etConcTests conf) . forkIO . forever $ do
-    (rid,mbPort) <- readChan . unETChan . etChan $ conf
+    (rid,mbPort) <- withMVar reading (const $ readChan chan)
     s <- readNetworkState . etNetwork $ conf
     let mbTest = do
           rtr <- rid `M.lookup` nsRouters s
@@ -622,11 +652,11 @@ startExitTests conf = do
         Nothing
           | rtrIsRunning rtr ->
               -- perform one test for each port
-              mapM_ (writeChan (unETChan $ etChan conf) . (,) rid . Just) ports
+              mapM_ (writeChan chan . (,) rid . Just) ports
           | otherwise ->
               -- Tests through non-running routers will almost always time out.
               -- Only test one port so we don't tie up all the testing threads.
-              writeChan (unETChan $ etChan conf) (rid, Just $ head ports)
+              writeChan chan (rid, Just $ head ports)
         Just port | port `elem` ports ->
           withCookie (etNetwork conf) (etRandom conf) rid published port $
             \cookie -> do

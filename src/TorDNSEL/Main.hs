@@ -82,6 +82,7 @@ import GHC.Prim (Addr#)
 
 import TorDNSEL.Config
 import TorDNSEL.Control
+import TorDNSEL.Directory
 import TorDNSEL.DNS
 import TorDNSEL.DNS.Handler
 import TorDNSEL.NetworkState
@@ -130,7 +131,7 @@ main = do
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
 
-    return . Just $ \c -> c
+    return . Just $ ExitTestConfig
       { etConcTests   = concTests
       , etSocksServer = socksSockAddr
       , etListenSocks = testSockets
@@ -189,8 +190,12 @@ main = do
     net <- case testConf of
       Just testConf' -> do
         exitTestChan <- newExitTestChan
-        net <- newNetwork $ Just (exitTestChan, stateDir)
-        startExitTests . testConf' $ ExitTestConfig
+
+        let acceptsPort = flip $ exitPolicyAccepts (etTestAddr testConf')
+            allowsExit policy = any (acceptsPort policy) (etTestPorts testConf')
+
+        net <- newNetwork $ Just (exitTestChan, stateDir, allowsExit)
+        startExitTests $ testConf'
           { etChan    = exitTestChan
           , etNetwork = net
           , etTcp     = tcp }
