@@ -37,7 +37,6 @@ module TorDNSEL.Util (
 
   -- * Address
   , Address(..)
-  , putAddress
   , showAddress
   , readAddress
 
@@ -80,7 +79,7 @@ import System.Environment (getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, stderr)
 
-import Data.Binary (Binary(..), Put)
+import Data.Binary (Binary(..))
 
 import TorDNSEL.DeepSeq
 
@@ -181,20 +180,19 @@ foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32
 --------------------------------------------------------------------------------
 -- Addresses
 
+-- | An IP address or domain name.
 data Address = IPv4Addr HostAddress | Addr ByteString
 
 instance Show Address where
   show (IPv4Addr addr) = inet_htoa addr
   show (Addr addr)     = B.unpack addr
 
-putAddress :: Address -> Put
-putAddress (IPv4Addr addr) = put addr
-putAddress (Addr addr)     = put addr
-
+-- | Show an 'Address' as text.
 showAddress :: Address -> ByteString
 showAddress (IPv4Addr addr) = B.pack $ inet_htoa addr
 showAddress (Addr addr)     = addr
 
+-- | Parse an 'Address'.
 readAddress :: ByteString -> Address
 readAddress bs
   | Just addr <- inet_atoh bs = IPv4Addr addr
@@ -203,7 +201,7 @@ readAddress bs
 --------------------------------------------------------------------------------
 -- Ports
 
--- XXX replace all uses of Word16 for a port with Port
+-- | A TCP or UDP port.
 newtype Port = Port { unPort :: Word16 }
   deriving (Eq, Ord, Bounded, Num, Real, Enum, Integral)
 
@@ -217,6 +215,7 @@ instance Binary Port where
 instance DeepSeq Port where
   deepSeq = seq . unPort
 
+-- | Parse a port, 'fail'ing in the monad if parsing fails.
 parsePort :: Monad m => ByteString -> m Port
 parsePort bs = do
   (port,int) <- (fromIntegral &&& id) `liftM` readInt bs
