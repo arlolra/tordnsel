@@ -95,14 +95,14 @@ import TorDNSEL.DeepSeq
 
 -- | Parse an 'Int' from a 'B.ByteString'. Return the result or 'fail' in the
 -- monad if parsing fails.
-readInt :: Monad m => B.ByteString -> m Int
+readInt :: Monad m => ByteString -> m Int
 readInt bs = case B.readInt bs of
   Just (x,_) -> return x
   _          -> fail ("Parsing integer " ++ show bs ++ " failed.")
 
 -- | Convert an IPv4 address in dotted-quad form to a 'HostAddress'. Returns the
 -- result or 'fail' in the monad if the format is invalid.
-inet_atoh :: Monad m => B.ByteString -> m HostAddress
+inet_atoh :: Monad m => ByteString -> m HostAddress
 inet_atoh bs
   | Just os@[_,_,_,_] <- mapM readInt $ B.split '.' bs
   , all (\o -> 0 <= o && o <= 0xff) os
