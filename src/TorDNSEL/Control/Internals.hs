@@ -385,6 +385,7 @@ data CloseCircuitFlags = CloseCircuitFlags
     ifUnused :: Bool }
 
 -- | All 'CloseCircuitFlags' unset
+emptyCloseCircuitFlags :: CloseCircuitFlags
 emptyCloseCircuitFlags = CloseCircuitFlags False
 
 -- | Close the specified circuit. Throw a 'TorControlError' if the reply code
