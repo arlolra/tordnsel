@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, ForeignFunctionInterface #-}
+{-# LANGUAGE PatternGuards, BangPatterns, ForeignFunctionInterface #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 -----------------------------------------------------------------------------
@@ -9,7 +9,8 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (pattern guards, concurrency, STM, FFI)
+-- Portability : non-portable (pattern guards, bang patterns, concurrency,
+--                             STM, FFI)
 --
 -- Common utility functions.
 --
@@ -34,6 +35,8 @@ module TorDNSEL.Util (
   , inBoundsOf
   , htonl
   , ntohl
+  , hGetLine
+  , splitByDelimiter
 
   -- * Address
   , Address(..)
@@ -70,12 +73,15 @@ import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
-import Control.Monad (liftM)
+import Control.Monad (liftM, zipWithM_)
+import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
+import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Char (intToDigit, showLitChar, isPrint, isControl)
 import Data.List (foldl', intersperse)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
+import qualified Data.ByteString.Base as B
 import Data.ByteString (ByteString)
 import Data.Time
   ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
@@ -85,6 +91,13 @@ import Network.Socket (HostAddress)
 import System.Environment (getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, stderr)
+import System.IO.Error (isEOFError)
+
+import GHC.Handle
+  (wantReadableHandle, fillReadBuffer, readCharFromBuffer, ioe_EOF)
+import GHC.IOBase
+  ( Handle, Handle__(..), Buffer(..), readIORef, writeIORef
+  , BufferMode(NoBuffering) )
 
 import Data.Binary (Binary(..))
 
@@ -183,6 +196,124 @@ instance Monad (Either String) where
 
 foreign import ccall unsafe "htonl" htonl :: Word32 -> Word32
 foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32
+
+-- | Read a line terminated by an arbitrary sequence of bytes from a handle. The
+-- end-of-line sequence is stripped before returning the line. @maxLen@
+-- specifies the maximum line length to read, not including the end-of-line
+-- sequence. If the line length exceeds @maxLen@, return the first @maxLen@
+-- bytes. If EOF is encountered, return the bytes preceding it. The handle
+-- should be in 'LineBuffering' mode.
+hGetLine :: Handle -> ByteString -> Int -> IO ByteString
+hGetLine h eol maxLen | B.null eol = B.hGet h maxLen
+hGetLine h eol@(B.PS _ _ eolLen) maxLen
+  = wantReadableHandle "TorDNSEL.Util.hGetLine" h $ \handle_ -> do
+      case haBufferMode handle_ of
+        NoBuffering -> error "no buffering"
+        _other      -> hGetLineBuffered handle_
+
+  where
+    hGetLineBuffered handle_ = do
+      let ref = haBuffer handle_
+      buf <- readIORef ref
+      hGetLineBufferedLoop handle_ ref buf 0 0 []
+
+    hGetLineBufferedLoop handle_ ref
+      buf@Buffer{ bufRPtr=r, bufWPtr=w, bufBuf=raw } !len !eolIx xss = do
+        (new_eolIx,off) <- findEOL eolIx r w raw
+        let new_len = len + off - r
+
+        if maxLen > 0 && new_len - new_eolIx > maxLen
+          -- If the line length exceeds maxLen, return a partial line.
+          then do
+            let maxOff = off - (new_len - maxLen)
+            writeIORef ref buf{ bufRPtr = maxOff }
+            mkBigPS . (:xss) =<< mkPS raw r maxOff
+          else if new_eolIx == eolLen
+            -- We have a complete line; strip the EOL sequence and return it.
+            then do
+              if w == off
+                then writeIORef ref buf{ bufRPtr=0, bufWPtr=0 }
+                else writeIORef ref buf{ bufRPtr = off }
+              if eolLen <= off - r
+                then mkBigPS . (:xss) =<< mkPS raw r (off - eolLen)
+                else fmap stripEOL . mkBigPS . (:xss) =<< mkPS raw r off
+            else do
+              xs <- mkPS raw r off
+              maybe_buf <- maybeFillReadBuffer (haFD handle_) True
+                             (haIsStream handle_) buf{ bufWPtr=0, bufRPtr=0 }
+              case maybe_buf of
+                -- Nothing indicates we caught an EOF, and we may have a
+                -- partial line to return.
+                Nothing -> do
+                  writeIORef ref buf{ bufRPtr=0, bufWPtr=0 }
+                  if new_len > 0
+                    then mkBigPS (xs:xss)
+                    else ioe_EOF
+                Just new_buf ->
+                  hGetLineBufferedLoop handle_ ref new_buf new_len new_eolIx
+                                       (xs:xss)
+
+    maybeFillReadBuffer fd is_line is_stream buf
+      = catch (Just `fmap` fillReadBuffer fd is_line is_stream buf)
+              (\e -> if isEOFError e then return Nothing else ioError e)
+
+    findEOL eolIx
+      | eolLen == 1 = findEOLChar (B.w2c $ B.unsafeHead eol)
+      | otherwise   = findEOLSeq eolIx
+
+    findEOLChar eolChar r w raw
+      | r == w = return (0, r)
+      | otherwise = do
+          (!c,!r') <- readCharFromBuffer raw r
+          if c == eolChar
+            then return (1, r')
+            else findEOLChar eolChar r' w raw
+
+    -- find the end-of-line sequence, if there is one
+    findEOLSeq !eolIx r w raw
+      | eolIx == eolLen || r == w = return (eolIx, r)
+      | otherwise = do
+          (!c,!r') <- readCharFromBuffer raw r
+          findEOLSeq (next c eolIx + 1) r' w raw
+
+    -- get the next index into the EOL sequence we should match against
+    next !c !i = if i >= 0 && c /= eolIndex i then next c (table ! i) else i
+
+    eolIndex = B.w2c . B.unsafeIndex eol
+
+    -- build a match table for the Knuth-Morris-Pratt algorithm
+    table = runSTUArray (do
+      arr <- newArray_ (0, if eolLen == 1 then 1 else eolLen - 1)
+      zipWithM_ (writeArray arr) [0,1] [-1,0]
+      loop arr 2 0)
+      where
+        loop arr !t !p
+          | t >= eolLen = return arr
+          | eolIndex (t - 1) == eolIndex p
+          = let p' = p + 1 in writeArray arr t p' >> loop arr (t + 1) p'
+          | p > 0 = readArray arr p >>= loop arr t
+          | otherwise = writeArray arr t 0 >> loop arr (t + 1) p
+
+    stripEOL (B.PS p s l) = E.assert (new_len >= 0) . B.copy $ B.PS p s new_len
+      where new_len = l - eolLen
+
+    mkPS buf start end = B.create len $ \p -> do
+      B.memcpy_ptr_baoff p buf (fromIntegral start) (fromIntegral len)
+      return ()
+      where len = end - start
+
+    mkBigPS [ps] = return ps
+    mkBigPS pss  = return $! B.concat (reverse pss)
+
+-- | Split @bs@ into pieces delimited by @delimiter@, consuming the delimiter.
+-- The result for overlapping delimiters is undefined.
+splitByDelimiter :: ByteString -> ByteString -> [ByteString]
+splitByDelimiter delimiter bs = subst (-len : B.findSubstrings delimiter bs)
+  where
+    subst (x:xs@(y:_)) = B.take (y-x-len) (B.drop (x+len) bs) : subst xs
+    subst [x]          = [B.drop (x+len) bs]
+    subst []           = error "splitByDelimiter: empty list"
+    len = B.length delimiter
 
 --------------------------------------------------------------------------------
 -- Addresses
