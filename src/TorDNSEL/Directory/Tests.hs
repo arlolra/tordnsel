@@ -37,14 +37,14 @@ exitPolicy = do
     doc = map B.pack ["reject *:80","accept 18.244.0.18:*"]
 
 fingerprint = TestList . map TestCase $
-  [ decodeBase16Fingerprint base16 @=? Just fp
-  , decodeBase64Fingerprint base64 @=? Just fp
-  , encodeBase16Fingerprint fp @=? base16 ]
+  [ decodeBase16RouterID base16 @=? Just rid
+  , decodeBase64RouterID base64 @=? Just rid
+  , encodeBase16RouterID rid @=? base16 ]
   where
     base16 = b 40 "ffcb46db1339da84674c70d7cb586434c4370441"#
     base64 = b 27 "/8tG2xM52oRnTHDXy1hkNMQ3BEE"#
-    fp = FP $ b 20 "\255\203\70\219\19\57\218\132\103\76\112\
-                   \\215\203\88\100\52\196\55\4\65"#
+    rid = RtrId $ b 20 "\255\203\70\219\19\57\218\132\103\76\112\
+                        \\215\203\88\100\52\196\55\4\65"#
 
 descriptorParses = parse descriptor @=? "[" ++ parsed ++ "," ++ parsed ++ "]"
   where
