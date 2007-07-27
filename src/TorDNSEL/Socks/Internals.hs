@@ -50,7 +50,7 @@ import System.IO (Handle, BufferMode(NoBuffering), hClose, hSetBuffering)
 
 import Data.Binary (Binary(..), getWord8, putWord8)
 import Data.Binary.Get (runGet)
-import Data.Binary.Put (runPut)
+import Data.Binary.Put (runPut, putWord32be, putByteString)
 
 import TorDNSEL.DeepSeq
 import TorDNSEL.Util
@@ -133,11 +133,15 @@ encodeRequest = B.concat . L.toChunks . runPut . putRequest
         Resolve    -> 0xf0
         ConnectDir -> 0xf2
       put $ soReqPort req
-      putAddress $ soReqDest req
-      putWord8 0
       case soReqDest req of
-        IPv4Addr _ -> return ()
-        Addr addr  -> put addr >> putWord8 0
+        IPv4Addr addr -> do
+          put addr
+          putWord8 0
+        Addr addr -> do
+          putWord32be 1
+          putWord8 0
+          putByteString addr
+          putWord8 0
 
 -- | Decode a Socks4 response.
 decodeResponse :: ByteString -> IO (Maybe Response)
