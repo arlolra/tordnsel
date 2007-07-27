@@ -244,11 +244,11 @@ torController net control authSecret tcp = do
   handle <- socketToHandle sock ReadWriteMode
   withConnection handle $ \conn -> do
     authenticate authSecret conn
-    let newNS = newNetworkStatus (updateNetworkStatus net)
-        newDesc = newDescriptors (updateDescriptors net) conn
+    let newNS = networkStatusEvent (updateNetworkStatus net)
+        newDesc = newDescriptorsEvent (updateDescriptors net) conn
     registerEventHandlers [newNS, newDesc] conn
-    fetchNetworkStatus conn >>= updateNetworkStatus net
-    fetchAllDescriptors conn >>= updateDescriptors net
+    getNetworkStatus conn >>= updateNetworkStatus net
+    getAllDescriptors conn >>= updateDescriptors net
     setFetchUselessDescriptors conn
     waitForConnection conn
 
