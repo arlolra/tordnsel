@@ -12,7 +12,8 @@ through every exit node with a suitable exit policy. This allows it to detect
 exit nodes configured to send outbound connections through a different IP
 address from the one they advertise in their descriptors. When configured to
 run exit tests, it tests through a particular exit node each time the node
-publishes a new descriptor.
+publishes a new descriptor. All running nodes are tested periodically between
+descriptor uploads.
 
 Currently, only query type 1 from torel-design.txt is supported:
 
@@ -50,10 +51,10 @@ Dependencies
 
   Before building binary, apply the included patch in binary.patch.
 
-    cd binary-0.3 && patch -p0 < ../tordnsel-0.0.5/binary.patch
+    cd binary-0.3 && patch -p0 < ../tordnsel-0.0.6/binary.patch
 
   If you don't, you're likely to experience a segfault if you receive a
-  malformed DNS packet.
+  malformed DNS message.
 
   OpenSSL's libcrypto is required for strong random numbers.
 

@@ -1,5 +1,5 @@
 Name:            TorDNSEL
-Version:         0.0.5
+Version:         0.0.6
 Synopsis:        provides a DNSBL-style interface for detecting Tor exit nodes
 Description:     TorDNSEL implements a design for a DNSBL-style interface for
   detecting connections exiting the Tor network. This design and its rationale
@@ -7,13 +7,13 @@ Description:     TorDNSEL implements a design for a DNSBL-style interface for
 License:         PublicDomain
 License-File:    LICENSE
 Homepage:        http://p56soo2ibjkx23xo.onion/
-Package-URL:     http://p56soo2ibjkx23xo.onion/dist/tordnsel-0.0.5.tar.gz
+Package-URL:     http://p56soo2ibjkx23xo.onion/dist/tordnsel-0.0.6.tar.gz
 Author:          tup
 Maintainer:      tup.tuple@googlemail.com
 Build-Depends:   base>=2.0, network>=2.0, mtl>=1.0, unix>=1.0, stm>=2.0,
   time>=1.0, HUnit>=1.1, binary>=0.3
 Tested-With:     GHC==6.6
-Data-Files:      config/tordnsel.conf.sample,
+Data-Files:      config/tordnsel.conf.sample, config/cacti-input.pl,
   config/tordnsel-init.d-script.sample
 
 Executable:      tordnsel
@@ -24,7 +24,8 @@ Other-Modules:   TorDNSEL.Config, TorDNSEL.Config.Internals, TorDNSEL.Control,
   TorDNSEL.NetworkState.Internals, TorDNSEL.DNS, TorDNSEL.DNS.Internals,
   TorDNSEL.DNS.Handler, TorDNSEL.DNS.Handler.Internals, TorDNSEL.Main,
   TorDNSEL.Random, TorDNSEL.Socks, TorDNSEL.Socks.Internals,
-  TorDNSEL.System.Timeout, TorDNSEL.Util
+  TorDNSEL.Statistics, TorDNSEL.Statistics.Internals, TorDNSEL.System.Timeout,
+  TorDNSEL.Util
 HS-Source-Dirs:  src
 Includes:        openssl/rand.h
 Extra-Libraries: crypto

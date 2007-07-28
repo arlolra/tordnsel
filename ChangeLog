@@ -1,3 +1,23 @@
+0.0.6 - 2007-07-28
+  - Support an optional A record for our authoritative zone.
+  - Return our own NS record in the appropriate places.
+  - Don't modify the group ownership of our state directory.
+  - Rebuild the exit-addresses file every 15 minutes so LastStatus items stay
+    up to date.
+  - Ensure exit tests are scheduled when we receive new descriptors.
+  - Generate cookies using OpenSSL's strong pseudo-random number generator.
+  - Add a "Connection: close" header to test requests and responses.
+  - Test once through each port exit policies allow, recording varying exit
+    addresses for individual nodes.
+  - Periodically (currently, every 150 minutes) test through every node
+    marked running.
+  - Make cumulative DNS load statistics available via a Unix stream socket
+    located in our state directory. Add a sample data input script for Cacti.
+  - Increase the test result retention period to 48 hours.
+  - Ensure the controller socket is closed immediately when connect fails.
+  - Rate limit exit test initiation to one node every three seconds. This
+    should reduce the load we put on Tor, particularly during periodic tests.
+
 0.0.5 - 2007-06-12
   - Set QR in responses as we did in 0.0.3 and earlier. Fixes a bug
     introduced in 0.0.4.
