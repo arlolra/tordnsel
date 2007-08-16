@@ -320,7 +320,6 @@ instance BinaryPacket Message where
           4 -> NotImplemented
           5 -> Refused
           _ -> error "unknown rcode"
-    False <- return $ testBit flags 6
     [qdCount,anCount,nsCount,arCount] <- replicateM 4 getWord16be
     question:_ <- replicateM (fromIntegral qdCount) (getPacket pkt)
     [answers,authority,additional] <- forM [anCount, nsCount, arCount] $ \n ->
