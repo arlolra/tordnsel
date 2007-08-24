@@ -62,6 +62,7 @@ data ResponseType = Positive | Negative | Other
 
 -- | A stateful wrapper for 'dnsResponse'.
 dnsHandler :: DNSConfig -> Network -> Message -> IO (Maybe Message)
+{-# INLINE dnsHandler #-}
 dnsHandler c net msg
   -- draft-arends-dnsext-qr-clarification-00
   | msgQR msg = return Nothing
@@ -76,7 +77,7 @@ dnsHandler c net msg
 -- the current state of the Tor network.
 dnsResponse :: DNSConfig -> Message -> POSIXTime -> NetworkState
             -> (ResponseType, Message)
-{-# INLINE dnsHandler #-}
+{-# INLINE dnsResponse #-}
 dnsResponse c msg now ns
   | msgOpCode msg /= StandardQuery -- RFC 3425
   = (Other, r { msgAA = False, msgRCode = NotImplemented
