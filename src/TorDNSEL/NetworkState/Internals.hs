@@ -351,8 +351,11 @@ testingEventHandler net (testChan,stateDir,allowsExit) = do
 
           -- have we seen this exit address before?
           let ts' = case (M.member addr . tstAddresses) `fmap` rtrTestResults r
-               of -- test this port again in case exit addresses vary
-                  Just False -> ts { tsTests = tsTests ts |> (rid, Just port) }
+               of -- test this port twice more in case exit addresses vary
+                  -- the exponential increase in tests should catch more exit
+                  -- addresses
+                  Just False -> ts { tsTests = tsTests ts |> (rid, Just port)
+                                                          |> (rid, Just port) }
                   _          -> ts
 
           len <- appendExitAddressToJournal (tsJournal ts) rid r'
