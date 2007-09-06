@@ -347,17 +347,17 @@ extendCircuit' circuit path purpose conn = do
     renderPurpose CrController = b 10 "controller"#
     add = maybe id (\p -> (++ [b 8 "purpose="# `B.append` renderPurpose p]))
 
--- Attach an unattached stream to a completed circuit, exiting from @hop@ if
+-- | Attach an unattached stream to a completed circuit, exiting from @hop@ if
 -- specified. Throw a 'TorControlError' if the reply code indicates failure.
 attachStream :: StreamID -> CircuitID -> Maybe Integer -> Connection -> IO ()
 attachStream sid cid = attachStream' sid (Just cid)
 
--- Cede the responsibility for attaching a given unattached stream to Tor. Throw
+-- | Cede the responsibility for attaching a given unattached stream to Tor. Throw
 -- a 'TorControlError' if the reply code indicates failure.
 cedeStream :: StreamID -> Connection -> IO ()
 cedeStream sid = attachStream' sid Nothing Nothing
 
--- Send an ATTACHSTREAM command. Attach an unattached stream to the specified
+-- | Send an ATTACHSTREAM command. Attach an unattached stream to the specified
 -- completed circuit, exiting from @hop@ if specified. If the circuit isn't
 -- specified, return the responsibility for attaching the stream to Tor. Throw a
 -- 'TorControlError' if the reply code indicates failure.
@@ -649,7 +649,7 @@ data CircuitState
   = CrLaunched -- ^ Circuit ID assigned to new circuit
   | CrBuilt    -- ^ All hops finished, can now accept streams
   | CrExtended -- ^ One more hop has been completed
-  | CrFailed   -- ^ One more hop has been completed
+  | CrFailed   -- ^ circuit closed (was not built)
   | CrClosed   -- ^ Circuit closed (was built)
   deriving Show
 
@@ -696,7 +696,7 @@ data StreamState
   | StSentConnect -- ^ Sent a connect cell along a circuit
   | StSentResolve -- ^ Sent a resolve cell along a circuit
   | StSucceeded   -- ^ Received a reply; stream established
-  | StFailed      -- ^ Received a reply; stream established
+  | StFailed      -- ^ Stream failed and not retriable
   | StClosed      -- ^ Stream closed
   | StDetached    -- ^ Detached from circuit; still retriable
   deriving Show
