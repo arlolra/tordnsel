@@ -110,17 +110,17 @@ module TorDNSEL.Control.Internals (
 
 import Control.Arrow (second)
 import Control.Concurrent (forkIO, killThread, myThreadId)
-import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
+import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, isEmptyChan)
 import Control.Concurrent.MVar
   (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, withMVar, swapMVar)
 import qualified Control.Exception as E
-import Control.Monad (unless, liftM)
+import Control.Monad (unless, liftM, liftM2)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit)
 import Data.Foldable (traverse_)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, catMaybes, maybeToList, listToMaybe)
+import Data.Maybe (fromMaybe, catMaybes, maybeToList, listToMaybe, mapMaybe)
 import qualified Data.Sequence as S
 import Data.Sequence ((<|), ViewR((:>)), viewr)
 import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)
@@ -549,8 +549,15 @@ ioManager handle ioChan closeChan closeHandler = do
           where
             close e = do
               closeChan
+              messages <- readChanAll ioChan
+              let responds' = flip mapMaybe messages $ \msg -> case msg of
+                    SendCommand    _ respond   -> Just respond
+                    RegisterEvents _ respond _ -> Just respond
+                    _                          -> Nothing
+                  resourceExausted = ($ [Reply ('4','5','1') B.empty []])
               -- send resource exhausted to threads blocked waiting for a reply
-              traverse_ ($ [Reply ('4','5','1') B.empty []]) responds
+              traverse_ resourceExausted responds
+              mapM_ resourceExausted responds'
               killThread reader
               invokeHandler Nothing
               hClose handle `E.finally` closeHandler e
@@ -566,6 +573,12 @@ ioManager handle ioChan closeChan closeHandler = do
 
     handleEvents chan = loop
       where loop = readChan chan >>= flip whenJust (>> loop)
+
+    readChanAll chan = do
+      empty <- isEmptyChan chan
+      if empty
+        then return []
+        else liftM2 (:) (readChan chan) (readChanAll chan)
 
 -- | Reply types in a single sequence of replies.
 data ReplyType
