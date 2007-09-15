@@ -114,7 +114,7 @@ import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, isEmptyChan)
 import Control.Concurrent.MVar
   (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, withMVar, swapMVar)
 import qualified Control.Exception as E
-import Control.Monad (unless, liftM, liftM2)
+import Control.Monad (unless, liftM)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit)
@@ -549,7 +549,7 @@ ioManager handle ioChan closeChan closeHandler = do
           where
             close e = do
               closeChan
-              messages <- readChanAll ioChan
+              messages <- untilM (isEmptyChan ioChan) $ readChan ioChan
               let responds' = flip mapMaybe messages $ \msg -> case msg of
                     SendCommand    _ respond   -> Just respond
                     RegisterEvents _ respond _ -> Just respond
@@ -573,12 +573,6 @@ ioManager handle ioChan closeChan closeHandler = do
 
     handleEvents chan = loop
       where loop = readChan chan >>= flip whenJust (>> loop)
-
-    readChanAll chan = do
-      empty <- isEmptyChan chan
-      if empty
-        then return []
-        else liftM2 (:) (readChan chan) (readChanAll chan)
 
 -- | Reply types in a single sequence of replies.
 data ReplyType

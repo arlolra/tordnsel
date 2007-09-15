@@ -27,6 +27,8 @@ module TorDNSEL.Util (
   , on
   , whenJust
   , forever
+  , untilM
+  , untilM_
   , inet_htoa
   , encodeBase16
   , split
@@ -73,7 +75,7 @@ import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
-import Control.Monad (liftM, zipWithM_)
+import Control.Monad (liftM, liftM2, zipWithM_, unless)
 import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
 import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
@@ -150,9 +152,20 @@ on f g x y = g x `f` g y
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
 whenJust = flip . maybe . return $ ()
 
--- | Repeat an IO action forever.
+-- | Repeat an 'IO' action forever.
 forever :: IO a -> IO ()
 forever = sequence_ . repeat
+
+-- | Repeat an 'IO' action until a predicate is satisfied, collecting the
+-- results into a list. The predicate is evaluated before the 'IO' action.
+untilM :: IO Bool -> IO a -> IO [a]
+untilM p io = loop where loop = do p' <- p
+                                   if p' then return []
+                                         else liftM2 (:) io loop
+
+-- | Like 'untilM', but ignoring the results of the 'IO' action.
+untilM_ :: IO Bool -> IO a -> IO ()
+untilM_ p io = loop where loop = p >>= flip unless (io >> loop)
 
 -- | Convert an IPv4 address to a 'String' in dotted-quad form.
 inet_htoa :: HostAddress -> String

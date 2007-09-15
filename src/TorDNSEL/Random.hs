@@ -20,7 +20,7 @@ module TorDNSEL.Random (
   , seedPRNG
   ) where
 
-import Control.Monad (unless, filterM)
+import Control.Monad (filterM)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Base as B
 import System.Directory (doesFileExist)
@@ -28,6 +28,8 @@ import System.IO (Handle, openFile, IOMode(ReadMode))
 
 import Foreign (Ptr, Word8, withForeignPtr, plusPtr)
 import Foreign.C.Types (CInt)
+
+import TorDNSEL.Util
 
 -- | Return @n@ bytes of random data, blocking until the PRNG is seeded.
 randBytes :: Handle -> Int -> IO B.ByteString
@@ -63,6 +65,3 @@ randStatus = (1 ==) `fmap` c_RAND_status
 
 foreign import ccall unsafe "openssl/rand.h RAND_status"
   c_RAND_status :: IO CInt
-
-untilM_ :: IO Bool -> IO a -> IO ()
-untilM_ p io = loop where loop = p >>= flip unless (io >> loop)
