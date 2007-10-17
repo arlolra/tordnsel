@@ -11,7 +11,7 @@
 -- Portability : non-portable (concurrency, extended exceptions,
 --                             pattern guards)
 --
--- XXX /Internals/: should only be imported by the public module and tests.
+-- /Internals/: should only be imported by the public module and tests.
 --
 -- Implements linked threads and monitors for error handling, attempting to
 -- closely reproduce their behavior in Erlang.
@@ -98,7 +98,7 @@ assertThreadMap tm =
 
 -- | An internal type used to transmit the originating 'ThreadId' in an
 -- asynchronous exception to a linked thread.
-data ExitSignal = ExitSignal !ThreadId !(ExitReason)
+data ExitSignal = ExitSignal !ThreadId !ExitReason
   deriving Typeable
 
 -- | Extract the 'ExitReason' from an 'ExitSignal' contained within a

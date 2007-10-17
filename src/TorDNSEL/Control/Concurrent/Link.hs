@@ -33,6 +33,7 @@ module TorDNSEL.Control.Concurrent.Link (
   , killThread
   , setTrapExit
   , unsetTrapExit
+  , ExitReason
   , LinkException(..)
   , showLinkException
   ) where
