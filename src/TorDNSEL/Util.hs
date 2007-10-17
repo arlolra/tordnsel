@@ -39,6 +39,7 @@ module TorDNSEL.Util (
   , ntohl
   , hGetLine
   , splitByDelimiter
+  , showException
 
   -- * Address
   , Address(..)
@@ -80,7 +81,9 @@ import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
 import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Char (intToDigit, showLitChar, isPrint, isControl)
+import Data.Dynamic (Dynamic)
 import Data.List (foldl', intersperse)
+import Data.Maybe (mapMaybe)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
 import qualified Data.ByteString.Base as B
@@ -327,6 +330,13 @@ splitByDelimiter delimiter bs = subst (-len : B.findSubstrings delimiter bs)
     subst [x]          = [B.drop (x+len) bs]
     subst []           = error "splitByDelimiter: empty list"
     len = B.length delimiter
+
+-- | Convert an exception to a string given a list of functions for displaying
+-- dynamically typed exceptions.
+showException :: [Dynamic -> Maybe String] -> E.Exception -> String
+showException fs (E.DynException dyn)
+  | str:_ <- mapMaybe ($ dyn) fs = str
+showException _ e                = show e
 
 --------------------------------------------------------------------------------
 -- Addresses
