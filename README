@@ -31,17 +31,17 @@ Presumably, users of software with built-in support for DNSBLs would configure
 
 Dependencies
 
-  TorDNSEL requires GHC 6.6. If you're running Debian unstable:
+  TorDNSEL requires GHC 6.6. If you're running Debian etch:
 
     apt-get install ghc6 libghc6-mtl-dev libghc6-network-dev libghc6-time-dev \
       libghc6-hunit-dev
 
-  Older Debians will need backports from Haskell Unsafe:
+  OpenSSL's libcrypto is required for strong random numbers:
 
-    http://haskell-unsafe.alioth.debian.org/haskell-unsafe.html
+    apt-get install libssl-dev
 
-  Otherwise, use your system's package manager or grab a binary distribution
-  from the GHC website:
+  On non-Debian systems use your system's package manager or grab a binary
+  distribution from the GHC website:
 
     http://haskell.org/ghc/download.html
 
@@ -55,8 +55,6 @@ Dependencies
 
   If you don't, you're likely to experience a segfault if you receive a
   malformed DNS message.
-
-  OpenSSL's libcrypto is required for strong random numbers.
 
 Building TorDNSEL
 
