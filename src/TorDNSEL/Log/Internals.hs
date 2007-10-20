@@ -15,6 +15,7 @@
 --
 -----------------------------------------------------------------------------
 
+-- #not-home
 module TorDNSEL.Log.Internals where
 
 import Prelude hiding (log)
@@ -27,6 +28,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import Text.Printf (hPrintf)
 
 import TorDNSEL.Control.Concurrent.Link
+import TorDNSEL.Util
 
 -- | The logging configuration.
 data LogConfig = LogConfig
@@ -46,7 +48,7 @@ instance Show LogTarget where
 data LogMessage
   = Log UTCTime Severity String          -- ^ A log message
   | Reconfigure (LogConfig -> LogConfig) -- ^ Reconfigure the logger
-  | Terminate                            -- ^ Terminate the logger gracefully
+  | Terminate ExitReason                 -- ^ Terminate the logger gracefully
 
 -- | Logging severities.
 data Severity = Debug | Info | Notice | Warn | Error
@@ -62,7 +64,7 @@ logChan = unsafePerformIO newChan
 startLogger :: LogConfig -> IO ThreadId
 startLogger config =
   forkLinkIO $ do
-    setTrapExit $ \_ _ -> terminateLogger
+    setTrapExit . const $ writeChan logChan . Terminate
     openLogHandle config >>= loop config
   where
     loop c h = do
@@ -79,14 +81,13 @@ startLogger config =
               E.throwIO e
           loop c h
 
-        Reconfigure reconf
-          | isFileTarget c -> hClose h >> openLogHandle c' >>= loop c'
-          | otherwise      -> hFlush h >> openLogHandle c' >>= loop c'
-          where c' = reconf c
+        Reconfigure reconf -> do
+          (if isFileTarget c then hClose else hFlush) h
+          let c' = reconf c in openLogHandle c' >>= loop c'
 
-        Terminate
-          | isFileTarget c -> hClose h
-          | otherwise      -> hFlush h
+        Terminate reason -> do
+          (if isFileTarget c then hClose else hFlush) h
+          whenJust reason E.throwIO
 
     openLogHandle c = case logTarget c of
       ToStdErr    -> return stderr
@@ -109,4 +110,4 @@ reconfigureLogger = writeChan logChan . Reconfigure
 -- | Terminate the logger gracefully: process any pending messages, flush the
 -- log handle, and close the handle when logging to a file.
 terminateLogger :: IO ()
-terminateLogger = writeChan logChan Terminate
+terminateLogger = writeChan logChan $ Terminate Nothing
