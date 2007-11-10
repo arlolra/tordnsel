@@ -169,7 +169,7 @@ encodeMessage = Packet . B.concat . L.toChunks . runPutMessage . putPacket
 -- | Decode a DNS message strictly, returning @'Just' _@ if parsing succeeded.
 decodeMessage :: Packet -> IO (Maybe Message)
 decodeMessage pkt = do
-  r <- E.try (E.evaluate $!! unsafeDecodeMessage pkt)
+  r <- E.tryJust syncExceptions (E.evaluate $!! unsafeDecodeMessage pkt)
   return $ either (const Nothing) Just r
 
 -- | Lazily decode a DNS message. If parsing fails, the result will contain an

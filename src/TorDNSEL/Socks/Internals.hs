@@ -146,7 +146,8 @@ encodeRequest = B.concat . L.toChunks . runPut . putRequest
 -- | Decode a Socks4 response.
 decodeResponse :: ByteString -> IO (Maybe Response)
 decodeResponse resp = do
-  r <- E.try (E.evaluate $!! runGet getResponse (L.fromChunks [resp]))
+  r <- E.tryJust syncExceptions
+                 (E.evaluate $!! runGet getResponse (L.fromChunks [resp]))
   return $ either (const Nothing) Just r
   where
     getResponse = do

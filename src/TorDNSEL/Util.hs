@@ -33,6 +33,7 @@ module TorDNSEL.Util (
   , encodeBase16
   , split
   , ignoreJust
+  , syncExceptions
   , exitLeft
   , inBoundsOf
   , htonl
@@ -187,6 +188,11 @@ split x = takeWhile (not . B.null) . map (B.take x) . iterate (B.drop x)
 -- | Catch and discard exceptions matching the predicate.
 ignoreJust :: (E.Exception -> Maybe a) -> IO () -> IO ()
 ignoreJust p = E.handleJust p . const . return $ ()
+
+-- | A predicate matching synchronous exceptions.
+syncExceptions :: E.Exception -> Maybe E.Exception
+syncExceptions (E.AsyncException _) = Nothing
+syncExceptions e                    = Just e
 
 -- | Lift an @Either String@ computation into the 'IO' monad by printing
 -- @Left e@ as an error message and exiting.

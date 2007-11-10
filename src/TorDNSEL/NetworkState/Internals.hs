@@ -840,7 +840,8 @@ readExitAddresses stateDir =
     addrs fp = (map (eaRouterID &&& id) .
                  parseSubDocs (b 8 "ExitNode"#) parseExitAddress .
                  parseDocument . B.lines) `fmap`
-               (B.readFile (stateDir ++ fp) `E.catch` const (return B.empty))
+               E.catchJust E.ioErrors (B.readFile (stateDir ++ fp))
+                                      (const $ return B.empty)
 
 -- | On startup, and when the journal becomes too large, replace the
 -- exit-addresses file with our most current test results and clear the journal.
