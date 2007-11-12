@@ -28,7 +28,7 @@ Other-Modules:   TorDNSEL.Config, TorDNSEL.Config.Internals, TorDNSEL.Control,
   TorDNSEL.Statistics, TorDNSEL.Statistics.Internals, TorDNSEL.System.Timeout,
   TorDNSEL.Util
 HS-Source-Dirs:  src
-Includes:        openssl/rand.h
+Includes:        openssl/rand.h, netinet/in.h
 Extra-Libraries: crypto
 GHC-Options:     -O2 -Wall -Werror
 
@@ -38,6 +38,6 @@ Main-Is:         runtests.hs
 Other-Modules:   TorDNSEL.Config.Tests, TorDNSEL.Directory.Tests,
   TorDNSEL.DNS.Tests, TorDNSEL.DNS.Handler.Tests
 HS-Source-Dirs:  src
-Includes:        openssl/rand.h
+Includes:        openssl/rand.h, netinet/in.h
 Extra-Libraries: crypto
 GHC-Options:     -fasm -Wall -Werror -fno-warn-missing-signatures

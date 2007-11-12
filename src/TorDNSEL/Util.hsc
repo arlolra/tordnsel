@@ -68,6 +68,10 @@ module TorDNSEL.Util (
   , unescLen
   , escape
   , showEscaped
+
+  -- * Constants
+  , tcpProtoNum
+  , udpProtoNum
   ) where
 
 import Control.Arrow ((&&&), second)
@@ -93,7 +97,7 @@ import Data.Time
   ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
   , timeOfDayToTime, timeToTimeOfDay )
 import Data.Word (Word16, Word32)
-import Network.Socket (HostAddress)
+import Network.Socket (HostAddress, ProtocolNumber)
 import System.Environment (getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, stderr)
@@ -108,6 +112,8 @@ import GHC.IOBase
 import Data.Binary (Binary(..))
 
 import TorDNSEL.DeepSeq
+
+#include <netinet/in.h>
 
 --------------------------------------------------------------------------------
 -- Parsing functions
@@ -468,3 +474,10 @@ showEscaped maxLen (Escaped s len)
                           ("[truncated, " ++) . shows len . (" total bytes]" ++)
   | otherwise           = quote (B.unpack s ++)
   where quote f = ('"':) . f . ('"':)
+
+--------------------------------------------------------------------------------
+-- Constants
+
+tcpProtoNum, udpProtoNum :: ProtocolNumber
+tcpProtoNum = #{const IPPROTO_TCP}
+udpProtoNum = #{const IPPROTO_UDP}
