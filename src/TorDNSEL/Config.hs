@@ -14,11 +14,11 @@
 -----------------------------------------------------------------------------
 
 module TorDNSEL.Config (
-    Config
-  , ConfigValue(..)
-  , parseConfig
+    Config(..)
+  , TestConfig(..)
+  , parseConfigFile
   , parseConfigArgs
-  , fillInConfig
+  , makeConfig
   ) where
 
 import TorDNSEL.Config.Internals

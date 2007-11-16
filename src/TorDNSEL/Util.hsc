@@ -19,9 +19,11 @@
 module TorDNSEL.Util (
   -- * Parsing functions
     readInt
+  , readInteger
   , inet_atoh
   , parseUTCTime
   , parseLocalTime
+  , onFailure
 
   -- * Miscellaneous functions
   , on
@@ -81,7 +83,7 @@ import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
-import Control.Monad (liftM, liftM2, zipWithM_, unless)
+import Control.Monad (liftM, liftM2, zipWithM_, when, unless)
 import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
 import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
@@ -122,17 +124,24 @@ import TorDNSEL.DeepSeq
 -- monad if parsing fails.
 readInt :: Monad m => ByteString -> m Int
 readInt bs = case B.readInt bs of
-  Just (x,_) -> return x
-  _          -> fail ("Parsing integer " ++ show bs ++ " failed.")
+  Just (int,rest) | B.null rest -> return int
+  _                             -> fail ("Invalid integer " ++ show bs ++ ".")
+
+-- | Parse an 'Integer' from a 'B.ByteString'. Return the result or 'fail' in
+-- the monad if parsing fails.
+readInteger :: Monad m => ByteString -> m Integer
+readInteger bs = case B.readInteger bs of
+  Just (int,rest) | B.null rest -> return int
+  _                             -> fail ("Invalid integer " ++ show bs ++ ".")
 
 -- | Convert an IPv4 address in dotted-quad form to a 'HostAddress'. Returns the
 -- result or 'fail' in the monad if the format is invalid.
 inet_atoh :: Monad m => ByteString -> m HostAddress
 inet_atoh bs
   | Just os@[_,_,_,_] <- mapM readInt $ B.split '.' bs
-  , all (\o -> 0 <= o && o <= 0xff) os
+  , all (\o -> o .&. 0xff == o) os
   = return . foldl' (.|.) 0 . zipWith shiftL (map fromIntegral os) $ [24,16..]
-inet_atoh bs = fail ("Invalid IP address " ++ show bs)
+inet_atoh bs = fail ("Invalid IP address " ++ show bs ++ ".")
 
 -- | Parse a UTCTime in this format: \"YYYY-MM-DD HH:MM:SS\".
 parseUTCTime :: Monad m => ByteString -> m UTCTime
@@ -142,13 +151,18 @@ parseUTCTime bs = do
 
 -- | Parse a LocalTime in this format: \"YYYY-MM-DD HH:MM:SS\".
 parseLocalTime :: Monad m => ByteString -> m LocalTime
-parseLocalTime bs = do
+parseLocalTime bs = onFailure (const $ "Invalid time " ++ show bs ++ ".") $ do
   [date,time]       <- return       $ B.split ' ' bs
   [year,month,day]  <- mapM readInt $ B.split '-' date
   [hour,minute,sec] <- mapM readInt $ B.split ':' time
+  when (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 ||
+        hour > 23 || minute < 0 || minute > 59 || sec < 0 || sec > 61) $ fail ""
   let diff = fromInteger . toInteger $ hour * 3600 + minute * 60 + sec
   return $! LocalTime (fromGregorian (toInteger year) month day)
                       (timeToTimeOfDay diff)
+
+onFailure :: Monad m => ShowS -> Either String a -> m a
+onFailure f = either (fail . f) return
 
 --------------------------------------------------------------------------------
 -- Miscellaneous functions
@@ -391,7 +405,8 @@ instance DeepSeq Port where
 -- | Parse a port, 'fail'ing in the monad if parsing fails.
 parsePort :: Monad m => ByteString -> m Port
 parsePort bs = do
-  (port,int) <- (fromIntegral &&& id) `liftM` readInt bs
+  (port,int) <- onFailure (const $ "Invalid port " ++ show bs ++ ".") $
+                          (fromIntegral &&& id) `liftM` readInt bs
   if int `inBoundsOf` port
     then return port
     else fail ("Port " ++ show int ++ " is out of range.")

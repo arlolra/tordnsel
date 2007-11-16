@@ -40,7 +40,6 @@ config = toConfig
   , "SOARName"               ~> "hostmaster.example.com."
   , "ChangeRootDirectory"    ~> "/var/lib/tordnsel"
   , "ConcurrentExitTests"    ~> "128"
-  , "ConfigFile"             ~> "/etc/tordnsel/tordnsel.conf"
   , "DNSListenAddress"       ~> "127.0.0.1:53"
   , "Group"                  ~> "tordnsel"
   , "PIDFile"                ~> "/var/run/tordnsel.pid"
@@ -114,10 +113,6 @@ configFile = B.pack
   \## Write our PID to the specified file before chrooting or dropping\n\
   \## privileges. This file won't be removed on exit.\n\
   \PIDFile /var/run/tordnsel.pid\n\
-  \\n\
-  \## Include another config file, using options in this file when duplicates\n\
-  \## are encountered. You probably don't want to do this.\n\
-  \ConfigFile /etc/tordnsel/tordnsel.conf\n\
   \\n\
   \## Make at most this number of concurrent test connections through exit\n\
   \## nodes. By default this is set to 0, that is, we don't perform any tests.\n\

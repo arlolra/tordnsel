@@ -583,10 +583,10 @@ isReadingExitTestChan (ExitTestChan _ reading) = isEmptyMVar reading
 -- | Bind the listening sockets we're going to use for incoming exit tests. This
 -- action exists so we can listen on privileged ports prior to dropping
 -- privileges. The address and ports should be in host order.
-bindListeningSockets :: ProtocolNumber -> HostAddress -> [Port] -> IO [Socket]
-bindListeningSockets tcp listenAddr listenPorts =
+bindListeningSockets :: HostAddress -> [Port] -> IO [Socket]
+bindListeningSockets listenAddr listenPorts =
   forM listenPorts $ \port -> do
-    sock <- socket AF_INET Stream tcp
+    sock <- socket AF_INET Stream tcpProtoNum
     setSocketOption sock ReuseAddr 1
     bindSocket sock (SockAddrInet (fromIntegral port) (htonl listenAddr))
     listen sock sOMAXCONN
@@ -596,8 +596,7 @@ bindListeningSockets tcp listenAddr listenPorts =
 data ExitTestConfig = ExitTestConfig
   { etChan        :: ExitTestChan
   , etNetwork     :: Network
-  , etTcp         :: ProtocolNumber
-  , etConcTests   :: Int
+  , etConcTests   :: Integer
   , etSocksServer :: SockAddr
   , etListenSocks :: [Socket]
   , etTestAddr    :: HostAddress
@@ -605,7 +604,7 @@ data ExitTestConfig = ExitTestConfig
   , etRandom      :: Handle }
 
 -- | Fork all our exit test listeners.
-startTestListeners :: Network -> [Socket] -> Int -> IO ()
+startTestListeners :: Network -> [Socket] -> Integer -> IO ()
 startTestListeners net listenSockets concTests = do
   -- We need to keep the number of open FDs below FD_SETSIZE as long as GHC uses
   -- select instead of epoll or kqueue. Client sockets waiting in this channel
@@ -614,10 +613,10 @@ startTestListeners net listenSockets concTests = do
   clients <- atomically $ newBoundedTChan 64
 
   forM_ listenSockets $ \sock -> forkIO . forever $ do
-    (client,(SockAddrInet _ addr)) <- accept sock
+    (client,SockAddrInet _ addr) <- accept sock
     atomically $ writeBoundedTChan clients (client, ntohl addr)
 
-  replicateM_ concTests . forkIO . forever $ do
+  replicateM_ (fromInteger concTests) . forkIO . forever $ do
     (client,addr) <- atomically $ readBoundedTChan clients
     handle <- socketToHandle client ReadWriteMode
     timeout (30 * 10^6) . ignoreJust E.ioErrors $ do
@@ -638,7 +637,7 @@ startExitTests :: ExitTestConfig -> IO ()
 startExitTests conf@ExitTestConfig { etChan = ExitTestChan chan reading } = do
   startTestListeners (etNetwork conf) (etListenSocks conf) (etConcTests conf)
 
-  replicateM_ (etConcTests conf) . forkIO . forever $ do
+  replicateM_ (fromInteger $ etConcTests conf) . forkIO . forever $ do
     (rid,mbPort) <- withMVar reading (const $ readChan chan)
     s <- readNetworkState . etNetwork $ conf
     let mbTest = do
@@ -690,7 +689,7 @@ startExitTests conf@ExitTestConfig { etChan = ExitTestChan chan reading } = do
 
     repeatConnectSocks = do
       r <- E.tryJust E.ioErrors $
-        E.bracketOnError (socket AF_INET Stream (etTcp conf)) sClose $ \sock ->
+        E.bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock ->
           connect sock (etSocksServer conf) >> socketToHandle sock ReadWriteMode
       -- When connecting to Tor's socks port fails, wait five seconds
       -- and try again.

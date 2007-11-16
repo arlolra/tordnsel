@@ -33,6 +33,7 @@ module TorDNSEL.Main (
 
   -- * Helpers
   , checkStateDirectory
+  , exit
   , liftMb
   , b
   , chroot
@@ -44,16 +45,13 @@ import Control.Monad (when, unless, liftM, forM_)
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
-import Data.Char (toLower)
 import Data.Dynamic (fromDynamic)
 import qualified Data.Map as M
-import Data.Map ((!))
 import Data.Maybe (isJust)
 import System.Environment (getArgs)
 import System.IO
   ( openFile, hPutStr, hPutStrLn, hFlush, hClose, stderr
   , IOMode(WriteMode, ReadWriteMode) )
-import Network.BSD (getProtocolNumber, ProtocolNumber)
 import Network.Socket
   ( socket, sClose, connect, bindSocket, setSocketOption, socketToHandle
   , SockAddr, Family(AF_INET), SocketType(Datagram, Stream)
@@ -76,7 +74,7 @@ import System.Posix.Types (UserID, GroupID)
 import System.Posix.User
   ( getEffectiveUserID, UserEntry(userID), GroupEntry(groupID)
   , getUserEntryForName, getGroupEntryForName, setUserID, setGroupID )
-import Foreign.C (CString, CInt)
+import Foreign.C (CString, CInt, withCString)
 
 import GHC.Prim (Addr#)
 
@@ -95,96 +93,86 @@ import TorDNSEL.Util
 -- and exit test threads, and starting the DNS server.
 main :: IO ()
 main = do
-  conf <- exitLeft . fillInConfig =<< parseConfig =<< exitLeft . parseConfigArgs
-                                                  =<< getArgs
-
-  dnsSockAddr     <- conf <! "dnslistenaddress"#
-  controlSockAddr <- conf <! "torcontroladdress"#
-  runAsDaemon     <- conf <! "runasdaemon"#
-  address         <- exitLeft . parse `liftMb` b "address"# `M.lookup` conf
-
-  let [user,group,newRoot,pidFile,dataDir,password] = map (`M.lookup` conf)
-        [ b "user"#, b "group"#, b "changerootdirectory"#, b "pidfile"#
-        , b "tordatadirectory"#, b "torcontrolpassword"# ]
+  conf <- do
+    conf <- exitLeft . parseConfigArgs =<< getArgs
+    case b "configfile"# `M.lookup` conf of
+      Just fp -> do
+        file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp)
+          (exit . ("Opening config file failed: " ++) . show)
+        exitLeft $ makeConfig . M.union conf =<< parseConfigFile file
+      Nothing -> exitLeft $ makeConfig conf
 
   euid <- getEffectiveUserID
-  when (any isJust [user, group, newRoot] && euid /= 0) $
-    failMsg "You must be root to drop privileges or chroot."
+  when (any (isJust . ($ conf)) [cfUser, cfGroup, cfChangeRootDirectory] &&
+        euid /= 0) $ exit "You must be root to drop privileges or chroot."
 
-  ids <- getIDs user group
+  ids <- getIDs (cfUser conf) (cfGroup conf)
 
-  stateDir <- conf <! "statedirectory"#
-  checkStateDirectory (fst ids) newRoot stateDir
+  checkStateDirectory (fst ids) (cfChangeRootDirectory conf)
+                      (cfStateDirectory conf)
 
-  tcp <- getProtocolNumber "tcp"
-
-  concTests <- conf <! "concurrentexittests"#
-  testConf <- do
-    if concTests <= 0 then return Nothing else do
-
-    socksSockAddr <- conf <! "torsocksaddress"#
-    (testListenAddr,testListenPorts) <- conf <! "testlistenaddress"#
-    (testDestAddr,testDestPorts) <- conf <! "testdestinationaddress"#
-
-    testSockets <- bindListeningSockets tcp testListenAddr testListenPorts
-
+  testConf <- flip liftMb (cfTestConfig conf) $ \testConf -> do
+    testSocks <- uncurry bindListeningSockets $ tcfTestListenAddress testConf
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
-
-    return . Just $ ExitTestConfig
-      { etConcTests   = concTests
-      , etSocksServer = socksSockAddr
-      , etListenSocks = testSockets
-      , etTestAddr    = testDestAddr
-      , etTestPorts   = testDestPorts
+    return ExitTestConfig
+      { etConcTests   = tcfConcurrentExitTests testConf
+      , etSocksServer = cfTorSocksAddress conf
+      , etListenSocks = testSocks
+      , etTestAddr    = fst $ tcfTestDestinationAddress testConf
+      , etTestPorts   = snd $ tcfTestDestinationAddress testConf
       , etRandom      = random }
 
   authSecret <- fmap encodeBase16 `fmap`
-    case (dataDir, password) of
-      (Just dir,_)    ->
-        Just `fmap` B.readFile (B.unpack dir ++ "/control_auth_cookie")
+    case (cfTorDataDirectory conf, cfTorControlPassword conf) of
+      (Just dir,_) ->
+         E.catchJust E.ioErrors
+           (Just `fmap` B.readFile (dir ++ "/control_auth_cookie"))
+           (exit . ("Opening control auth cookie failed: " ++) . show)
       (_,Just passwd) -> return (Just passwd)
       _               -> return Nothing
 
-  pidHandle <- flip openFile WriteMode . B.unpack `liftMb` pidFile
+  pidHandle <- E.catchJust E.ioErrors
+                 (flip openFile WriteMode `liftMb` cfPIDFile conf)
+                 (exit . ("Opening PID file failed: " ++) . show)
 
-  sock <- socket AF_INET Datagram =<< getProtocolNumber "udp"
-  setSocketOption sock ReuseAddr 1
-  bindSocket sock dnsSockAddr
+  sock <- E.handleJust E.ioErrors
+          (exit . ("Binding DNS socket failed: " ++) . show) $ do
+    sock <- socket AF_INET Datagram udpProtoNum
+    setSocketOption sock ReuseAddr 1
+    bindSocket sock $ cfDNSListenAddress conf
+    return sock
 
   -- We lose any other running threads when we 'forkProcess', so don't 'forkIO'
   -- before this point.
-  (if runAsDaemon then daemonize else id) $ do
+  (if cfRunAsDaemon conf then daemonize else id) $ do
 
     whenJust pidHandle $ \handle -> do
       hPutStr handle . show =<< getProcessID
       hClose handle
 
-    whenJust newRoot $ \dir -> do
+    whenJust (cfChangeRootDirectory conf) $ \dir -> do
       changeRootDirectory dir
       setCurrentDirectory "/"
 
     dropPrivileges ids
 
-    topLevelThread <- myThreadId
+    mainThread <- myThreadId
     forM_ [sigINT, sigTERM] $ \signal ->
       flip (installHandler signal) Nothing . Catch $ do
-        unlinkStatsSocket stateDir
-        E.throwTo topLevelThread (E.ExitException ExitSuccess)
+        unlinkStatsSocket $ cfStateDirectory conf
+        E.throwTo mainThread (E.ExitException ExitSuccess)
 
-    statsHandle <- openStatsListener stateDir
+    statsHandle <- openStatsListener $ cfStateDirectory conf
 
-    let authLabels  = toLabels $ conf ! b "authoritativezone"#
-        authZone    = DomainName authLabels
-        revAuthZone = DomainName $ reverse authLabels
-        rName       = DomainName . toLabels $ conf ! b "soarname"#
-        myName      = DomainName . toLabels $ conf ! b "domainname"#
+    let DomainName authLabels = cfAuthoritativeZone conf
         dnsConf = DNSConfig
-          { dnsAuthZone = revAuthZone
-          , dnsMyName   = myName
-          , dnsSOA      = SOA authZone ttl myName rName 0 ttl ttl ttl ttl
-          , dnsNS       = NS authZone ttl myName
-          , dnsA        = A authZone ttl `fmap` address
+          { dnsAuthZone = DomainName $ reverse authLabels
+          , dnsMyName   = cfDomainName conf
+          , dnsSOA      = SOA (cfAuthoritativeZone conf) ttl (cfDomainName conf)
+                              (cfSOARName conf) 0 ttl ttl ttl ttl
+          , dnsNS       = NS (cfAuthoritativeZone conf) ttl (cfDomainName conf)
+          , dnsA        = A (cfAuthoritativeZone conf) ttl `fmap` cfAddress conf
           , dnsStats    = incrementResponses statsHandle }
 
     net <- case testConf of
@@ -194,20 +182,19 @@ main = do
         let acceptsPort = flip $ exitPolicyAccepts (etTestAddr testConf')
             allowsExit policy = any (acceptsPort policy) (etTestPorts testConf')
 
-        net <- newNetwork $ Just (exitTestChan, stateDir, allowsExit)
+        net <- newNetwork $ Just (exitTestChan,cfStateDirectory conf,allowsExit)
         startExitTests $ testConf'
           { etChan    = exitTestChan
-          , etNetwork = net
-          , etTcp     = tcp }
+          , etNetwork = net }
         return net
       _ ->
         newNetwork Nothing
 
-    let controller = torController net controlSockAddr authSecret tcp
+    let controller = torController net (cfTorControlAddress conf) authSecret
     installHandler sigPIPE Ignore Nothing
     forkIO . forever . E.catchJust connExceptions controller $ \e -> do
       -- XXX this should be logged
-      unless runAsDaemon $ do
+      unless (cfRunAsDaemon conf) $ do
         hPutStrLn stderr (showConnException e) >> hFlush stderr
       threadDelay (5 * 10^6)
 
@@ -216,7 +203,7 @@ main = do
       (runServer sock (incrementBytes statsHandle) (dnsHandler dnsConf net)) $
         \e -> do
           -- XXX this should be logged
-          unless runAsDaemon $
+          unless (cfRunAsDaemon conf) $
             hPutStrLn stderr (show e) >> hFlush stderr
           threadDelay (5 * 10^6)
   where
@@ -231,20 +218,12 @@ main = do
       = "Tor control error: " ++ show e'
     showConnException _ = "bug: unknown exception type"
 
-    toLabels = map Label . reverse . dropWhile B.null . reverse .
-      B.split '.' . B.map toLower
-
-    conf <! addr = exitLeft . parse $ conf ! b addr
-
-    failMsg = exitLeft . Left
-
 -- | Connect to Tor using the controller interface. Initialize our network state
 -- with all the routers Tor knows about and register asynchronous events to
 -- notify us and update the state when updated router info comes in.
-torController
-  :: Network -> SockAddr -> Maybe ByteString -> ProtocolNumber -> IO ()
-torController net control authSecret tcp = do
-  sock <- E.bracketOnError (socket AF_INET Stream tcp) sClose $ \sock ->
+torController :: Network -> SockAddr -> Maybe ByteString -> IO ()
+torController net control authSecret = do
+  sock <- E.bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock ->
             connect sock control >> return sock
   handle <- socketToHandle sock ReadWriteMode
   withConnection handle $ \conn -> do
@@ -258,23 +237,24 @@ torController net control authSecret tcp = do
     waitForConnection conn
 
 -- | Set up the state directory with proper ownership and permissions.
-checkStateDirectory :: Maybe UserID -> Maybe ByteString -> FilePath -> IO ()
-checkStateDirectory uid newRoot stateDir = do
-  createDirectoryIfMissing True stateDir'
-  desiredUID <- maybe getEffectiveUserID return uid
-  st <- getFileStatus stateDir'
-  when (fileOwner st /= desiredUID) $
-    setOwnerAndGroup stateDir' desiredUID (-1)
-  when (fileMode st .&. 0o700 /= 0o700) $
-    setFileMode stateDir' (fileMode st .|. 0o700)
-  where stateDir' = maybe "" (B.unpack . flip B.snoc '/') newRoot ++ stateDir
+checkStateDirectory :: Maybe UserID -> Maybe FilePath -> FilePath -> IO ()
+checkStateDirectory uid newRoot stateDir =
+  E.handleJust E.ioErrors
+    (exit . ("Preparing state directory failed: " ++) . show) $ do
+      createDirectoryIfMissing True stateDir'
+      desiredUID <- maybe getEffectiveUserID return uid
+      st <- getFileStatus stateDir'
+      when (fileOwner st /= desiredUID) $
+        setOwnerAndGroup stateDir' desiredUID (-1)
+      when (fileMode st .&. 0o700 /= 0o700) $
+        setFileMode stateDir' (fileMode st .|. 0o700)
+  where stateDir' = maybe id ((++) . (++ "/")) newRoot stateDir
 
 -- | Lookup the UID and GID for a pair of user and group names.
-getIDs
-  :: Maybe ByteString -> Maybe ByteString -> IO (Maybe UserID, Maybe GroupID)
+getIDs :: Maybe String -> Maybe String -> IO (Maybe UserID, Maybe GroupID)
 getIDs user group = do
-  userEntry <- getUserEntryForName . B.unpack `liftMb` user
-  groupEntry <- getGroupEntryForName . B.unpack `liftMb` group
+  userEntry <- getUserEntryForName `liftMb` user
+  groupEntry <- getGroupEntryForName `liftMb` group
   return (userID `fmap` userEntry, groupID `fmap` groupEntry)
 
 -- | Drop privileges to the given UID\/GID pair.
@@ -285,10 +265,10 @@ dropPrivileges (uid,gid) = do
 
 -- | Call chroot(2) using the given directory path. Throws an 'IOError' if the
 -- call fails.
-changeRootDirectory :: ByteString -> IO ()
+changeRootDirectory :: FilePath -> IO ()
 changeRootDirectory dir =
-  B.useAsCString dir $ \s ->
-    throwErrnoPathIfMinus1_ "changeRootDirectory" (B.unpack dir) (chroot s)
+  withCString dir $ \s ->
+    throwErrnoPathIfMinus1_ "changeRootDirectory" dir (chroot s)
 
 -- | Run an IO action as a daemon. This action doesn't return.
 daemonize :: IO () -> IO ()
@@ -306,6 +286,10 @@ daemonize io = do
     exitImmediately ExitSuccess
   exitImmediately ExitSuccess
   where stdFds = [stdInput, stdOutput, stdError]
+
+-- | Print the given string as an error message and exit.
+exit :: String -> IO a
+exit = exitLeft . Left
 
 -- | Lift a 'Maybe' into a monadic action.
 liftMb :: Monad m => (a -> m b) -> Maybe a -> m (Maybe b)
