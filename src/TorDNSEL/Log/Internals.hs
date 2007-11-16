@@ -20,8 +20,10 @@ module TorDNSEL.Log.Internals where
 
 import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
+import Control.Concurrent.MVar
+  (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, withMVar, readMVar, swapMVar)
 import qualified Control.Exception as E
-import Control.Monad (when)
+import Control.Monad (when, liftM2)
 import Data.Time (UTCTime, getCurrentTime)
 import System.IO (stdout, stderr, openFile, IOMode(AppendMode), hFlush, hClose)
 import System.IO.Unsafe (unsafePerformIO)
@@ -34,7 +36,8 @@ import TorDNSEL.Util
 data LogConfig = LogConfig
   { minSeverity :: !Severity  -- ^ Minimum severity level to log
   , logTarget   :: !LogTarget -- ^ Where to send log messages
-  }
+  , logEnabled  :: !Bool      -- ^ Is logging enabled?
+  } deriving Show
 
 -- | Where log messages should be sent.
 data LogTarget = ToStdOut | ToStdErr | ToFile FilePath
@@ -54,36 +57,50 @@ data LogMessage
 data Severity = Debug | Info | Notice | Warn | Error
   deriving (Eq, Ord, Show)
 
--- | A global channel for all messages sent to the logger.
-logChan :: Chan LogMessage
-{-# NOINLINE logChan #-}
-logChan = unsafePerformIO newChan
+-- | The logger's 'ThreadId' and channel, if it is running.
+logger :: MVar (Maybe (ThreadId, Chan LogMessage))
+{-# NOINLINE logger #-}
+logger = unsafePerformIO $ newMVar Nothing
+
+-- | Write a message to the log channel, if the logger is currently running.
+writeLogChan :: LogMessage -> IO ()
+writeLogChan msg = do
+  mbLogger <- readMVar logger
+  whenJust mbLogger $ flip writeChan msg . snd
 
 -- | Start the global logger with an initial 'LogConfig', returning its
 -- 'ThreadId'. Link the logger to the calling thread.
 startLogger :: LogConfig -> IO ThreadId
 startLogger config =
   forkLinkIO $ do
+    (loggerId,logChan) <- liftM2 (,) myThreadId newChan
     setTrapExit . const $ writeChan logChan . Terminate
-    openLogHandle config >>= loop config
+    sync <- newEmptyMVar
+    forkLinkIO $ do
+      loggerDead <- newEmptyMVar
+      setTrapExit . const $ putMVar loggerDead
+      putMVar sync ()
+      takeMVar loggerDead
+      withMVar logger $ \mbLogger ->
+        case mbLogger of
+          Just (loggerId',_) | loggerId == loggerId' -> return Nothing
+          _                                          -> return mbLogger
+    takeMVar sync
+    swapMVar logger $ Just (loggerId, logChan)
+    openLogHandle config >>= loop logChan config
   where
-    loop c h = do
+    loop logChan c h = do
       msg <- readChan logChan
       case msg of
         Log time severity logMsg -> do
-          when (severity >= minSeverity c) $
+          when (logEnabled c && severity >= minSeverity c) $
             hPrintf h "%s [%s] %s\n" (show time) (show severity) logMsg
-              `E.catch` \e -> do
-              log Warn $ "Error writing log to " ++ show (logTarget c) ++
-                         ": " ++ show e
-              when (isFileTarget c) $
-                hClose h
-              E.throwIO e
-          loop c h
+              `E.catch` \e -> when (isFileTarget c) (hClose h) >> E.throwIO e
+          loop logChan c h
 
         Reconfigure reconf -> do
           (if isFileTarget c then hClose else hFlush) h
-          let c' = reconf c in openLogHandle c' >>= loop c'
+          let c' = reconf c in openLogHandle c' >>= loop logChan c'
 
         Terminate reason -> do
           (if isFileTarget c then hClose else hFlush) h
@@ -101,13 +118,13 @@ startLogger config =
 log :: Severity -> String -> IO ()
 log severity msg = do
   now <- getCurrentTime
-  writeChan logChan $ Log now severity msg
+  writeLogChan $ Log now severity msg
 
 -- | Reconfigure the logger with the given function.
 reconfigureLogger :: (LogConfig -> LogConfig) -> IO ()
-reconfigureLogger = writeChan logChan . Reconfigure
+reconfigureLogger = writeLogChan . Reconfigure
 
 -- | Terminate the logger gracefully: process any pending messages, flush the
 -- log handle, and close the handle when logging to a file.
 terminateLogger :: IO ()
-terminateLogger = writeChan logChan $ Terminate Nothing
+terminateLogger = writeLogChan $ Terminate Nothing
