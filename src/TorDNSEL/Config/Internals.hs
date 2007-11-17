@@ -255,12 +255,12 @@ parseConfigFile = liftM (M.fromList . catMaybes) . mapM parseLine . B.lines
   where
     parseLine line
       | B.null line' = return Nothing
-      | item `S.notMember` knownConfigItems
+      | lcItem `S.notMember` knownConfigItems
       = fail ("Unknown config option " ++ show item ++ ".")
-      | otherwise    = return $ Just (item, value)
+      | otherwise    = return $ Just (lcItem, value)
       where
-        (item,value) = (B.map toLower *** B.dropWhile isSpace) .
-                        B.break isSpace $ line'
+        lcItem = B.map toLower item
+        (item,value) = second (B.dropWhile isSpace) . B.break isSpace $ line'
         (line',_) = B.spanEnd isSpace . B.takeWhile (/= '#') $ line
 
 -- | Given a list of command line arguments, return a map from config item to
