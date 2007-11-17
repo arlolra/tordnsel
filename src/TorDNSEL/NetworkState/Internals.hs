@@ -109,7 +109,7 @@ import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
 import Network.Socket
-  ( Socket, ProtocolNumber, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
+  ( Socket, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
   , SocketOption(ReuseAddr), SocketType(Stream), socket, connect, bindSocket
   , listen, accept, setSocketOption, sOMAXCONN, socketToHandle, sClose )
 import System.Directory (renameFile)
