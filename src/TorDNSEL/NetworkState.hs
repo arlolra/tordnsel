@@ -33,7 +33,7 @@ module TorDNSEL.NetworkState (
   , ExitTestConfig(..)
   , ExitTestChan
   , newExitTestChan
-  , bindListeningSockets
+  , bindListeningSocket
   , startExitTests
   ) where
 

@@ -100,9 +100,3 @@ Running TorDNSEL practically
 
   update-rc.d tordnsel defaults
   /etc/init.d/tordnsel start
-
-Common configuration problems
-
-  This indicates that you're trying to bind to a port that is already bound:
-
-    tordnsel: bind: resource busy (Address already in use)

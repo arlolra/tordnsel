@@ -42,7 +42,7 @@ module TorDNSEL.Main (
 
 import Control.Concurrent (forkIO, threadDelay, myThreadId)
 import qualified Control.Exception as E
-import Control.Monad (when, unless, liftM, forM_)
+import Control.Monad (when, unless, liftM, forM, forM_)
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
@@ -137,7 +137,12 @@ main = do
                       (cfStateDirectory conf)
 
   testConf <- flip liftMb (cfTestConfig conf) $ \testConf -> do
-    testSocks <- uncurry bindListeningSockets $ tcfTestListenAddress testConf
+    testSocks <- forM (snd $ tcfTestListenAddress testConf) $ \port ->
+      E.catchJust E.ioErrors
+        (bindListeningSocket (fst $ tcfTestListenAddress testConf) port)
+        (\e -> exit $ "Binding listening socket to port " ++ show port ++
+                      " failed: " ++ show e)
+
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
     return ExitTestConfig

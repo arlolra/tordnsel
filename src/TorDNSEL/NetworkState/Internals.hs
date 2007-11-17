@@ -59,7 +59,7 @@ module TorDNSEL.NetworkState.Internals (
   , addExitTest
   , isReadingExitTestChan
   , ExitTestConfig(..)
-  , bindListeningSockets
+  , bindListeningSocket
   , startTestListeners
   , startExitTests
 
@@ -87,7 +87,7 @@ module TorDNSEL.NetworkState.Internals (
   ) where
 
 import Control.Arrow ((&&&))
-import Control.Monad (liftM, liftM2, forM, forM_, replicateM_, guard)
+import Control.Monad (liftM, liftM2, forM_, replicateM_, guard)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar
@@ -580,17 +580,16 @@ addExitTest (ExitTestChan chan _) port rid = writeChan chan (rid, port)
 isReadingExitTestChan :: ExitTestChan -> IO Bool
 isReadingExitTestChan (ExitTestChan _ reading) = isEmptyMVar reading
 
--- | Bind the listening sockets we're going to use for incoming exit tests. This
+-- | Bind a listening socket we're going to use for incoming exit tests. This
 -- action exists so we can listen on privileged ports prior to dropping
--- privileges. The address and ports should be in host order.
-bindListeningSockets :: HostAddress -> [Port] -> IO [Socket]
-bindListeningSockets listenAddr listenPorts =
-  forM listenPorts $ \port -> do
-    sock <- socket AF_INET Stream tcpProtoNum
-    setSocketOption sock ReuseAddr 1
-    bindSocket sock (SockAddrInet (fromIntegral port) (htonl listenAddr))
-    listen sock sOMAXCONN
-    return sock
+-- privileges. The address and port should be in host order.
+bindListeningSocket :: HostAddress -> Port -> IO Socket
+bindListeningSocket listenAddr listenPort = do
+  sock <- socket AF_INET Stream tcpProtoNum
+  setSocketOption sock ReuseAddr 1
+  bindSocket sock (SockAddrInet (fromIntegral listenPort) (htonl listenAddr))
+  listen sock sOMAXCONN
+  return sock
 
 -- | Configuration for exit tests.
 data ExitTestConfig = ExitTestConfig
