@@ -1,5 +1,6 @@
 {-# LANGUAGE PatternGuards, ForeignFunctionInterface #-}
-{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-missing-fields #-}
+{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-missing-fields
+                -fno-warn-orphans #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -70,13 +71,16 @@ import System.Posix.Signals
 import System.Posix.Error (throwErrnoPathIfMinus1_)
 import System.Posix.Files
   (getFileStatus, fileOwner, fileMode, setFileMode, setOwnerAndGroup)
+import System.Posix.Resource
+  ( ResourceLimits(..), ResourceLimit(..), Resource(ResourceOpenFiles)
+  , getResourceLimit, setResourceLimit )
 import System.Posix.Types (UserID, GroupID)
 import System.Posix.User
   ( getEffectiveUserID, UserEntry(userID), GroupEntry(groupID)
   , getUserEntryForName, getGroupEntryForName, setUserID, setGroupID )
 import Foreign.C (CString, CInt, withCString)
 
-import GHC.Prim (Addr#)
+import GHC.Prim (Addr##)
 
 import TorDNSEL.Config
 import TorDNSEL.Control
@@ -88,14 +92,35 @@ import TorDNSEL.Random
 import TorDNSEL.Statistics
 import TorDNSEL.Util
 
+#include <sys/types.h>
+
+#ifdef OPEN_MAX
+import System.IO.Error (isPermissionError)
+#endif
+
+-- | Minimum limit on open file descriptors under which we can run.
+minFileDesc :: ResourceLimit
+minFileDesc = ResourceLimit 128
+
+-- | Maximum limit on open file descriptors we can set with 'setResourceLimit'.
+maxFileDesc :: ResourceLimit
+maxFileDesc = ResourceLimit 4096
+
+-- | The number of file descriptors the process might need for everything but
+-- exit tests.
+extraFileDesc :: Integer
+extraFileDesc = 96
+
 -- | The main entry point for the server. This handles parsing config options,
 -- various daemon operations, forking the network state handler, Tor controller,
 -- and exit test threads, and starting the DNS server.
 main :: IO ()
 main = do
+  availableFileDesc <- setMaxOpenFiles minFileDesc maxFileDesc
+
   conf <- do
     conf <- exitLeft . parseConfigArgs =<< getArgs
-    case b "configfile"# `M.lookup` conf of
+    case b "configfile"## `M.lookup` conf of
       Just fp -> do
         file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp)
           (exit . ("Opening config file failed: " ++) . show)
@@ -116,7 +141,7 @@ main = do
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
     return ExitTestConfig
-      { etConcTests   = tcfConcurrentExitTests testConf
+      { etConcTests   = (availableFileDesc - extraFileDesc) `div` 2
       , etSocksServer = cfTorSocksAddress conf
       , etListenSocks = testSocks
       , etTestAddr    = fst $ tcfTestDestinationAddress testConf
@@ -250,6 +275,61 @@ checkStateDirectory uid newRoot stateDir =
         setFileMode stateDir' (fileMode st .|. 0o700)
   where stateDir' = maybe id ((++) . (++ "/")) newRoot stateDir
 
+-- | Ensure that the current limit on open file descriptors is at least
+-- @lowerLimit@ and at least the minimum of @cap@ and FD_SETSIZE. Return the
+-- new current limit.
+setMaxOpenFiles :: ResourceLimit -> ResourceLimit -> IO Integer
+setMaxOpenFiles lowerLimit cap = do
+  let fdSetSize = ResourceLimit #{const FD_SETSIZE}
+
+  euid <- getEffectiveUserID
+  limits <- getResourceLimit ResourceOpenFiles
+
+  when (euid /= 0 && hardLimit limits < lowerLimit) $
+    exit $ "The hard limit on file descriptors is set to " ++
+           show (hardLimit limits) ++ ", but we need at least " ++
+           show lowerLimit ++ "."
+  when (fdSetSize < lowerLimit) $
+    exit $ "FD_SETSIZE is " ++ show fdSetSize ++ ", but we need at least " ++
+           show lowerLimit ++ " file descriptors."
+
+  let newLimits limit
+        | euid /= 0 = limits { softLimit = limit }
+        | otherwise = limits { softLimit = limit, hardLimit = limit }
+      minHardLimit | euid /= 0 = min $ hardLimit limits
+                   | otherwise = id
+      most = minHardLimit $ cap `min` fdSetSize
+      unResourceLimit (ResourceLimit n) = n
+      unResourceLimit _ = error "unResourceLimit: bug"
+
+  fmap unResourceLimit $ E.catchJust E.ioErrors
+    (setResourceLimit ResourceOpenFiles (newLimits most) >> return most) $ \e ->
+    do
+#ifdef OPEN_MAX
+      -- For OSX 10.5. This hasn't been tested.
+      let openMax = ResourceLimit #{const OPEN_MAX}
+      if not (isPermissionError e) && openMax < most
+        then do setResourceLimit ResourceOpenFiles (newLimits openMax)
+                return openMax
+        else E.throwIO (E.IOException e)
+#else
+      E.throwIO (E.IOException e)
+#endif
+
+instance Ord ResourceLimit where
+  ResourceLimitInfinity `compare` ResourceLimitInfinity = EQ
+  _ `compare` ResourceLimitInfinity = LT
+  ResourceLimitInfinity `compare` _ = GT
+  ResourceLimitUnknown `compare` ResourceLimitUnknown = EQ
+  _ `compare` ResourceLimitUnknown = LT
+  ResourceLimitUnknown `compare` _ = GT
+  ResourceLimit n `compare` ResourceLimit n' = n `compare` n'
+
+instance Show ResourceLimit where
+  show (ResourceLimit n) = show n
+  show ResourceLimitInfinity = "infinity"
+  show ResourceLimitUnknown = "unknown"
+
 -- | Lookup the UID and GID for a pair of user and group names.
 getIDs :: Maybe String -> Maybe String -> IO (Maybe UserID, Maybe GroupID)
 getIDs user group = do
@@ -298,7 +378,7 @@ liftMb f = maybe (return Nothing) (liftM Just . f)
 infixr 8 `liftMb`
 
 -- | An alias for packAddress.
-b :: Addr# -> ByteString
+b :: Addr## -> ByteString
 b = B.packAddress
 
 foreign import ccall unsafe "chroot" chroot :: CString -> IO CInt

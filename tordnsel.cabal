@@ -28,7 +28,7 @@ Other-Modules:   TorDNSEL.Config, TorDNSEL.Config.Internals, TorDNSEL.Control,
   TorDNSEL.Statistics, TorDNSEL.Statistics.Internals, TorDNSEL.System.Timeout,
   TorDNSEL.Util
 HS-Source-Dirs:  src
-Includes:        openssl/rand.h, netinet/in.h
+Includes:        openssl/rand.h, netinet/in.h, sys/types.h
 Extra-Libraries: crypto
 GHC-Options:     -O2 -Wall -Werror
 

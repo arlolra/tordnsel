@@ -65,11 +65,9 @@
 ## privileges. This file won't be removed on exit.
 #PIDFile /var/run/tordnsel.pid
 
-## Make at most this number of concurrent test connections through exit
-## nodes. By default this is set to 0, that is, we don't perform any tests.
-## If this is set higher than about (FD_SETSIZE-80)/2, the runtime will
-## crash due to limitations of select(2).
-#ConcurrentExitTests 384
+## Enable active test connections through exit nodes to determine their
+## exit IP addresses. The default is "False".
+#EnableActiveTesting True
 
 ## Make exit test connections through Tor's SocksPort on this IP address
 ## and TCP port. Leave it commented to use the default.

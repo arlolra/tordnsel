@@ -39,7 +39,7 @@ config = toConfig
   , "Address"                ~> "18.0.0.1"
   , "SOARName"               ~> "hostmaster.example.com."
   , "ChangeRootDirectory"    ~> "/var/lib/tordnsel"
-  , "ConcurrentExitTests"    ~> "128"
+  , "EnableActiveTesting"    ~> "True"
   , "DNSListenAddress"       ~> "127.0.0.1:53"
   , "Group"                  ~> "tordnsel"
   , "PIDFile"                ~> "/var/run/tordnsel.pid"
@@ -114,12 +114,9 @@ configFile = B.pack
   \## privileges. This file won't be removed on exit.\n\
   \PIDFile /var/run/tordnsel.pid\n\
   \\n\
-  \## Make at most this number of concurrent test connections through exit\n\
-  \## nodes. By default this is set to 0, that is, we don't perform any tests.\n\
-  \## If this is set higher than about (FD_SETSIZE-80)/2, the runtime will\n\
-  \## crash due to limitations of select(2). Setting it higher than the number\n\
-  \## of exit nodes has no benefit, so a reasonable maximum might be 384.\n\
-  \ConcurrentExitTests 128\n\
+  \## Enable active test connections through exit nodes to determine their\n\
+  \## exit IP addresses. The default is \"False\".\n\
+  \EnableActiveTesting True\n\
   \\n\
   \## Store exit test results in this directory. This should be an absolute\n\
   \## path accessible inside the chroot (if one is configured).\n\
@@ -135,12 +132,12 @@ configFile = B.pack
   \## These ports are bound before dropping privileges. Don't use the loopback\n\
   \## interface for TestListenAddress if you're redirecting connections with\n\
   \## iptables because your redirected packets will be dropped as martians.\n\
-  \## This option is only required when ConcurrentExitTests is greater than 0.\n\
+  \## This option is only required when EnableActiveTesting is specified.\n\
   \TestListenAddress 10.0.0.1:80,443,110,53,22,5190,6667,9030\n\
   \\n\
   \## Make exit test connections to this IP address and these TCP ports. These\n\
   \## should be publicly accessible from Tor exit nodes. This option is only\n\
-  \## required when ConcurrentExitTests is greater than 0.\n\
+  \## required when EnableActiveTesting is specified.\n\
   \TestDestinationAddress 18.0.0.1:80,443,110,53,22,5190,6667,9030"
 
 toConfig = M.fromList . map ((B.pack . map toLower) *** B.pack)

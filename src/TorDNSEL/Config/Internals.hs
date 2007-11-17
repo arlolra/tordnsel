@@ -79,10 +79,8 @@ data Config = Config
 
 -- | Exit test configuration options.
 data TestConfig = TestConfig
-  { -- | Maximum number of exit tests to run concurrently.
-    tcfConcurrentExitTests    :: Integer
-    -- | Address and ports to bind the exit test listeners.
-  , tcfTestListenAddress      :: (HostAddress, [Port])
+  { -- | Address and ports to bind the exit test listeners.
+    tcfTestListenAddress      :: (HostAddress, [Port])
     -- | Address and ports to which we make exit test connections.
   , tcfTestDestinationAddress :: (HostAddress, [Port])
   } deriving Show
@@ -101,7 +99,7 @@ knownConfigItems
   , "RunAsDaemon"
   , "Log"
   , "ConfigFile"
-  , "ConcurrentExitTests"
+  , "EnableActiveTesting"
   , "TestListenAddress"
   , "TestDestinationAddress"
   , "Address"
@@ -140,18 +138,17 @@ makeConfig conf =
       [ "DNSListenAddress"    ~> "127.0.0.1:53"
       , "TorControlAddress"   ~> "127.0.0.1:9051"
       , "RunAsDaemon"         ~> "False"
-      , "ConcurrentExitTests" ~> "0"
+      , "EnableActiveTesting" ~> "False"
       , "TorSocksAddress"     ~> "127.0.0.1:9050"
       , "Log"                 ~> "notice stdout" ]
     (~>) = (,)
     f `app` addr = f `ap` parse (b addr) conf'
     testConf = do
-      concTests <- parse (b "ConcurrentExitTests"#) conf'
-      if concTests <= 0
-        then return Nothing
-        else liftM Just $ return (TestConfig concTests) `app`
-                            "TestListenAddress"# `app`
-                            "TestDestinationAddress"#
+      concTests <- parse (b "EnableActiveTesting"#) conf'
+      if concTests
+        then liftM Just $ return TestConfig `app` "TestListenAddress"#
+                                            `app` "TestDestinationAddress"#
+        else return Nothing
 
 -- | Configuration information represented as a map from config item to unparsed
 -- config value.
