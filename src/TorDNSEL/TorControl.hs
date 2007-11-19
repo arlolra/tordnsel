@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      : TorDNSEL.Control
+-- Module      : TorDNSEL.TorControl
 -- Copyright   : (c) tup 2007
 -- License     : Public domain (see LICENSE)
 --
@@ -18,7 +18,7 @@
 --
 -----------------------------------------------------------------------------
 
-module TorDNSEL.Control (
+module TorDNSEL.TorControl (
   -- * Connections
     Connection
   , withConnection
@@ -69,4 +69,4 @@ module TorDNSEL.Control (
   , TorControlError(..)
   ) where
 
-import TorDNSEL.Control.Internals
+import TorDNSEL.TorControl.Internals

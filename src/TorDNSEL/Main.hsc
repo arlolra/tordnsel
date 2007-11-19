@@ -83,7 +83,7 @@ import Foreign.C (CString, CInt, withCString)
 import GHC.Prim (Addr##)
 
 import TorDNSEL.Config
-import TorDNSEL.Control
+import TorDNSEL.TorControl
 import TorDNSEL.Directory
 import TorDNSEL.DNS
 import TorDNSEL.DNS.Handler

@@ -3,7 +3,7 @@
 
 -----------------------------------------------------------------------------
 -- |
--- Module      : TorDNSEL.Control.Internals
+-- Module      : TorDNSEL.TorControl.Internals
 -- Copyright   : (c) tup 2007
 -- License     : Public domain (see LICENSE)
 --
@@ -24,7 +24,7 @@
 -----------------------------------------------------------------------------
 
 -- #not-home
-module TorDNSEL.Control.Internals (
+module TorDNSEL.TorControl.Internals (
   -- * Connections
     Connection(..)
   , withConnection
