@@ -28,6 +28,7 @@ module TorDNSEL.Control.Concurrent.Link (
   , unlinkThread
   , monitorThread
   , demonitorThread
+  , withMonitor
   , exit
   , throwTo
   , killThread

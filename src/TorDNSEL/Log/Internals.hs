@@ -105,8 +105,8 @@ startLogger config = do
                 nextMsg
               Reconfigure reconf newSignal -> return (reconf conf, newSignal)
               Terminate reason -> exit reason
-  mon <- monitorThread tid (putMVar err)
-  takeMVar err >>= maybe (demonitorThread mon >> return tid) E.throwIO
+  withMonitor tid (putMVar err) . const $
+    takeMVar err >>= maybe (return tid) E.throwIO
 
 class LogType r where
   log' :: CatArg a => ShowS -> Severity -> a -> r
@@ -135,9 +135,9 @@ reconfigureLogger :: (LogConfig -> LogConfig) -> IO ()
 reconfigureLogger reconf =
   withLogger $ \tid logChan -> do
     err <- newEmptyMVar
-    mon <- monitorThread tid (putMVar err)
-    writeChan logChan . Reconfigure reconf $ putMVar err Nothing
-    takeMVar err >>= maybe (demonitorThread mon) E.throwIO
+    withMonitor tid (putMVar err) . const $ do
+      writeChan logChan . Reconfigure reconf $ putMVar err Nothing
+      takeMVar err >>= flip whenJust E.throwIO
 
 -- | Terminate the logger gracefully: process any pending messages, flush the
 -- log handle, and close the handle when logging to a file. The optional
