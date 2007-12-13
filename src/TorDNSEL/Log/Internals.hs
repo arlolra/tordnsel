@@ -21,7 +21,7 @@ module TorDNSEL.Log.Internals where
 import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import Control.Concurrent.MVar
-  (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, withMVar, readMVar, swapMVar)
+  (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, readMVar, swapMVar)
 import qualified Control.Exception as E
 import Control.Monad (when, liftM2)
 import Control.Monad.Fix (fix)
@@ -86,7 +86,7 @@ startLogger :: LogConfig -> IO ThreadId
 startLogger config = do
   err <- newEmptyMVar
   tid <- forkLinkIO $ do
-    curLogger@(loggerId,logChan) <- liftM2 (,) myThreadId newChan
+    curLogger@(_,logChan) <- liftM2 (,) myThreadId newChan
     setTrapExit . const $ writeChan logChan . Terminate
     E.bracket_ (swapMVar logger $ Just curLogger) (swapMVar logger Nothing) $
       flip fix (config, putMVar err Nothing) $ \resetLogger (conf, signal) -> do
@@ -100,7 +100,7 @@ startLogger config = do
                   hPrintf handle "%s [%s] %s\n" (showUTCTime time)
                                                 (show severity) text
                 nextMsg
-              Reconfigure reconf signal -> return (reconf conf, signal)
+              Reconfigure reconf newSignal -> return (reconf conf, newSignal)
               Terminate reason -> exit reason
   mon <- monitorThread tid (putMVar err)
   takeMVar err >>= maybe (demonitorThread mon >> return tid) E.throwIO
@@ -139,7 +139,7 @@ terminateLogger = withLogger . terminateThread (Terminate Nothing)
 terminateThread :: a -> Maybe Int -> ThreadId -> Chan a -> IO ()
 terminateThread termMsg mbWait tid chan = do
   dead <- newEmptyMVar
-  mon <- monitorThread tid (const $ putMVar dead ())
+  monitorThread tid (const $ putMVar dead ())
   writeChan chan termMsg
   case mbWait of
     Nothing -> takeMVar dead
