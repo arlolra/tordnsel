@@ -97,8 +97,8 @@ startLogger config = do
             case msg of
               Log time severity text -> do
                 when (logEnabled conf && severity >= minSeverity conf) $
-                  -- XXX the time format should be shortened
-                  hPrintf handle "%s [%s] %s\n" (show time) (show severity) text
+                  hPrintf handle "%s [%s] %s\n" (showUTCTime time)
+                                                (show severity) text
                 nextMsg
               Reconfigure reconf signal -> return (reconf conf, signal)
               Terminate reason -> exit reason

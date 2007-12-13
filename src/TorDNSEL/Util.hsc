@@ -1,5 +1,5 @@
 {-# LANGUAGE PatternGuards, BangPatterns, ForeignFunctionInterface #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-orphans #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -43,6 +43,7 @@ module TorDNSEL.Util (
   , hGetLine
   , splitByDelimiter
   , showException
+  , showUTCTime
 
   -- * Address
   , Address(..)
@@ -95,11 +96,13 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
 import qualified Data.ByteString.Base as B
 import Data.ByteString (ByteString)
+import Data.Ratio (numerator, denominator, (%))
 import Data.Time
   ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
   , timeOfDayToTime, timeToTimeOfDay )
 import Data.Word (Word16, Word32)
 import Network.Socket (HostAddress, ProtocolNumber)
+import Text.Printf (printf)
 import System.Environment (getProgName)
 import System.Exit (exitFailure)
 import System.IO (hPutStr, stderr)
@@ -363,6 +366,18 @@ showException :: [Dynamic -> Maybe String] -> E.Exception -> String
 showException fs (E.DynException dyn)
   | str:_ <- mapMaybe ($ dyn) fs = str
 showException _ e                = show e
+
+-- | Convert a 'UTCTime' to a string in ISO 8601 format.
+showUTCTime :: UTCTime -> String
+showUTCTime time = printf "%s %02d:%02d:%s" date hours mins secStr'
+  where
+    date = show (utctDay time)
+    (n,d) = (numerator &&& denominator) (toRational $ utctDayTime time)
+    (seconds,frac) = n `divMod` d
+    (hours,(mins,sec)) = second (`divMod` 60) (seconds `divMod` (60^2))
+    secs = fromRational (frac % d) + fromIntegral sec
+    secStr = printf "%02.4f" (secs :: Double)
+    secStr' = (if length secStr < 7 then ('0':) else id) secStr
 
 --------------------------------------------------------------------------------
 -- Addresses
