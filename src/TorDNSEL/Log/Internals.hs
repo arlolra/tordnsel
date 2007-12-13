@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeSynonymInstances #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      : TorDNSEL.Log.Internals
@@ -6,7 +8,8 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (concurrency, extended exceptions)
+-- Portability : non-portable (concurrency, extended exceptions,
+--                             type synonym instances)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
@@ -28,9 +31,9 @@ import Control.Monad.Fix (fix)
 import Data.Maybe (isJust)
 import Data.Time (UTCTime, getCurrentTime)
 import System.IO
-  (Handle, stdout, stderr, openFile, IOMode(AppendMode), hFlush, hClose)
+  ( Handle, stdout, stderr, openFile, IOMode(AppendMode), hPutStrLn, hFlush
+  , hClose )
 import System.IO.Unsafe (unsafePerformIO)
-import Text.Printf (hPrintf)
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.System.Timeout
@@ -61,7 +64,7 @@ withLogTarget (ToFile fp) = E.bracket (openFile fp AppendMode) hClose
 
 -- | An internal type for messages sent to the logger.
 data LogMessage
-  = Log UTCTime Severity String                  -- ^ A log message
+  = Log UTCTime Severity ShowS                   -- ^ A log message
   | Reconfigure (LogConfig -> LogConfig) (IO ()) -- ^ Reconfigure the logger
   | Terminate ExitReason -- ^ Terminate the logger gracefully
 
@@ -97,21 +100,33 @@ startLogger config = do
             case msg of
               Log time severity text -> do
                 when (logEnabled conf && severity >= minSeverity conf) $
-                  hPrintf handle "%s [%s] %s\n" (showUTCTime time)
-                                                (show severity) text
+                  hPutStrLn handle $
+                    cat (showUTCTime time) " [" severity "] " text
                 nextMsg
               Reconfigure reconf newSignal -> return (reconf conf, newSignal)
               Terminate reason -> exit reason
   mon <- monitorThread tid (putMVar err)
   takeMVar err >>= maybe (demonitorThread mon >> return tid) E.throwIO
 
--- XXX log should take a variable number of arguments
+class LogType r where
+  log' :: CatArg a => ShowS -> Severity -> a -> r
+
+instance LogType (IO a) where
+  log' str sev arg = do
+    now <- getCurrentTime
+    withLogger $ \_ logChan -> do
+      writeChan logChan (Log now sev (str . showsCatArg arg))
+    return undefined -- to omit type annotations in do blocks
+
+instance LogType (Severity, ShowS) where
+  log' str sev arg = (sev, str . showsCatArg arg)
+
+instance (CatArg a, LogType r) => LogType (a -> r) where
+  log' str sev arg = log' (str . showsCatArg arg) sev
+
 -- | Log a message asynchronously.
-log :: Severity -> String -> IO ()
-log severity msg = do
-  now <- getCurrentTime
-  withLogger $ \_ logChan ->
-    writeChan logChan $ Log now severity msg
+log :: (CatArg a, LogType r) => Severity -> a -> r
+log = log' id
 
 -- | Reconfigure the logger synchronously with the given function. If the logger
 -- exits abnormally before reconfiguring itself, throw its exit signal in the

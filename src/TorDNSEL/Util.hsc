@@ -1,4 +1,6 @@
-{-# LANGUAGE PatternGuards, BangPatterns, ForeignFunctionInterface #-}
+{-# LANGUAGE PatternGuards, BangPatterns, ForeignFunctionInterface,
+             TypeSynonymInstances, OverlappingInstances,
+             UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-orphans #-}
 
 -----------------------------------------------------------------------------
@@ -10,7 +12,8 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (pattern guards, bang patterns, concurrency,
---                             STM, FFI)
+--                             STM, FFI, type synonym instances, overlapping
+--                             instances, undecidable instances)
 --
 -- Common utility functions.
 --
@@ -75,6 +78,11 @@ module TorDNSEL.Util (
   -- * Constants
   , tcpProtoNum
   , udpProtoNum
+
+  -- * Variable-parameter string concatenation
+  , CatArg(..)
+  , CatType
+  , cat
   ) where
 
 import Control.Arrow ((&&&), second)
@@ -511,3 +519,39 @@ showEscaped maxLen (Escaped s len)
 tcpProtoNum, udpProtoNum :: ProtocolNumber
 tcpProtoNum = #{const IPPROTO_TCP}
 udpProtoNum = #{const IPPROTO_UDP}
+
+--------------------------------------------------------------------------------
+-- Variable-parameter string concatenation
+
+class CatArg a where
+  showsCatArg :: a -> ShowS
+
+instance CatArg String where
+  showsCatArg = (++)
+
+instance CatArg ShowS where
+  showsCatArg = id
+
+instance CatArg Char where
+  showsCatArg = (:)
+
+instance Show a => CatArg a where
+  showsCatArg = shows
+
+class CatType r where
+  cat' :: CatArg a => ShowS -> a -> r
+
+instance CatType (IO ()) where
+  cat' = (putStr .) . cat'
+
+instance CatType String where
+  cat' str arg = cat' str arg ""
+
+instance CatType ShowS where
+  cat' str arg = str . showsCatArg arg
+
+instance (CatArg a, CatType r) => CatType (a -> r) where
+  cat' str arg = cat' (cat' str arg)
+
+cat :: (CatArg a, CatType r) => a -> r
+cat = cat' id

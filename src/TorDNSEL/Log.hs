@@ -6,7 +6,8 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (concurrency, extended exceptions)
+-- Portability : non-portable (concurrency, extended exceptions,
+--                             type synonym instances)
 --
 -- Implements a logger thread and functions to log messages, reconfigure the
 -- logger, and terminate the logger.
@@ -17,6 +18,7 @@ module TorDNSEL.Log (
     LogConfig(..)
   , LogTarget(..)
   , Severity(..)
+  , LogType
   , log
   , startLogger
   , reconfigureLogger
