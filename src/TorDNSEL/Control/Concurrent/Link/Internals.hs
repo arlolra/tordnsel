@@ -122,10 +122,7 @@ defaultSignal _   _      Nothing = return ()
 -- outside this function.
 withLinksDo :: (E.Exception -> String) -> IO a -> IO a
 withLinksDo showE io = E.block $ do
-  E.setUncaughtExceptionHandler $ \e ->
-    whenJust (extractReason e) $ \e' -> do
-      hPutStrLn stderr ("*** Exception: " ++ showE e')
-      hFlush stderr
+  E.setUncaughtExceptionHandler . const . return $ ()
   main <- C.myThreadId
   mainId <- Tid `fmap` newUnique
   let initialState = ThreadState
@@ -141,7 +138,11 @@ withLinksDo showE io = E.block $ do
        , state = M.insert main initialState (state tm) }
   -- Don't bother propagating signals from the main thread
   -- since it's about to exit.
-  E.unblock io
+  E.unblock io `E.catch` \e -> do
+    whenJust (extractReason e) $ \e' -> do
+      hPutStrLn stderr ("*** Exception: " ++ showE e')
+      hFlush stderr
+    E.throwIO e
 
 -- | Evaluate the given 'IO' action in a new thread, returning its 'ThreadId'.
 forkIO :: IO a -> IO ThreadId
