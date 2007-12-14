@@ -100,14 +100,14 @@ startLogger config = do
             case msg of
               Log time severity text -> do
                 when (logEnabled conf && severity >= minSeverity conf) $
-                  hPutStrLn handle $
-                    cat (showUTCTime time) " [" severity "] " text
+                  hCat handle (showUTCTime time) " [" severity "] " text '\n'
                 nextMsg
               Reconfigure reconf newSignal -> return (reconf conf, newSignal)
               Terminate reason -> exit reason
   withMonitor tid (putMVar err) . const $
     takeMVar err >>= maybe (return tid) E.throwIO
 
+-- | Implements the variable parameter support for 'log'.
 class LogType r where
   log' :: CatArg a => ShowS -> Severity -> a -> r
 
@@ -115,14 +115,14 @@ instance LogType (IO a) where
   log' str sev arg = do
     now <- getCurrentTime
     withLogger $ \_ logChan -> do
-      writeChan logChan (Log now sev (str . showsCatArg arg))
+      writeChan logChan (Log now sev (cat' str arg))
     return undefined -- to omit type annotations in do blocks
 
 instance LogType (Severity, ShowS) where
-  log' str sev arg = (sev, str . showsCatArg arg)
+  log' str sev arg = (sev, cat' str arg)
 
 instance (CatArg a, LogType r) => LogType (a -> r) where
-  log' str sev arg = log' (str . showsCatArg arg) sev
+  log' str sev arg = log' (cat' str arg) sev
 
 -- | Log a message asynchronously.
 log :: (CatArg a, LogType r) => Severity -> a -> r

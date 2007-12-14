@@ -80,9 +80,11 @@ module TorDNSEL.Util (
   , udpProtoNum
 
   -- * Variable-parameter string concatenation
-  , CatArg(..)
-  , CatType
+  , CatArg
+  , CatType(..)
   , cat
+  , HCatType
+  , hCat
   ) where
 
 import Control.Arrow ((&&&), second)
@@ -523,7 +525,9 @@ udpProtoNum = #{const IPPROTO_UDP}
 --------------------------------------------------------------------------------
 -- Variable-parameter string concatenation
 
+-- | The type of an argument to 'cat'.
 class CatArg a where
+  -- | Convert a 'CatArg' to a string for constant-time concatenation.
   showsCatArg :: a -> ShowS
 
 instance CatArg String where
@@ -535,14 +539,18 @@ instance CatArg ShowS where
 instance CatArg Char where
   showsCatArg = (:)
 
+instance CatArg ByteString where
+  showsCatArg = (++) . B.unpack
+
 instance Show a => CatArg a where
   showsCatArg = shows
 
+-- | Implements the variable parameter support for 'cat'.
 class CatType r where
   cat' :: CatArg a => ShowS -> a -> r
 
-instance CatType (IO ()) where
-  cat' = (putStr .) . cat'
+instance CatType (IO a) where
+  cat' str arg = putStr (cat' str arg) >> return undefined
 
 instance CatType String where
   cat' str arg = cat' str arg ""
@@ -550,8 +558,28 @@ instance CatType String where
 instance CatType ShowS where
   cat' str arg = str . showsCatArg arg
 
+instance CatType ByteString where
+  cat' str arg = B.pack (cat' str arg)
+
 instance (CatArg a, CatType r) => CatType (a -> r) where
   cat' str arg = cat' (cat' str arg)
 
+-- | Concatentate a variable number of parameters that can be converted to
+-- strings.
 cat :: (CatArg a, CatType r) => a -> r
 cat = cat' id
+
+-- | Implements the variable parameter support for 'hCat'.
+class HCatType r where
+  hCat' :: CatArg a => ShowS -> Handle -> a -> r
+
+instance HCatType (IO a) where
+  hCat' str handle arg = hPutStr handle (cat' str arg) >> return undefined
+
+instance (CatArg a, HCatType r) => HCatType (a -> r) where
+  hCat' str handle arg = hCat' (cat' str arg) handle
+
+-- | Concatentate and output to a 'Handle' a variable number of parameters that
+-- can be converted to strings.
+hCat :: (CatArg a, HCatType r) => Handle -> a -> r
+hCat = hCat' id
