@@ -129,6 +129,7 @@ import System.IO (Handle, hClose, hSetBuffering, BufferMode(..), hFlush)
 
 import GHC.Prim (Addr#)
 
+import TorDNSEL.Control.Concurrent.Future
 import TorDNSEL.Directory
 import TorDNSEL.Document
 import TorDNSEL.Util

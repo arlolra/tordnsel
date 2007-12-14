@@ -63,11 +63,6 @@ module TorDNSEL.Util (
   , readBoundedTChan
   , writeBoundedTChan
 
-  -- * Concurrent futures
-  , Future
-  , spawn
-  , resolve
-
   -- * Escaped strings
   , EscapedString
   , escaped
@@ -88,8 +83,6 @@ module TorDNSEL.Util (
   ) where
 
 import Control.Arrow ((&&&), second)
-import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, withMVar)
 import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
@@ -464,26 +457,6 @@ writeBoundedTChan (BTChan chan currentSize maxSize) x = do
   check (size < maxSize)
   writeTVar currentSize (size + 1)
   writeTChan chan x
-
---------------------------------------------------------------------------------
--- Concurrent futures
-
--- | An abstract type representing a value being evaluated concurrently in
--- another thread of execution.
-newtype Future a = Future (MVar (Either E.Exception a))
-
--- | Evaluate the given 'IO' action in a separate thread and return a future of
--- its result immediately.
-spawn :: IO a -> IO (Future a)
-spawn io = do
-  mv <- newEmptyMVar
-  forkIO (E.try io >>= putMVar mv)
-  return $ Future mv
-
--- | Explicitly unwrap the value contained within a future. Block until the
--- value has been evaluated, throwing an exception if the future failed.
-resolve :: Future a -> IO a
-resolve (Future mv) = withMVar mv (either E.throwIO return)
 
 --------------------------------------------------------------------------------
 -- Escaped strings
