@@ -246,7 +246,7 @@ getDescriptor rid =
 -- | Fetch the most recent descriptor for every router Tor knows about. Throw a
 -- 'TorControlError' if the reply code isn't 250.
 getAllDescriptors :: Connection -> IO [Descriptor]
-getAllDescriptors = getDocument key parseDescriptors
+getAllDescriptors = fmap filterRight . getDocument key parseDescriptors
   where key = b 15 "desc/all-recent"#
 
 -- | Fetch the current status entry for a given router. Throw a
@@ -260,7 +260,7 @@ getRouterStatus rid =
 -- | Fetch the current status entries for every router Tor has an opinion about.
 -- Throw a 'TorControlError' if the reply code isn't 250.
 getNetworkStatus :: Connection -> IO [RouterStatus]
-getNetworkStatus = getDocument arg parseRouterStatuses
+getNetworkStatus = fmap filterRight . getDocument arg parseRouterStatuses
   where arg = b 6 "ns/all"#
 
 -- | Send a GETINFO command using @key@ as a single keyword. If the reply code
@@ -453,7 +453,7 @@ networkStatusEvent :: ([RouterStatus] -> IO ()) -> EventHandler
 networkStatusEvent handler = EventHandler (b 2 "NS"#) handleNS
   where
     handleNS (Reply _ _ doc@(_:_):_) =
-      handler . parseRouterStatuses . parseDocument $ doc
+      handler . filterRight . parseRouterStatuses . parseDocument $ doc
     handleNS _ = return ()
 
 -- | Create an event handler for stream status change events.
@@ -762,7 +762,7 @@ replyLine (Reply (x,y,z) text _) = B.pack [x,y,z,' '] `B.append` text
 -- | An error type used in dynamic exceptions.
 data TorControlError
   -- | A negative reply code and human-readable status message.
-  = TCError ReplyCode EscapedString 
+  = TCError ReplyCode EscapedString
   -- | Parsing a reply from Tor failed.
   | ParseError
   -- | A reply from Tor didn't follow the protocol.

@@ -27,9 +27,11 @@ module TorDNSEL.Util (
   , parseUTCTime
   , parseLocalTime
   , onFailure
+  , filterRight
 
   -- * Miscellaneous functions
   , on
+  , unfoldAccumR
   , whenJust
   , forever
   , untilM
@@ -82,12 +84,13 @@ module TorDNSEL.Util (
   , hCat
   ) where
 
-import Control.Arrow ((&&&), second)
+import Control.Arrow ((&&&), first, second)
 import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
 import Control.Monad (liftM, liftM2, zipWithM_, when, unless)
+import Control.Monad.Error (Error(..), MonadError(..))
 import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
 import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
@@ -167,8 +170,13 @@ parseLocalTime bs = onFailure (const $ "Invalid time " ++ show bs ++ ".") $ do
   return $! LocalTime (fromGregorian (toInteger year) month day)
                       (timeToTimeOfDay diff)
 
+-- XXX doc
 onFailure :: Monad m => ShowS -> Either String a -> m a
 onFailure f = either (fail . f) return
+
+-- XXX parsing errors should be logged
+filterRight :: [Either a b] -> [b]
+filterRight xs = [x | Right x <- xs]
 
 --------------------------------------------------------------------------------
 -- Miscellaneous functions
@@ -176,7 +184,14 @@ onFailure f = either (fail . f) return
 -- | A useful combinator for applying a binary function to the result of
 -- applying a unary function to each of two arguments.
 on :: (b -> b -> c) -> (a -> b) -> a -> a -> c
-on f g x y = g x `f` g y
+(f `on` g) x y = g x `f` g y
+
+-- | Like 'unfoldr', except the return value contains the final accumulator
+-- parameter.
+unfoldAccumR :: (acc -> Either (x, acc) acc) -> acc -> ([x], acc)
+unfoldAccumR f acc = case f acc of
+  Left (x,acc') -> (x :) `first` unfoldAccumR f acc'
+  Right acc'    -> ([], acc')
 
 -- | When the argument matches @Just x@, pass @x@ to a monadic action.
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
@@ -234,13 +249,11 @@ inBoundsOf :: (Integral a, Integral b, Bounded b) => a -> b -> Bool
 x `inBoundsOf` y = x >= fromIntegral (minBound `asTypeOf` y) &&
                    x <= fromIntegral (maxBound `asTypeOf` y)
 
-instance Functor (Either String) where
-  fmap f = either Left (Right . f)
-
-instance Monad (Either String) where
-  return = Right
-  fail   = Left
-  (>>=)  = flip (either Left)
+instance Error e => MonadError e Maybe where
+  throwError = const Nothing
+  catchError m f = case m of
+    Nothing -> f noMsg
+    other   -> other
 
 foreign import ccall unsafe "htonl" htonl :: Word32 -> Word32
 foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32

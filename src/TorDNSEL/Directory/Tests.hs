@@ -27,26 +27,27 @@ import TorDNSEL.Util
 tests = TestList [TestCase descriptorParses, fingerprint, TestCase exitPolicy]
 
 exitPolicy = do
-  [ip1,ip2,ip3] <- mapM (inet_atoh . B.pack) ips
-  policy <- parseExitPolicy $ parseDocument doc
-  exitPolicyAccepts ip1 80 policy @=? False
-  exitPolicyAccepts ip2 80 policy @=? False
-  exitPolicyAccepts ip3 81 policy @=? True
+  let Just [ip1,ip2,ip3] = mapM (inet_atoh . B.pack) ips
+      Just policy = parseExitPolicy $ parseDocument doc
+  False @=? exitPolicyAccepts ip1 80 policy
+  False @=? exitPolicyAccepts ip2 80 policy
+  True @=? exitPolicyAccepts ip3 81 policy
   where
     ips = ["192.169.64.11","192.168.64.11","18.244.0.188"]
     doc = map B.pack ["reject *:80","accept 18.244.0.18:*"]
 
 fingerprint = TestList . map TestCase $
-  [ decodeBase16RouterID base16 @=? Just rid
-  , decodeBase64RouterID base64 @=? Just rid
-  , encodeBase16RouterID rid @=? base16 ]
+  [ Just rid @=? decodeBase16RouterID base16
+  , Just rid @=? decodeBase64RouterID base64
+  , base16 @=? encodeBase16RouterID rid ]
   where
     base16 = b 40 "ffcb46db1339da84674c70d7cb586434c4370441"#
     base64 = b 27 "/8tG2xM52oRnTHDXy1hkNMQ3BEE"#
     rid = RtrId $ b 20 "\255\203\70\219\19\57\218\132\103\76\112\
                         \\215\203\88\100\52\196\55\4\65"#
 
-descriptorParses = parse descriptor @=? "[" ++ parsed ++ "," ++ parsed ++ "]"
+descriptorParses =
+  "[Right " ++ parsed ++ ",Right " ++ parsed ++ "]" @=? parse descriptor
   where
     parse = show . parseDescriptors . parseDocument . concat . replicate 2
     parsed =

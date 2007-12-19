@@ -88,6 +88,7 @@ module TorDNSEL.NetworkState.Internals (
 
 import Control.Arrow ((&&&))
 import Control.Monad (liftM, liftM2, forM_, replicateM_, guard)
+import Control.Monad.Error (MonadError(..))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar
@@ -810,7 +811,7 @@ renderExitAddress x = B.unlines $
     renderTime = B.pack . take 19 . show
 
 -- | Parse a single exit address entry, 'fail'ing in the monad if parsing fails.
-parseExitAddress :: Monad m => Document -> m ExitAddress
+parseExitAddress :: MonadError String m => Document -> m ExitAddress
 parseExitAddress items = do
   rid         <- decodeBase16RouterID
                              =<< findArg (b 8  "ExitNode"#   ==) items
@@ -823,7 +824,7 @@ parseExitAddress items = do
       (addr,tested) <- B.break isSpace `liftM` liftArg (iArg item)
       liftM2 (,) (inet_atoh addr) (parseUTCTime $ B.dropWhile isSpace tested)
     liftArg (Just arg) = return arg
-    liftArg _          = fail "no argument"
+    liftArg _          = throwError "no argument"
 
 -- | On startup, read the exit test results from the state directory. Return the
 -- results in ascending order of their fingerprints.
@@ -835,7 +836,7 @@ readExitAddresses stateDir =
            (M.fromDistinctAscList `fmap` addrs "/exit-addresses")
   where
     merge new old = new { eaAddresses = (M.union `on` eaAddresses) new old }
-    addrs fp = (map (eaRouterID &&& id) .
+    addrs fp = (map (eaRouterID &&& id) . filterRight .
                  parseSubDocs (b 8 "ExitNode"#) parseExitAddress .
                  parseDocument . B.lines) `fmap`
                E.catchJust E.ioErrors (B.readFile (stateDir ++ fp))

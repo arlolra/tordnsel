@@ -28,10 +28,16 @@ module TorDNSEL.Document (
   , findArg
   ) where
 
+import Control.Arrow (first, (***))
+import Control.Monad.Error (MonadError(throwError))
 import Data.Char (isSpace)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
-import Data.List (find)
+import Data.List (find, unfoldr)
+
+import GHC.Prim (Addr#)
+
+import TorDNSEL.Util
 
 -- | A document consisting of a sequence of one or more items.
 type Document = [Item]
@@ -52,43 +58,44 @@ data Object = Object
 
 -- | Parse a 'Document' from a list of lines.
 parseDocument :: [ByteString] -> Document
-parseDocument []     = []
-parseDocument (x:xs) = Item key arguments objects : parseDocument xs'
-  where
-    b = B.unsafePackAddress
-    (key,x') = B.break isSpace . dropOpt $ x
-    arguments | B.null x' = Nothing
-              | otherwise = Just . B.dropWhile isSpace $ x'
-    (xs',objects) = parseObjects xs
-    dropOpt | b 4 "opt "# `B.isPrefixOf` x = B.drop 4
-            | otherwise                    = id
+parseDocument = unfoldr parseDocument' where
+  parseDocument' []     = Nothing
+  parseDocument' (x:xs) = Just . first (Item key args) . parseObjects $ xs
+    where
+      (key,x') = B.break isSpace . dropOpt $ x
+      dropOpt = if b 4 "opt "# `B.isPrefixOf` x then B.drop 4 else id
+      args | B.null x' = Nothing
+           | otherwise   = Just . B.dropWhile isSpace $ x'
 
-    parseObjects :: [ByteString] -> ([ByteString], [Object])
-    parseObjects (y:ys)
-      | b 11 "-----BEGIN "# `B.isPrefixOf` y, b 5 "-----"# `B.isSuffixOf` y
-      = (ys'', Object oKey (B.unlines objLines) : objects')
-      where
-        oKey = B.take (B.length y - 16) . B.drop 11 $ y
-        endLine = b 9 "-----END "# `B.append` oKey `B.append` b 5 "-----"#
-        (objLines, ys') = break (== endLine) ys
-        (ys'',objects') = parseObjects . drop 1 $ ys'
-    parseObjects ys = (ys, [])
+-- | Parse a list of 'Object's from a list of lines, returning the remaining
+-- lines.
+parseObjects :: [ByteString] -> ([Object], [ByteString])
+parseObjects = unfoldAccumR parseObjects' where
+  parseObjects' (x:xs)
+    | b 11 "-----BEGIN "# `B.isPrefixOf` x, b 5 "-----"# `B.isSuffixOf` x
+    = Left . ((Object key . B.unlines) *** drop 1) . break (== endLine) $ xs
+    where key = B.take (B.length x - 16) . B.drop 11 $ x
+          endLine = b 9 "-----END "# `B.append` key `B.append` b 5 "-----"#
+  parseObjects' xs = Right xs
 
 -- | Break a document into sub-documents each beginning with an item that has
--- the keyword @firstKey@. Apply @parseDoc@ to each sub-document, returning the
--- parsed document in the result if @parseDoc subDocument@ matches @Just _@.
-parseSubDocs :: ByteString -> (Document -> Maybe doc) -> Document -> [doc]
-parseSubDocs _        _        []    = []
-parseSubDocs firstKey parseDoc (x:xs)
-  | Just doc <- parseDoc (x : items) = doc : docs
-  | otherwise                        = docs
-  where
-    (items,xs') = break ((firstKey ==) . iKey) xs
-    docs = parseSubDocs firstKey parseDoc xs'
+-- the keyword @firstKey@. Apply @parseDoc@ to each sub-document, returning
+-- either an error message or the parsed document.
+parseSubDocs :: ByteString -> (Document -> Either String a) -> Document
+             -> [Either String a]
+parseSubDocs firstKey parseDoc = unfoldr parseSubDocs' where
+  parseSubDocs' []     = Nothing
+  parseSubDocs' (x:xs) = Just (parseDoc (x : items), xs')
+    where (items,xs') = break ((firstKey ==) . iKey) xs
 
 -- | Return the arguments from the first item whose key satisfies the given
 -- predicate. 'fail' in the monad if no such item is found.
-findArg :: Monad m => (ByteString -> Bool) -> Document -> m ByteString
+findArg
+  :: MonadError String m => (ByteString -> Bool) -> Document -> m ByteString
 findArg p items
   | Just item <- find (p . iKey) items, Just arg <- iArg item = return arg
-  | otherwise = fail "findArg: item doesn't exist"
+  | otherwise = throwError "findArg: item doesn't exist"
+
+-- | An alias for 'B.unsafePackAddress'.
+b :: Int -> Addr# -> ByteString
+b = B.unsafePackAddress

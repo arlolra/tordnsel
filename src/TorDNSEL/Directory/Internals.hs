@@ -50,6 +50,7 @@ module TorDNSEL.Directory.Internals (
   ) where
 
 import Control.Monad (unless, liftM)
+import Control.Monad.Error (MonadError(throwError))
 import Data.Char
   ( ord, isSpace, isHexDigit, digitToInt, isAscii, isAsciiUpper
   , isAsciiLower, isAlpha, isDigit )
@@ -88,9 +89,9 @@ instance Show Descriptor where
     shows (posixSecondsToUTCTime $ descPublished d) . ("\n" ++) .
     foldl' (.) id (map (\p -> shows p . ("\n" ++)) (descExitPolicy d))
 
--- | Parse a router descriptor. Returns the result or 'fail' in the monad if the
--- format is invalid.
-parseDescriptor :: Monad m => Document -> m Descriptor
+-- | Parse a router descriptor. Return the result or 'throwError' in the monad
+-- if the format is invalid.
+parseDescriptor :: MonadError String m => Document -> m Descriptor
 parseDescriptor items = do
   address    <- parseRouter    =<< findArg (b 6  "router"#      ==) items
   time       <- parsePOSIXTime =<< findArg (b 9  "published"#   ==) items
@@ -109,7 +110,7 @@ parseDescriptor items = do
     parseRouterID = decodeBase16RouterID . B.filter (/= ' ')
 
 -- | Parse a 'Document' containing multiple router descriptors.
-parseDescriptors :: Document -> [Descriptor]
+parseDescriptors :: Document -> [Either String Descriptor]
 parseDescriptors = parseSubDocs (b 6 "router"#) parseDescriptor
 
 --------------------------------------------------------------------------------
@@ -125,9 +126,9 @@ data RouterStatus = RS
     rsIsRunning :: {-# UNPACK #-} !Bool }
   deriving Show
 
--- | Parse a router status entry. Returns the result or 'fail' in the monad if
--- the format is invalid.
-parseRouterStatus :: Monad m => Document -> m RouterStatus
+-- | Parse a router status entry. Return the result or 'throwError' in the
+-- monad if the format is invalid.
+parseRouterStatus :: MonadError String m => Document -> m RouterStatus
 parseRouterStatus items = do
   (rid,published) <- parseRouter =<< findArg (b 1 "r"# ==) items
   return $! RS rid published (parseStatus $ findArg (b 1 "s"# ==) items)
@@ -143,7 +144,7 @@ parseRouterStatus items = do
 -- | Parse a 'Document' containing multiple router status entries. Such a
 -- document isn't the same as a network-status document as it doesn't contain
 -- a preamble or a signature.
-parseRouterStatuses :: Document -> [RouterStatus]
+parseRouterStatuses :: Document -> [Either String RouterStatus]
 parseRouterStatuses = parseSubDocs (b 1 "r"#) parseRouterStatus
 
 --------------------------------------------------------------------------------
@@ -156,12 +157,12 @@ newtype RouterID = RtrId { unRtrId :: ByteString }
 instance Show RouterID where
   show = B.unpack . encodeBase16RouterID
 
--- | Decode a 'RouterID' encoded in base16. Returns the result or 'fail' in
+-- | Decode a 'RouterID' encoded in base16. Return the result or 'throwError' in
 -- the monad if the format is invalid.
-decodeBase16RouterID :: Monad m => ByteString -> m RouterID
+decodeBase16RouterID :: MonadError String m => ByteString -> m RouterID
 decodeBase16RouterID bs = do
   unless (B.length bs == 40 && B.all isHexDigit bs) $
-    fail "decodeBase16RouterID: failed"
+    throwError "decodeBase16RouterID: failed"
   return $! RtrId . fst . W.unfoldrN 20 toBytes . B.unpack $ bs
   where
     toBytes (x:y:ys) = Just (fromBase16 x `shiftL` 4 .|. fromBase16 y, ys)
@@ -169,11 +170,11 @@ decodeBase16RouterID bs = do
     fromBase16 = fromIntegral . digitToInt
 
 -- | Decode a 'RouterID' encoded in base64 with trailing \'=\' signs removed.
--- Returns the result or 'fail' in the monad if the format is invalid.
-decodeBase64RouterID :: Monad m => ByteString -> m RouterID
+-- Return the result or 'throwError' in the monad if the format is invalid.
+decodeBase64RouterID :: MonadError String m => ByteString -> m RouterID
 decodeBase64RouterID bs = do
   unless (B.length bs == 27 && B.all isBase64Char bs) $
-    fail "decodeBase64RouterID: failed"
+    throwError "decodeBase64RouterID: failed"
   return $! RtrId . B.init . toBytes . split 4 $ bs
   where
     toBytes = W.pack . concatMap (indicesToBytes . map base64Index . B.unpack)
@@ -226,24 +227,23 @@ data RuleType
   | Reject -- ^ The rule rejects connections.
   deriving Show
 
--- | Parse an 'ExitPolicy' from a list of accept or reject items. Returns the
--- result or 'fail' in the monad if the format is invalid.
-parseExitPolicy :: Monad m => [Item] -> m ExitPolicy
+-- | Parse an 'ExitPolicy' from a list of accept or reject items. Return the
+-- result or 'throwError' in the monad if the format is invalid.
+parseExitPolicy :: MonadError String m => [Item] -> m ExitPolicy
 parseExitPolicy = mapM parseRule
   where
-
     parseRule (Item key (Just arg) _) = do
       [addrSpec,portSpec] <- return $ B.split ':' arg
       ruleType'           <- parseRuleType key
       (address,mask)      <- parseAddrSpec addrSpec
       (beginPort,endPort) <- parsePortSpec portSpec
       return $! Rule ruleType' address mask beginPort endPort
-    parseRule _ = fail "parseRule: failed"
+    parseRule _ = throwError "parseRule: failed"
 
     parseRuleType key
       | key == b 6 "accept"# = return Accept
       | key == b 6 "reject"# = return Reject
-      | otherwise            = fail "parseRuleType: failed"
+      | otherwise            = throwError "parseRuleType: failed"
 
     parseAddrSpec bs
       | bs == b 1 "*"# = return (0, 0)
@@ -260,11 +260,11 @@ parseExitPolicy = mapM parseRule
       | Just [begin,end] <- mapM (fmap fromIntegral . readInt) (B.split '-' bs)
       = return (begin, end)
       | Just port <- fromIntegral `fmap` readInt bs = return (port, port)
-      | otherwise = fail "parsePortSpec: failed"
+      | otherwise = throwError "parsePortSpec: failed"
 
     bitsToMask x
       | 0 <= x, x <= 32 = return $ 0xffffffff `shiftL` (32 - x)
-      | otherwise       = fail "bitsToMask: failed"
+      | otherwise       = throwError "bitsToMask: failed"
 
 -- | Return whether the exit policy allows an exit connection to the given IPv4
 -- address and port. The first matching rule determines the result. If no rule
