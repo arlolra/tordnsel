@@ -115,6 +115,7 @@ import Control.Concurrent.MVar
   (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, withMVar, swapMVar)
 import qualified Control.Exception as E
 import Control.Monad (unless, liftM)
+import Control.Monad.Error (MonadError(..))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit)
@@ -623,34 +624,39 @@ newtype CircuitID = CircId ByteString
   deriving (Eq, Ord)
 
 instance Show CircuitID where
-  showsPrec _ (CircId cid) = ("(CID " ++) . (B.unpack cid ++) . (")" ++)
+  showsPrec _ (CircId cid) = cat "(CID " cid ')'
 
 -- | A special 'CircuitID' of "0".
 nullCircuitID :: CircuitID
 nullCircuitID = CircId (b 1 "0"#)
 
--- | Parse an identifier using the constructor @con@ and 'fail'ing in the monad
+-- | Parse an identifier using the constructor @con@. 'throwError' in the monad
 -- if parsing fails.
-parseID :: Monad m => (ByteString -> a) -> ByteString -> m a
+parseID :: MonadError ShowS m => (ByteString -> a) -> ByteString -> m a
 parseID con bs
   | B.all isAlphaNum bs = return $! con bs
-  | otherwise           = fail "parseID: invalid identifer"
+  | otherwise = throwError $ cat "Malformed identifier " (esc maxIDLen bs) '.'
+  where maxIDLen = 32
 
 -- | A circuit status entry.
 data CircuitStatus = CircStatus CircuitID CircuitState [RouterID]
   deriving Show
 
--- | Parse a circuit status entry line, 'fail'ing in the monad if parsing fails.
-parseCircuitStatus :: Monad m => ByteString -> m CircuitStatus
+-- | Parse a circuit status entry line. 'throwError' in the monad if parsing
+-- fails.
+parseCircuitStatus :: MonadError ShowS m => ByteString -> m CircuitStatus
 parseCircuitStatus line
-  | cid:state:rest <- B.split ' ' line = do
-      cid'   <- parseID CircId (B.copy cid)
-      state' <- parseCircuitState state
-      return $! CircStatus cid' state'
-                           (fromMaybe [] (parsePath =<< listToMaybe rest))
-  | otherwise = fail "parseCircuitStatus: failed"
+  | cid:state:rest <- B.split ' ' line =
+      prependError ("Failed parsing circuit status: " ++) $ do
+        cid'   <- parseID CircId (B.copy cid)
+        state' <- parseCircuitState state
+        return $! CircStatus cid' state'
+                            (fromMaybe [] (parsePath =<< listToMaybe rest))
+  | otherwise = throwError $ cat "Malformed circuit status "
+                                 (esc maxStatusLen line) '.'
   where
     parsePath = mapM (decodeBase16RouterID . B.take 40 . B.drop 1) . B.split ','
+    maxStatusLen = 512
 
 -- | A circuit's current state.
 data CircuitState
@@ -661,40 +667,46 @@ data CircuitState
   | CrClosed   -- ^ Circuit closed (was built)
   deriving Show
 
--- | Parse a circuit state, 'fail'ing in the monad if parsing fails.
-parseCircuitState :: Monad m => ByteString -> m CircuitState
+-- | Parse a circuit state. 'throwError' in the monad if parsing fails.
+parseCircuitState :: MonadError ShowS m => ByteString -> m CircuitState
 parseCircuitState bs
   | bs == b 8 "LAUNCHED"# = return CrLaunched
   | bs == b 5 "BUILT"#    = return CrBuilt
   | bs == b 8 "EXTENDED"# = return CrExtended
   | bs == b 6 "FAILED"#   = return CrFailed
   | bs == b 6 "CLOSED"#   = return CrClosed
-  | otherwise             = fail "parseCircuitState: unknown state"
+  | otherwise = throwError $ cat "Unknown circuit state "
+                                 (esc maxStateLen bs) '.'
+  where maxStateLen = 32
 
 -- | A stream identifier.
 newtype StreamID = StrmId ByteString
   deriving (Eq, Ord)
 
 instance Show StreamID where
-  showsPrec _ (StrmId sid) = ("(SID " ++) . (B.unpack sid ++) . (")" ++)
+  showsPrec _ (StrmId sid) = cat "(SID " sid ')'
 
 -- | A stream status entry.
 data StreamStatus
   = StrmStatus StreamID StreamState (Maybe CircuitID) Address Port
   deriving Show
 
--- | Parse a stream status entry line, 'fail'ing in the monad if parsing fails.
-parseStreamStatus :: Monad m => ByteString -> m StreamStatus
+-- | Parse a stream status entry line. 'throwError' in the monad if parsing
+-- fails.
+parseStreamStatus :: MonadError ShowS m => ByteString -> m StreamStatus
 parseStreamStatus line
   | sid:state:cid:target:_ <- B.split ' ' line
-  , [addr,port]            <- B.split ':' target = do
-      sid'   <- parseID StrmId (B.copy sid)
-      state' <- parseStreamState state
-      cid'   <- parseID CircId (B.copy cid)
-      port'  <- parsePort port
-      let mbCId = if cid' == nullCircuitID then Nothing else Just cid'
-      return $! StrmStatus sid' state' mbCId (readAddress $ B.copy addr) port'
-  | otherwise = fail "parseStreamStatus: failed"
+  , [addr,port]            <- B.split ':' target =
+      prependError ("Failed parsing stream status: " ++) $ do
+        sid'   <- parseID StrmId (B.copy sid)
+        state' <- parseStreamState state
+        cid'   <- parseID CircId (B.copy cid)
+        port'  <- parsePort port
+        let mbCId = if cid' == nullCircuitID then Nothing else Just cid'
+        return $! StrmStatus sid' state' mbCId (readAddress $ B.copy addr) port'
+  | otherwise = throwError $ cat "Malformed stream status "
+                                 (esc maxStatusLen line) '.'
+  where maxStatusLen = 512
 
 -- | A stream's current state.
 data StreamState
@@ -709,8 +721,8 @@ data StreamState
   | StDetached    -- ^ Detached from circuit; still retriable
   deriving Show
 
--- | Parse a stream state, 'fail'ing in the monad if parsing fails.
-parseStreamState :: Monad m => ByteString -> m StreamState
+-- | Parse a stream state. 'throwError' in the monad if parsing fails.
+parseStreamState :: MonadError ShowS m => ByteString -> m StreamState
 parseStreamState bs
   | bs == b 3  "NEW"#         = return StNew
   | bs == b 10 "NEWRESOLVE"#  = return StNewResolve
@@ -721,7 +733,9 @@ parseStreamState bs
   | bs == b 6  "FAILED"#      = return StFailed
   | bs == b 6  "CLOSED"#      = return StClosed
   | bs == b 8  "DETACHED"#    = return StDetached
-  | otherwise                 = fail "parseStreamState: unknown state"
+  | otherwise = throwError $ cat "Unknown stream state "
+                                 (esc maxStateLen bs) '.'
+  where maxStateLen = 32
 
 -- | An address mapping.
 data AddressMap = AddrMap Address -- old address
@@ -730,17 +744,21 @@ data AddressMap = AddrMap Address -- old address
   deriving Show
 
 -- | Parse an address mapping, using the specified time zone to convert an
--- expiry time to UTC. 'fail' in the monad if parsing fails.
-parseAddressMap :: Monad m => TimeZone -> ByteString -> m AddressMap
+-- expiry time to UTC. 'throwError' in the monad if parsing fails.
+parseAddressMap :: MonadError ShowS m => TimeZone -> ByteString -> m AddressMap
 parseAddressMap tz line
   | fst (breakWS rest) == b 5 "NEVER"# = return $! mapping Never
   | b 1 "\""# `B.isPrefixOf` rest, _:time:_ <- B.split '"' rest
-  = (mapping . Expiry . localTimeToUTC tz) `liftM` parseLocalTime time
-  | otherwise                          = fail "parseAddressMap: failed"
+  = prependError
+      ("Failed parsing address mapping: " ++)
+      ((mapping . Expiry . localTimeToUTC tz) `liftM` parseLocalTime time)
+  | otherwise = throwError $ cat "Malformed address mapping "
+                                 (esc maxMappingLen line) '.'
   where
     mapping = AddrMap (readAddress old) (readAddress new)
     (old,(new,rest)) = second breakWS $ breakWS line
     breakWS = second (B.dropWhile isSpace) . B.break isSpace
+    maxMappingLen = 256
 
 -- | An address mapping expiry time.
 data Expiry = Expiry UTCTime | Never
@@ -773,22 +791,23 @@ data TorControlError
   deriving Typeable
 
 instance Show TorControlError where
-  showsPrec _ (TCError (x,y,z) text) = ([x,y,z,' '] ++) . showEscaped 512 text
+  showsPrec _ (TCError (x,y,z) text) = cat [x,y,z,' '] (showEscaped 512 text)
   showsPrec _ ParseError = ("Parsing document failed" ++)
   showsPrec _ (ProtocolError reply loc) =
-    ("Protocol error: got " ++) . showEscaped 512 reply . (" at " ++) . loc
+    cat "Protocol error: got " (showEscaped 512 reply) " at " loc
   showsPrec _ ConnectionClosed = ("Connection is already closed" ++)
 
 -- | Convert a negative reply to a 'TorControlError'.
 replyToError :: Reply -> TorControlError
 replyToError (Reply code text _) = TCError code (escape text)
 
--- | Parse a reply code, 'fail'ing in the monad if parsing fails.
-parseReplyCode :: Monad m => ByteString -> m ReplyCode
+-- | Parse a reply code. 'throwError' in the monad if parsing fails.
+parseReplyCode :: MonadError ShowS m => ByteString -> m ReplyCode
 parseReplyCode bs
   | all isDigit cs, [x,y,z] <- cs = return (x, y, z)
-  | otherwise                     = fail "parseReplyCode: failed"
+  | otherwise = throwError $ cat "Malformed reply code " (esc maxCodeLen bs) '.'
   where cs = B.unpack bs
+        maxCodeLen = 16
 
 -- | Throw a 'TorControlError' if the reply indicates failure.
 throwIfNotPositive :: Reply -> IO ()

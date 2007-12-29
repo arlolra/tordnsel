@@ -86,8 +86,8 @@ module TorDNSEL.NetworkState.Internals (
   , b
   ) where
 
-import Control.Arrow ((&&&))
-import Control.Monad (liftM, liftM2, forM_, replicateM_, guard)
+import Control.Arrow ((&&&), second)
+import Control.Monad (liftM2, forM_, replicateM_, guard)
 import Control.Monad.Error (MonadError(..))
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
@@ -794,7 +794,10 @@ data ExitAddress = ExitAddress
     -- helps us decide when to discard a router.
     eaLastStatus :: {-# UNPACK #-} !UTCTime,
     -- | A map from exit address to when the address was last seen.
-    eaAddresses  :: {-# UNPACK #-} !(Map HostAddress UTCTime) }
+    eaAddresses  :: {-# UNPACK #-} !(Map HostAddress UTCTime) } deriving Eq
+
+instance Show ExitAddress where
+  showsPrec _ = cat . renderExitAddress
 
 -- | Exit test results are represented using the same document meta-format Tor
 -- uses for router descriptors and network status documents.
@@ -810,21 +813,22 @@ renderExitAddress x = B.unlines $
       B.unwords [b 11 "ExitAddress"#, B.pack $ inet_htoa addr, renderTime time]
     renderTime = B.pack . take 19 . show
 
--- | Parse a single exit address entry, 'fail'ing in the monad if parsing fails.
-parseExitAddress :: MonadError String m => Document -> m ExitAddress
-parseExitAddress items = do
-  rid         <- decodeBase16RouterID
-                             =<< findArg (b 8  "ExitNode"#   ==) items
-  published  <- parseUTCTime =<< findArg (b 9  "Published"#  ==) items
-  lastStatus <- parseUTCTime =<< findArg (b 10 "LastStatus"# ==) items
-  addrs <- mapM parseAddr . filter ((b 11 "ExitAddress"# ==) . iKey) $ items
-  return $! ExitAddress rid published lastStatus (M.fromList addrs)
+-- | Parse a single exit address entry. Return the result or 'throwError' in the
+-- monad if parsing fails.
+parseExitAddress :: MonadError ShowS m => Document -> m ExitAddress
+parseExitAddress items =
+  prependError ("Failed parsing exit address entry: " ++) $ do
+    rid        <- decodeBase16RouterID =<< findArg (b 8  "ExitNode"#) items
+    published  <- parseUTCTime         =<< findArg (b 9  "Published"#) items
+    lastStatus <- parseUTCTime         =<< findArg (b 10 "LastStatus"#) items
+    addrs <- mapM parseAddr . filter ((b 11 "ExitAddress"# ==) . iKey) $ items
+    return $! ExitAddress rid published lastStatus (M.fromList addrs)
   where
-    parseAddr item = do
-      (addr,tested) <- B.break isSpace `liftM` liftArg (iArg item)
-      liftM2 (,) (inet_atoh addr) (parseUTCTime $ B.dropWhile isSpace tested)
-    liftArg (Just arg) = return arg
-    liftArg _          = throwError "no argument"
+    parseAddr Item { iArg = Just line } =
+      let (addr,testTime) = B.dropWhile isSpace `second` B.break isSpace line
+      in prependError ("Failed parsing exit address item: " ++)
+                      (liftM2 (,) (inet_atoh addr) (parseUTCTime testTime))
+    parseAddr _ = throwError ("Failed parsing exit address item." ++)
 
 -- | On startup, read the exit test results from the state directory. Return the
 -- results in ascending order of their fingerprints.

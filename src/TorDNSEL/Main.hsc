@@ -123,13 +123,13 @@ main = do
     case b "configfile"## `M.lookup` conf of
       Just fp -> do
         file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp)
-          (exit . ("Opening config file failed: " ++) . show)
+          (exit . cat "Opening config file failed: ")
         exitLeft $ makeConfig . M.union conf =<< parseConfigFile file
       Nothing -> exitLeft $ makeConfig conf
 
   euid <- getEffectiveUserID
   when (any (isJust . ($ conf)) [cfUser, cfGroup, cfChangeRootDirectory] &&
-        euid /= 0) $ exit "You must be root to drop privileges or chroot."
+        euid /= 0) $ exit ("You must be root to drop privileges or chroot." ++)
 
   ids <- getIDs (cfUser conf) (cfGroup conf)
 
@@ -140,8 +140,7 @@ main = do
     testSocks <- forM (snd $ tcfTestListenAddress testConf) $ \port ->
       E.catchJust E.ioErrors
         (bindListeningSocket (fst $ tcfTestListenAddress testConf) port)
-        (\e -> exit $ "Binding listening socket to port " ++ show port ++
-                      " failed: " ++ show e)
+        (exit . cat "Binding listening socket to port " port " failed: ")
 
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
@@ -158,16 +157,16 @@ main = do
       (Just dir,_) ->
          E.catchJust E.ioErrors
            (Just `fmap` B.readFile (dir ++ "/control_auth_cookie"))
-           (exit . ("Opening control auth cookie failed: " ++) . show)
+           (exit . cat "Opening control auth cookie failed: ")
       (_,Just passwd) -> return (Just passwd)
       _               -> return Nothing
 
   pidHandle <- E.catchJust E.ioErrors
                  (flip openFile WriteMode `liftMb` cfPIDFile conf)
-                 (exit . ("Opening PID file failed: " ++) . show)
+                 (exit . cat "Opening PID file failed: ")
 
   sock <- E.handleJust E.ioErrors
-          (exit . ("Binding DNS socket failed: " ++) . show) $ do
+          (exit . cat "Binding DNS socket failed: ") $ do
     sock <- socket AF_INET Datagram udpProtoNum
     setSocketOption sock ReuseAddr 1
     bindSocket sock $ cfDNSListenAddress conf
@@ -270,7 +269,7 @@ torController net control authSecret = do
 checkStateDirectory :: Maybe UserID -> Maybe FilePath -> FilePath -> IO ()
 checkStateDirectory uid newRoot stateDir =
   E.handleJust E.ioErrors
-    (exit . ("Preparing state directory failed: " ++) . show) $ do
+    (exit . cat "Preparing state directory failed: ") $ do
       createDirectoryIfMissing True stateDir'
       desiredUID <- maybe getEffectiveUserID return uid
       st <- getFileStatus stateDir'
@@ -291,12 +290,11 @@ setMaxOpenFiles lowerLimit cap = do
   limits <- getResourceLimit ResourceOpenFiles
 
   when (euid /= 0 && hardLimit limits < lowerLimit) $
-    exit $ "The hard limit on file descriptors is set to " ++
-           show (hardLimit limits) ++ ", but we need at least " ++
-           show lowerLimit ++ "."
+    exit $ cat "The hard limit on file descriptors is set to "
+               (hardLimit limits) ", but we need at least " lowerLimit '.'
   when (fdSetSize < lowerLimit) $
-    exit $ "FD_SETSIZE is " ++ show fdSetSize ++ ", but we need at least " ++
-           show lowerLimit ++ " file descriptors."
+    exit $ cat "FD_SETSIZE is " fdSetSize ", but we need at least " lowerLimit
+               " file descriptors."
 
   let newLimits limit
         | euid /= 0 = limits { softLimit = limit }
@@ -311,7 +309,7 @@ setMaxOpenFiles lowerLimit cap = do
     (setResourceLimit ResourceOpenFiles (newLimits most) >> return most) $ \e ->
     do
 #ifdef OPEN_MAX
-      -- For OSX 10.5. This hasn't been tested.
+      -- For OS X 10.5. This hasn't been tested.
       let openMax = ResourceLimit #{const OPEN_MAX}
       if not (isPermissionError e) && openMax < most
         then do setResourceLimit ResourceOpenFiles (newLimits openMax)
@@ -373,7 +371,7 @@ daemonize io = do
   where stdFds = [stdInput, stdOutput, stdError]
 
 -- | Print the given string as an error message and exit.
-exit :: String -> IO a
+exit :: ShowS -> IO a
 exit = exitLeft . Left
 
 -- | Lift a 'Maybe' into a monadic action.

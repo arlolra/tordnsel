@@ -32,7 +32,8 @@ module TorDNSEL.Config.Internals (
   ) where
 
 import Control.Arrow ((***), second)
-import Control.Monad (liftM, liftM2, unless, ap)
+import Control.Monad (liftM, liftM2, ap)
+import Control.Monad.Error (MonadError(..))
 import Data.Char (isSpace, toLower)
 import Data.Maybe (catMaybes)
 import qualified Data.ByteString.Char8 as B
@@ -112,7 +113,7 @@ knownConfigItems
 
 -- | Merge in default config options, check for missing options, and parse
 -- individual config values.
-makeConfig :: Monad m => ConfigMap -> m Config
+makeConfig :: MonadError ShowS m => ConfigMap -> m Config
 makeConfig conf =
   return Config `app`
     "StateDirectory"# `app`
@@ -154,21 +155,21 @@ makeConfig conf =
 -- config value.
 type ConfigMap = Map ByteString ByteString
 
--- | Lookup a config value by config item, 'fail'ing in the monad when the item
--- isn't present.
-lookupValue :: Monad m => ByteString -> ConfigMap -> m ByteString
+-- | Lookup a config value by config item. 'throwError' in the monad when the
+-- item isn't present.
+lookupValue :: MonadError ShowS m => ByteString -> ConfigMap -> m ByteString
 lookupValue item conf
   | Just val <- M.lookup (B.map toLower item) conf = return val
-  | otherwise = fail ("Missing config option " ++ show item ++ " is required.")
+  | otherwise = throwError $ cat "Missing config option " item " is required."
 
 -- | Prepend a \"parsing failed\" message to a failure reason.
-prependOnFail :: Monad m => ByteString -> Either String a -> m a
-prependOnFail item = onFailure (("Parsing " ++ show item ++ " failed: ") ++)
+prependOnFail :: MonadError ShowS m => ByteString -> m a -> m a
+prependOnFail item = prependError (cat "Parsing \"" item "\" failed: ")
 
 -- | Values used in config files and passed as command line arguments.
 class ConfigValue a where
-  -- | Parse a config value, failing in the monad if parsing fails.
-  parse :: Monad m => ByteString -> ConfigMap -> m a
+  -- | Parse a config value. 'throwError' in the monad if parsing fails.
+  parse :: MonadError ShowS m => ByteString -> ConfigMap -> m a
 
 instance ConfigValue a => ConfigValue (Maybe a) where
   parse = (return .) . parse
@@ -191,28 +192,33 @@ instance ConfigValue Bool where
     case B.map toLower val of
       lc | lc == b "true"#  -> return True
          | lc == b "false"# -> return False
-         | otherwise -> fail $ "Parsing " ++ show item ++ " failed: Got " ++
-                               show val ++ ", expecting \"True\" or \"False\"."
+         | otherwise -> throwError $ cat "Parsing \"" item "\" failed: Got "
+                                     (esc maxBoolLen val) ", expecting \"True\"\
+                                     \ or \"False\"."
+    where maxBoolLen = 32
 
 instance ConfigValue SockAddr where
   parse item conf = do
     val <- lookupValue item conf
-    prependOnFail item $ do
-      let (addr:port:rest) = B.split ':' val
-      unless (':' `B.elem` val && null rest) $
-        fail ("Invalid address/port " ++ show val ++ ".")
-      addr' <- inet_atoh addr
-      Port port' <- parsePort port
-      return $! SockAddrInet (fromIntegral port') (htonl addr')
+    prependOnFail item $
+      case B.split ':' val of
+        [addr,port] -> do
+          addr' <- inet_atoh addr
+          Port port' <- parsePort port
+          return $! SockAddrInet (fromIntegral port') (htonl addr')
+        _ -> throwError $ cat "Malformed address/port " (esc maxAddrLen val) '.'
+    where maxAddrLen = 32
 
 instance ConfigValue (HostAddress, [Port]) where
   parse item conf = do
     val <- lookupValue item conf
-    prependOnFail item $ do
-      let (addr:ports:rest) = B.split ':' val
-      unless (':' `B.elem` val && null rest) $
-        fail ("Invalid address/ports " ++ show val ++ ".")
-      liftM2 (,) (inet_atoh addr) (mapM parsePort $ B.split ',' ports)
+    prependOnFail item $
+      case B.split ':' val of
+        [addr,ports] -> liftM2 (,) (inet_atoh addr)
+                                   (mapM parsePort $ B.split ',' ports)
+        _ -> throwError $ cat "Malformed address/ports "
+                              (esc maxAddrLen val) '.'
+    where maxAddrLen = 256
 
 instance ConfigValue HostAddress where
   parse item conf = lookupValue item conf >>= prependOnFail item . inet_atoh
@@ -220,7 +226,8 @@ instance ConfigValue HostAddress where
 instance ConfigValue LogConfig where
   parse item conf = do
     val <- lookupValue item conf
-    onFailure (("Parsing log option " ++ show val ++ " failed: ") ++) $ do
+    prependError (cat "Parsing log option " (esc maxLogLen val)
+                      " failed: ") $ do
       let (severity,(target,file)) = second (second (B.dropWhile isSpace) .
             B.break isSpace . B.dropWhile isSpace) . B.break isSpace $ val
       severity' <- case B.map toLower severity of
@@ -229,52 +236,60 @@ instance ConfigValue LogConfig where
            | lc == b "notice"# -> return Notice
            | lc == b "warn"#   -> return Warn
            | lc == b "error"#  -> return Error
-           | otherwise -> fail $ "Invalid log severity " ++ show severity ++
-                                 ". Expecting \"debug\", \"info\", \"notice\", \
-                                 \\"warn\", or \"error\"."
+           | otherwise -> throwError $ cat "Invalid log severity "
+               (esc maxSeverityLen severity) ". Expecting \"debug\", \"info\", \
+               \\"notice\", \"warn\", or \"error\"."
       target' <- case B.map toLower target of
         lc | lc == b "stdout"# -> return ToStdOut
            | lc == b "stderr"# -> return ToStdErr
-           | lc == b "file"#   -> if B.null file
-                                    then fail "Log file name is missing."
-                                    else return . ToFile . B.unpack $ file
-           | otherwise -> fail $ "Invalid log target " ++ show target ++ ". Exp\
-                                 \ecting \"stdout\", \"stderr\", or \"file\"."
+           | lc == b "file"# ->
+               if B.null file then throwError ("Log file name is missing." ++)
+                              else return . ToFile . B.unpack $ file
+           | otherwise -> throwError $ cat "Invalid log target "
+               (esc maxTargetLen target) ". Expecting \"stdout\", \"stderr\", \
+               \or \"file\"."
       return LogConfig { minSeverity = severity'
                        , logTarget   = target'
                        , logEnabled  = True }
+    where
+      maxLogLen = 512
+      maxSeverityLen = 32
+      maxTargetLen = 32
 
 instance ConfigValue DomainName where
   parse item conf = (DomainName . map Label . reverse . dropWhile B.null .
     reverse . B.split '.' . B.map toLower) `liftM` lookupValue item conf
 
--- | Parse a config file, skipping comments and failing in the monad if an
+-- | Parse a config file, skipping comments. 'throwError' in the monad if an
 -- unknown config item is present.
-parseConfigFile :: Monad m => ByteString -> m ConfigMap
+parseConfigFile :: MonadError ShowS m => ByteString -> m ConfigMap
 parseConfigFile = liftM (M.fromList . catMaybes) . mapM parseLine . B.lines
   where
     parseLine line
       | B.null line' = return Nothing
       | lcItem `S.notMember` knownConfigItems
-      = fail ("Unknown config option " ++ show item ++ ".")
+      = throwError $ cat "Unknown config option " (esc maxOptionLen item) '.'
       | otherwise    = return $ Just (lcItem, value)
       where
         lcItem = B.map toLower item
         (item,value) = second (B.dropWhile isSpace) . B.break isSpace $ line'
         (line',_) = B.spanEnd isSpace . B.takeWhile (/= '#') $ line
+        maxOptionLen = 64
 
 -- | Given a list of command line arguments, return a map from config item to
--- option, failing in the monad if an unknown item was provided.
-parseConfigArgs :: Monad m => [String] -> m ConfigMap
+-- option. 'throwError' in the monad if an unknown item was provided.
+parseConfigArgs :: MonadError ShowS m => [String] -> m ConfigMap
 parseConfigArgs = liftM M.fromList . mapM parseArg . splitPairs
   where
     parseArg ["-f",option] = return (b "configfile"#, B.pack option)
     parseArg [item,option]
       | S.member lcItem knownConfigItems = return (lcItem, B.pack option)
-      | otherwise = fail ("Unknown config option " ++ show item' ++ ".")
+      | otherwise = throwError $ cat "Unknown config option "
+                                     (esc maxOptionLen $ B.pack item') '.'
       where
         lcItem = B.pack . map toLower $ item'
         item' = dropWhile (== '-') item
+        maxOptionLen = 64
     splitPairs = takeWhile isPair . map (take 2) . iterate (drop 2)
     isPair [_,_] = True
     isPair _     = False

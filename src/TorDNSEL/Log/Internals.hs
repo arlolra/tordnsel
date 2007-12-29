@@ -31,8 +31,7 @@ import Control.Monad.Fix (fix)
 import Data.Maybe (isJust)
 import Data.Time (UTCTime, getCurrentTime)
 import System.IO
-  ( Handle, stdout, stderr, openFile, IOMode(AppendMode), hPutStrLn, hFlush
-  , hClose )
+  (Handle, stdout, stderr, openFile, IOMode(AppendMode), hFlush, hClose)
 import System.IO.Unsafe (unsafePerformIO)
 
 import TorDNSEL.Control.Concurrent.Link

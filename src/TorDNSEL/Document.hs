@@ -81,20 +81,19 @@ parseObjects = unfoldAccumR parseObjects' where
 -- | Break a document into sub-documents each beginning with an item that has
 -- the keyword @firstKey@. Apply @parseDoc@ to each sub-document, returning
 -- either an error message or the parsed document.
-parseSubDocs :: ByteString -> (Document -> Either String a) -> Document
-             -> [Either String a]
+parseSubDocs :: ByteString -> (Document -> Either ShowS a) -> Document
+             -> [Either ShowS a]
 parseSubDocs firstKey parseDoc = unfoldr parseSubDocs' where
   parseSubDocs' []     = Nothing
   parseSubDocs' (x:xs) = Just (parseDoc (x : items), xs')
     where (items,xs') = break ((firstKey ==) . iKey) xs
 
--- | Return the arguments from the first item whose key satisfies the given
--- predicate. 'fail' in the monad if no such item is found.
-findArg
-  :: MonadError String m => (ByteString -> Bool) -> Document -> m ByteString
-findArg p items
-  | Just item <- find (p . iKey) items, Just arg <- iArg item = return arg
-  | otherwise = throwError "findArg: item doesn't exist"
+-- | Return the arguments from the first item whose key matches the given key.
+-- 'throwError' in the monad if no such item is found.
+findArg :: MonadError ShowS m => ByteString -> Document -> m ByteString
+findArg bs items
+  | Just item <- find ((bs ==) . iKey) items, Just arg <- iArg item = return arg
+  | otherwise = throwError $ cat "Item " bs " not found."
 
 -- | An alias for 'B.unsafePackAddress'.
 b :: Int -> Addr# -> ByteString

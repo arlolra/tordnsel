@@ -26,7 +26,9 @@ module TorDNSEL.Util (
   , inet_atoh
   , parseUTCTime
   , parseLocalTime
-  , onFailure
+  , prependError
+  , replaceError
+  , handleError
   , filterRight
 
   -- * Miscellaneous functions
@@ -71,6 +73,7 @@ module TorDNSEL.Util (
   , unescLen
   , escape
   , showEscaped
+  , esc
 
   -- * Constants
   , tcpProtoNum
@@ -129,50 +132,65 @@ import TorDNSEL.DeepSeq
 --------------------------------------------------------------------------------
 -- Parsing functions
 
--- | Parse an 'Int' from a 'B.ByteString'. Return the result or 'fail' in the
--- monad if parsing fails.
-readInt :: Monad m => ByteString -> m Int
+-- | Parse an 'Int' from a 'B.ByteString'. Return the result or 'throwError' in
+-- the monad if parsing fails.
+readInt :: MonadError ShowS m => ByteString -> m Int
 readInt bs = case B.readInt bs of
   Just (int,rest) | B.null rest -> return int
-  _                             -> fail ("Invalid integer " ++ show bs ++ ".")
+  _ -> throwError $ cat "Malformed integer " (esc maxIntLen bs) '.'
+  where maxIntLen = 10
 
--- | Parse an 'Integer' from a 'B.ByteString'. Return the result or 'fail' in
--- the monad if parsing fails.
-readInteger :: Monad m => ByteString -> m Integer
+-- | Parse an 'Integer' from a 'B.ByteString'. Return the result or 'throwError'
+-- in the monad if parsing fails.
+readInteger :: MonadError ShowS m => ByteString -> m Integer
 readInteger bs = case B.readInteger bs of
   Just (int,rest) | B.null rest -> return int
-  _                             -> fail ("Invalid integer " ++ show bs ++ ".")
+  _ -> throwError $ cat "Malformed integer " (esc maxIntegerLen bs) '.'
+  where maxIntegerLen = 32
 
--- | Convert an IPv4 address in dotted-quad form to a 'HostAddress'. Returns the
--- result or 'fail' in the monad if the format is invalid.
-inet_atoh :: Monad m => ByteString -> m HostAddress
+-- | Convert an IPv4 address in dotted-quad form to a 'HostAddress'. Return the
+-- result or 'throwError' in the monad if the format is invalid.
+inet_atoh :: MonadError ShowS m => ByteString -> m HostAddress
 inet_atoh bs
   | Just os@[_,_,_,_] <- mapM readInt $ B.split '.' bs
   , all (\o -> o .&. 0xff == o) os
   = return . foldl' (.|.) 0 . zipWith shiftL (map fromIntegral os) $ [24,16..]
-inet_atoh bs = fail ("Invalid IP address " ++ show bs ++ ".")
+inet_atoh bs = throwError $ cat "Malformed IP address " (esc maxAddrLen bs) '.'
+  where maxAddrLen = 15
 
 -- | Parse a UTCTime in this format: \"YYYY-MM-DD HH:MM:SS\".
-parseUTCTime :: Monad m => ByteString -> m UTCTime
+parseUTCTime :: MonadError ShowS m => ByteString -> m UTCTime
 parseUTCTime bs = do
   LocalTime day timeOfDay <- parseLocalTime bs
   return $! UTCTime day (timeOfDayToTime timeOfDay)
 
 -- | Parse a LocalTime in this format: \"YYYY-MM-DD HH:MM:SS\".
-parseLocalTime :: Monad m => ByteString -> m LocalTime
-parseLocalTime bs = onFailure (const $ "Invalid time " ++ show bs ++ ".") $ do
-  [date,time]       <- return       $ B.split ' ' bs
-  [year,month,day]  <- mapM readInt $ B.split '-' date
-  [hour,minute,sec] <- mapM readInt $ B.split ':' time
-  when (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 ||
-        hour > 23 || minute < 0 || minute > 59 || sec < 0 || sec > 61) $ fail ""
-  let diff = fromInteger . toInteger $ hour * 3600 + minute * 60 + sec
-  return $! LocalTime (fromGregorian (toInteger year) month day)
-                      (timeToTimeOfDay diff)
+parseLocalTime :: MonadError ShowS m => ByteString -> m LocalTime
+parseLocalTime bs
+  | B.length bs == timeLen, [date,time] <- B.split ' ' bs
+  = prependError (cat "Malformed time " (esc timeLen bs) ": ") $ do
+      [year,month,day]  <- mapM readInt $ B.split '-' date
+      [hour,minute,sec] <- mapM readInt $ B.split ':' time
+      when (month < 1 || month > 12 || day < 1 || day > 31 || hour < 0 ||
+            hour > 24 || minute < 0 || minute > 59 || sec < 0 || sec > 61) $
+        throwError $ cat "Failed sanity check."
+      let diff = fromInteger . toInteger $ hour * 3600 + minute * 60 + sec
+      return $! LocalTime (fromGregorian (toInteger year) month day)
+                          (timeToTimeOfDay diff)
+  | otherwise = throwError $ cat "Malformed time " (esc timeLen bs) '.'
+  where timeLen = 19
 
--- XXX doc
-onFailure :: Monad m => ShowS -> Either String a -> m a
-onFailure f = either (fail . f) return
+-- | Prepend a string to any error message thrown by the given action.
+prependError :: MonadError ShowS m => ShowS -> m a -> m a
+prependError msg = handleError (throwError . (msg .))
+
+-- | Substitute another error for an error thrown by the given action.
+replaceError :: MonadError e m => e -> m a -> m a
+replaceError e = handleError (const $ throwError e)
+
+-- | 'catchError' with the argument order reversed.
+handleError :: MonadError e m => (e -> m a) -> m a -> m a
+handleError = flip catchError
 
 -- XXX parsing errors should be logged
 filterRight :: [Either a b] -> [b]
@@ -235,12 +253,12 @@ syncExceptions :: E.Exception -> Maybe E.Exception
 syncExceptions (E.AsyncException _) = Nothing
 syncExceptions e                    = Just e
 
--- | Lift an @Either String@ computation into the 'IO' monad by printing
+-- | Lift an @Either ShowS@ computation into the 'IO' monad by printing
 -- @Left e@ as an error message and exiting.
-exitLeft :: Either String a -> IO a
+exitLeft :: Either ShowS a -> IO a
 exitLeft = either (\e -> err e >> exitFailure) return
   where
-    err e = hPutStr stderr . unlines . (\u -> [e,u]) . usage =<< getProgName
+    err e = hPutStr stderr . unlines . (\u -> [e "", u]) . usage =<< getProgName
     usage progName = "Usage: " ++ progName ++ " [-f <config file>] [options...]"
 
 -- | Is an integral value inside the bounds of another integral type?
@@ -248,6 +266,13 @@ exitLeft = either (\e -> err e >> exitFailure) return
 inBoundsOf :: (Integral a, Integral b, Bounded b) => a -> b -> Bool
 x `inBoundsOf` y = x >= fromIntegral (minBound `asTypeOf` y) &&
                    x <= fromIntegral (maxBound `asTypeOf` y)
+
+instance Show ShowS where
+  showsPrec _ s = shows (s "")
+
+instance Error ShowS where
+  noMsg = id
+  strMsg = (++)
 
 instance Error e => MonadError e Maybe where
   throwError = const Nothing
@@ -433,14 +458,16 @@ instance Binary Port where
 instance DeepSeq Port where
   deepSeq = seq . unPort
 
--- | Parse a port, 'fail'ing in the monad if parsing fails.
-parsePort :: Monad m => ByteString -> m Port
+-- | Parse a port, returning the result or 'throwError' in the monad if parsing
+-- fails.
+parsePort :: MonadError ShowS m => ByteString -> m Port
 parsePort bs = do
-  (port,int) <- onFailure (const $ "Invalid port " ++ show bs ++ ".") $
-                          (fromIntegral &&& id) `liftM` readInt bs
-  if int `inBoundsOf` port
-    then return port
-    else fail ("Port " ++ show int ++ " is out of range.")
+  (port,int) <- replaceError (cat "Malformed port " (esc maxPortLen bs) '.')
+                             ((fromIntegral &&& id) `liftM` readInt bs)
+  unless (int `inBoundsOf` port) $
+    throwError $ cat "Port " int " is out of range."
+  return port
+  where maxPortLen = 5
 
 --------------------------------------------------------------------------------
 -- Bounded transactional FIFO channels
@@ -485,10 +512,10 @@ escape :: ByteString -> EscapedString
 escape = uncurry Escaped . (B.concat . build &&& B.length)
   where
     build bs
-      | B.null bs    = []
-      | B.null unesc = [esc]
-      | otherwise    = esc : escape' unesc : build rest
-      where (esc,(unesc,rest)) = second (B.span isControl) . B.span isPrint $ bs
+      | B.null bs     = []
+      | B.null unescd = [escd]
+      | otherwise     = escd : escape' unescd : build rest
+      where (escd,(unescd,rest)) = B.span isControl `second` B.span isPrint bs
     escape' = B.pack . flip (foldl' (.) id) "" . map showLitChar . B.unpack
 
 -- | Quote an 'EscapedString', truncating it if its escaped length exceeds
@@ -496,10 +523,14 @@ escape = uncurry Escaped . (B.concat . build &&& B.length)
 -- after the end quote.
 showEscaped :: Int -> EscapedString -> ShowS
 showEscaped maxLen (Escaped s len)
-  | B.length s > maxLen = quote (B.unpack (B.take maxLen s) ++) .
-                          ("[truncated, " ++) . shows len . (" total bytes]" ++)
-  | otherwise           = quote (B.unpack s ++)
-  where quote f = ('"':) . f . ('"':)
+  | B.length s > maxLen = cat '"' (B.take maxLen s) '"'
+                              "[truncated, " len " total bytes]"
+  | otherwise           = cat '"' s '"'
+
+-- | Show a quoted and escaped 'ByteString', truncating it to the given length
+-- if necessary.
+esc :: Int -> ByteString -> ShowS
+esc maxLen = showEscaped maxLen . escape
 
 --------------------------------------------------------------------------------
 -- Constants

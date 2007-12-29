@@ -45,11 +45,11 @@ module TorDNSEL.Directory.Internals (
   , parseExitPolicy
   , exitPolicyAccepts
 
-  -- * Helpers
+  -- * Aliases
   , b
   ) where
 
-import Control.Monad (unless, liftM)
+import Control.Monad (when, unless, liftM)
 import Control.Monad.Error (MonadError(throwError))
 import Data.Char
   ( ord, isSpace, isHexDigit, digitToInt, isAscii, isAsciiUpper
@@ -84,33 +84,35 @@ data Descriptor = Desc
     descExitPolicy :: {-# UNPACK #-} !ExitPolicy }
 
 instance Show Descriptor where
-  showsPrec _ d = shows (descRouterID d) . (" " ++) .
-    (inet_htoa (descListenAddr d) ++) . (" " ++) .
-    shows (posixSecondsToUTCTime $ descPublished d) . ("\n" ++) .
-    foldl' (.) id (map (\p -> shows p . ("\n" ++)) (descExitPolicy d))
+  showsPrec _ d = cat (descRouterID d) ' ' (inet_htoa $ descListenAddr d) ' '
+    (posixSecondsToUTCTime $ descPublished d) '\n'
+    (foldl' (.) id (map (\p -> shows p . ('\n' :)) (descExitPolicy d)))
 
 -- | Parse a router descriptor. Return the result or 'throwError' in the monad
 -- if the format is invalid.
-parseDescriptor :: MonadError String m => Document -> m Descriptor
-parseDescriptor items = do
-  address    <- parseRouter    =<< findArg (b 6  "router"#      ==) items
-  time       <- parsePOSIXTime =<< findArg (b 9  "published"#   ==) items
-  fp         <- parseRouterID  =<< findArg (b 11 "fingerprint"# ==) items
-  exitPolicy <- parseExitPolicy . filter isRule $ items
-  return $! Desc address time fp exitPolicy
+parseDescriptor :: MonadError ShowS m => Document -> m Descriptor
+parseDescriptor items =
+  prependError ("Failed parsing router descriptor: " ++) $ do
+    address    <- parseRouter    =<< findArg (b 6  "router"#)      items
+    time       <- parsePOSIXTime =<< findArg (b 9  "published"#)   items
+    fp         <- parseRouterID  =<< findArg (b 11 "fingerprint"#) items
+    exitPolicy <- parseExitPolicy . filter isRule $ items
+    return $! Desc address time fp exitPolicy
   where
     isRule = (\k -> k == b 6 "accept"# || k == b 6 "reject"#) . iKey
 
-    parseRouter router = do
-      _:address:_ <- return $ B.splitWith isSpace router
-      inet_atoh address
+    parseRouter router
+      | _:address:_ <- B.splitWith isSpace router = inet_atoh address
+      | otherwise = throwError $ cat "Malformed router item "
+                                     (esc maxRouterLen router) '.'
+      where maxRouterLen = 53
 
     parsePOSIXTime = liftM utcTimeToPOSIXSeconds . parseUTCTime . B.take 19
 
     parseRouterID = decodeBase16RouterID . B.filter (/= ' ')
 
 -- | Parse a 'Document' containing multiple router descriptors.
-parseDescriptors :: Document -> [Either String Descriptor]
+parseDescriptors :: Document -> [Either ShowS Descriptor]
 parseDescriptors = parseSubDocs (b 6 "router"#) parseDescriptor
 
 --------------------------------------------------------------------------------
@@ -128,23 +130,27 @@ data RouterStatus = RS
 
 -- | Parse a router status entry. Return the result or 'throwError' in the
 -- monad if the format is invalid.
-parseRouterStatus :: MonadError String m => Document -> m RouterStatus
+parseRouterStatus :: MonadError ShowS m => Document -> m RouterStatus
 parseRouterStatus items = do
-  (rid,published) <- parseRouter =<< findArg (b 1 "r"# ==) items
-  return $! RS rid published (parseStatus $ findArg (b 1 "s"# ==) items)
+  (rid,published) <- prependError ("Failed parsing router status entry: " ++)
+                                  (parseRouter =<< findArg (b 1 "r"#) items)
+  return $! RS rid published (parseStatus $ findArg (b 1 "s"#) items)
   where
-    parseRouter router = do
-      _:base64RouterID:_:date:time:_ <- return $ B.splitWith isSpace router
-      rid <- decodeBase64RouterID base64RouterID
-      published <- parseUTCTime $ B.unwords [date, time]
-      return (rid, published)
+    parseRouter router
+      | _:base64RouterID:_:date:time:_ <- B.splitWith isSpace router = do
+        rid <- decodeBase64RouterID base64RouterID
+        published <- parseUTCTime $ B.unwords [date, time]
+        return (rid, published)
+      | otherwise = throwError $ cat "Malformed status "
+                                     (esc maxStatusLen router) '.'
+      where maxStatusLen = 122
 
     parseStatus = maybe False (elem (b 7 "Running"#) . B.splitWith isSpace)
 
 -- | Parse a 'Document' containing multiple router status entries. Such a
 -- document isn't the same as a network-status document as it doesn't contain
 -- a preamble or a signature.
-parseRouterStatuses :: Document -> [Either String RouterStatus]
+parseRouterStatuses :: Document -> [Either ShowS RouterStatus]
 parseRouterStatuses = parseSubDocs (b 1 "r"#) parseRouterStatus
 
 --------------------------------------------------------------------------------
@@ -159,24 +165,28 @@ instance Show RouterID where
 
 -- | Decode a 'RouterID' encoded in base16. Return the result or 'throwError' in
 -- the monad if the format is invalid.
-decodeBase16RouterID :: MonadError String m => ByteString -> m RouterID
+decodeBase16RouterID :: MonadError ShowS m => ByteString -> m RouterID
 decodeBase16RouterID bs = do
-  unless (B.length bs == 40 && B.all isHexDigit bs) $
-    throwError "decodeBase16RouterID: failed"
+  unless (B.length bs == routerIDLen && B.all isHexDigit bs) $
+    throwError $ cat "Failed hex-decoding router identifier "
+                     (esc routerIDLen bs) '.'
   return $! RtrId . fst . W.unfoldrN 20 toBytes . B.unpack $ bs
   where
     toBytes (x:y:ys) = Just (fromBase16 x `shiftL` 4 .|. fromBase16 y, ys)
     toBytes _        = Nothing
     fromBase16 = fromIntegral . digitToInt
+    routerIDLen = 40
 
 -- | Decode a 'RouterID' encoded in base64 with trailing \'=\' signs removed.
 -- Return the result or 'throwError' in the monad if the format is invalid.
-decodeBase64RouterID :: MonadError String m => ByteString -> m RouterID
+decodeBase64RouterID :: MonadError ShowS m => ByteString -> m RouterID
 decodeBase64RouterID bs = do
-  unless (B.length bs == 27 && B.all isBase64Char bs) $
-    throwError "decodeBase64RouterID: failed"
+  unless (B.length bs == routerIDLen && B.all isBase64Char bs) $
+    throwError $ cat "Failed base64-decoding router identifier "
+                     (esc routerIDLen bs) '.'
   return $! RtrId . B.init . toBytes . split 4 $ bs
   where
+    routerIDLen = 27
     toBytes = W.pack . concatMap (indicesToBytes . map base64Index . B.unpack)
 
     indicesToBytes is = map (fromIntegral . (0xff .&.) . shiftR buf) [16,8,0]
@@ -217,9 +227,8 @@ data Rule = Rule
     ruleEndPort   :: {-# UNPACK #-} !Port }
 
 instance Show Rule where
-  showsPrec _ p = shows (ruleType p) . (" " ++) .
-    (inet_htoa (ruleAddress p) ++) . ("/" ++) . (inet_htoa (ruleMask p) ++) .
-    (":" ++) . shows (ruleBeginPort p) . ("-" ++) . shows (ruleEndPort p)
+  showsPrec _ p = cat (ruleType p) ' ' (inet_htoa $ ruleAddress p) '/'
+    (inet_htoa $ ruleMask p) ':' (ruleBeginPort p) '-' (ruleEndPort p)
 
 -- | Whether a rule allows an exit connection.
 data RuleType
@@ -229,21 +238,29 @@ data RuleType
 
 -- | Parse an 'ExitPolicy' from a list of accept or reject items. Return the
 -- result or 'throwError' in the monad if the format is invalid.
-parseExitPolicy :: MonadError String m => [Item] -> m ExitPolicy
-parseExitPolicy = mapM parseRule
+parseExitPolicy :: MonadError ShowS m => [Item] -> m ExitPolicy
+parseExitPolicy =
+  mapM (prependError ("Failed parsing exit rule: " ++) . parseRule)
   where
-    parseRule (Item key (Just arg) _) = do
-      [addrSpec,portSpec] <- return $ B.split ':' arg
-      ruleType'           <- parseRuleType key
-      (address,mask)      <- parseAddrSpec addrSpec
-      (beginPort,endPort) <- parsePortSpec portSpec
-      return $! Rule ruleType' address mask beginPort endPort
-    parseRule _ = throwError "parseRule: failed"
+    parseRule (Item key (Just arg) _)
+      | [addrSpec,portSpec] <- B.split ':' arg = do
+        ruleType' <- parseRuleType key
+        (address,mask) <- prependError
+          (cat "Malformed address specifier " (esc maxAddrLen addrSpec) ": ")
+          (parseAddrSpec addrSpec)
+        (beginPort,endPort) <- prependError
+          (cat "Malformed port specifier " (esc maxPortLen portSpec) ": ")
+          (parsePortSpec portSpec)
+        return $! Rule ruleType' address mask beginPort endPort
+    parseRule (Item key arg _) =
+      throwError $ cat "Malformed exit rule " (esc maxRuleTypeLen key) ' '
+                       (maybe id (esc maxRuleLen) arg) '.'
 
     parseRuleType key
       | key == b 6 "accept"# = return Accept
       | key == b 6 "reject"# = return Reject
-      | otherwise            = throwError "parseRuleType: failed"
+      | otherwise = throwError $ cat "Invalid rule type "
+                                     (esc maxRuleTypeLen key) '.'
 
     parseAddrSpec bs
       | bs == b 1 "*"# = return (0, 0)
@@ -257,14 +274,23 @@ parseExitPolicy = mapM parseRule
 
     parsePortSpec bs
       | bs == b 1 "*"# = return (0, 65535)
-      | Just [begin,end] <- mapM (fmap fromIntegral . readInt) (B.split '-' bs)
-      = return (begin, end)
-      | Just port <- fromIntegral `fmap` readInt bs = return (port, port)
-      | otherwise = throwError "parsePortSpec: failed"
+      | ports@[_,_] <- B.split '-' bs = do
+        [begin,end] <- mapM parsePort ports
+        when (begin > end) $
+          throwError $ cat "Begin port is greater then end port."
+        return (begin, end)
+      | otherwise = do
+        port <- parsePort bs
+        return (port, port)
 
     bitsToMask x
       | 0 <= x, x <= 32 = return $ 0xffffffff `shiftL` (32 - x)
-      | otherwise       = throwError "bitsToMask: failed"
+      | otherwise = throwError $ cat "Prefix length " x " is out of range."
+
+    maxRuleLen = maxAddrLen + 1 + maxPortLen
+    maxRuleTypeLen = 6
+    maxAddrLen = 31
+    maxPortLen = 11
 
 -- | Return whether the exit policy allows an exit connection to the given IPv4
 -- address and port. The first matching rule determines the result. If no rule
@@ -280,7 +306,7 @@ exitPolicyAccepts addr port exitPolicy
                 ruleBeginPort r <= port && port <= ruleEndPort r
 
 --------------------------------------------------------------------------------
--- Helpers
+-- Aliases
 
 -- | An alias for unsafePackAddress.
 b :: Int -> Addr# -> ByteString
