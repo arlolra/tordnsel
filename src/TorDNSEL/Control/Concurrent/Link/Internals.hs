@@ -291,11 +291,12 @@ demonitorThread (Monitor tid monId) = do
     deleteOwned tm ts = ts { ownedMons = S.delete (ids tm M.! tid, monId)
                                                   (ownedMons ts) }
 
--- | Like 'monitorThread', except the monitor is passed to an 'IO' action and
--- safely released after the action returns, even if the action throws an
--- exception.
-withMonitor :: ThreadId -> (ExitReason -> IO ()) -> (Monitor -> IO a) -> IO a
-withMonitor tid notify = E.bracket (monitorThread tid notify) demonitorThread
+-- | Like 'monitorThread', except an 'IO' action is invoked after the monitoring
+-- has started, and the monitor is safely released after the action returns,
+-- even if the action throws an exception.
+withMonitor :: ThreadId -> (ExitReason -> IO ()) -> IO a -> IO a
+withMonitor tid notify =
+  E.bracket (monitorThread tid notify) demonitorThread . const
 
 -- | Terminate the calling thread with the given 'ExitReason'.
 exit :: ExitReason -> IO a

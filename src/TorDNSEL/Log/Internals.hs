@@ -103,7 +103,7 @@ startLogger config = do
                 nextMsg
               Reconfigure reconf newSignal -> return (reconf conf, newSignal)
               Terminate reason -> exit reason
-  withMonitor tid (putMVar err) . const $
+  withMonitor tid (putMVar err) $
     takeMVar err >>= maybe (return tid) E.throwIO
 
 -- | Implements the variable parameter support for 'log'.
@@ -134,7 +134,7 @@ reconfigureLogger :: (LogConfig -> LogConfig) -> IO ()
 reconfigureLogger reconf =
   withLogger $ \tid logChan -> do
     err <- newEmptyMVar
-    withMonitor tid (putMVar err) . const $ do
+    withMonitor tid (putMVar err) $ do
       writeChan logChan . Reconfigure reconf $ putMVar err Nothing
       takeMVar err >>= flip whenJust E.throwIO
 
