@@ -265,7 +265,7 @@ torController net control authSecret = do
     registerEventHandlers [newNS, newDesc] conn
     getNetworkStatus conn >>= updateNetworkStatus net
     getAllDescriptors conn >>= updateDescriptors net
-    setFetchUselessDescriptors conn
+    setConf fetchUselessDescriptors (Just True) conn
     waitForConnection conn
 
 -- | Set up the state directory with proper ownership and permissions.

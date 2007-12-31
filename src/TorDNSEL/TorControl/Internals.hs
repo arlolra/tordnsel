@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, CPP #-}
+{-# LANGUAGE PatternGuards, MultiParamTypeClasses, CPP #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------
@@ -10,7 +10,7 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (pattern guards, concurrency, extended exceptions,
---                             GHC primitives)
+--                             multi-parameter type classes, GHC primitives)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
@@ -46,7 +46,6 @@ module TorDNSEL.TorControl.Internals (
   , getCircuitStatus
   , getStreamStatus
   , getStatus
-  , setFetchUselessDescriptors
   , CircuitPurpose(..)
   , createCircuit
   , extendCircuit
@@ -58,8 +57,20 @@ module TorDNSEL.TorControl.Internals (
   , CloseCircuitFlags(..)
   , emptyCloseCircuitFlags
   , closeCircuit
-  , setConf
+  , getConf'
+  , setConf'
+  , resetConf'
+  , setConf''
   , sendCommand
+
+  -- ** Config variables
+  , ConfVal(..)
+  , SameConfVal
+  , ConfVar(..)
+  , getConf
+  , setConf
+  , resetConf
+  , fetchUselessDescriptors
 
   -- * Asynchronous events
   , EventHandler(..)
@@ -117,7 +128,7 @@ import Control.Monad (unless, liftM)
 import Control.Monad.Error (MonadError(..))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
-import Data.Char (isSpace, isAlphaNum, isDigit)
+import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
 import Data.Foldable (traverse_)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, catMaybes, maybeToList, listToMaybe, mapMaybe)
@@ -304,13 +315,6 @@ getStatus key parse conn = do
     Reply ('2',_,_) _ _  -> protocolError(replyLine reply)
     _                    -> E.throwDyn $ replyToError reply
 
--- | Set Tor's config option \"FetchUselessDescriptors\" so we get descriptors
--- for non-running routers. Throw a 'TorControlError' if the reply code isn't
--- 250.
-setFetchUselessDescriptors :: Connection -> IO ()
-setFetchUselessDescriptors conn =
-  setConf [(b 23 "fetchuselessdescriptors"#, Just (b 1 "1"#))] conn
-
 -- | A circuit's purpose
 data CircuitPurpose = CrGeneral    -- ^ General
                     | CrController -- ^ Controller
@@ -399,12 +403,44 @@ closeCircuit (CircId cid) flags conn =
     command = Command (b 12 "closecircuit"#) (cid : flagArgs) []
     flagArgs = [flag | (p,flag) <- [(ifUnused, b 8 "IfUnused"#)], p flags]
 
--- | Send a SETCONF command with a set of key-value pairs. Throw a
--- 'TorControlError' if the reply code isn't 250.
-setConf :: [(ByteString, Maybe ByteString)] -> Connection -> IO ()
-setConf args conn = sendCommand command conn >>= throwIfNotPositive . head
+-- | Send a GETCONF command with a set of config variable names, returning
+-- a set of key-value pairs. Throw a 'TorControlError' if the reply code
+-- indicates failure.
+getConf' :: [ByteString] -> Connection -> IO [(ByteString, Maybe ByteString)]
+getConf' keys conn = do
+  rs@(r:_) <- sendCommand (Command (b 7 "getconf"#) keys []) conn
+  throwIfNotPositive r
+  -- XXX make these errors useful
+  case mapM (parseText . repText) rs of
+    Left (_ :: ShowS) -> E.throwDyn ParseError
+    Right vars -> return vars
   where
-    command = Command (b 7 "setconf"#) (map renderArg args) []
+    parseText text
+      | B.null eq      = return (key, Nothing)
+      | eq == b 1 "="# = return (key, Just val)
+      | otherwise      = throwError $ cat "Malformed GETCONF reply "
+                                          (esc maxTextLen text) '.'
+      where (key,(eq,val)) = B.splitAt 1 `second` B.span isAlpha text
+            maxTextLen = 128
+
+-- | Send a SETCONF command with a set of key-value pairs. Throw a
+-- 'TorControlError' if the reply code indicates failure.
+setConf' :: [(ByteString, Maybe ByteString)] -> Connection -> IO ()
+setConf' = setConf'' (b 7 "setconf"#)
+
+-- | Send a RESETCONF command with a set of key-value pairs. Throw a
+-- 'TorControlError' if the reply code indicates failure.
+resetConf' :: [(ByteString, Maybe ByteString)] -> Connection -> IO ()
+resetConf' = setConf'' (b 9 "resetconf"#)
+
+-- | Send a SETCONF or RESETCONF command with a set of key-value pairs. Throw a
+-- 'TorControlError' if the reply code indicates failure.
+setConf''
+  :: ByteString -> [(ByteString, Maybe ByteString)] -> Connection -> IO ()
+setConf'' name args conn =
+  sendCommand command conn >>= throwIfNotPositive . head
+  where
+    command = Command name (map renderArg args) []
     renderArg (key, Just val) = B.join (b 1 "="#) [key, val]
     renderArg (key, _)        = key
 
@@ -415,6 +451,74 @@ sendCommand c (Conn send _) = do
   mv <- newEmptyMVar
   withMVar send ($ SendCommand c (putMVar mv))
   takeMVar mv
+
+--------------------------------------------------------------------------------
+-- Config variables
+
+-- | The type of config values.
+class ConfVal a where
+  -- | Encode a config value for the control protocol.
+  encodeConfVal :: a -> ByteString
+  -- | Decode a config value from the control protocol. 'throwError' in the
+  -- monad if decoding fails.
+  decodeConfVal :: MonadError ShowS m => ByteString -> m a
+
+instance ConfVal Bool where
+  encodeConfVal True  = b 1 "1"#
+  encodeConfVal False = b 1 "0"#
+
+  decodeConfVal bool
+    | bool == b 1 "1"# = return True
+    | bool == b 1 "0"# = return False
+    | otherwise = throwError $ cat "Malformed boolean conf value "
+                                   (esc maxBoolLen bool) '.'
+    where maxBoolLen = 32
+
+-- | A constraint requiring 'setConf' and 'resetConf' to take the same type of
+-- config value as 'getConf' returns.
+class SameConfVal a b
+
+instance SameConfVal a a
+
+instance SameConfVal (Maybe a) a
+
+-- | A functional reference to a config variable.
+data (ConfVal b, SameConfVal a b) => ConfVar a b
+  = ConfVar { getConf_   :: Connection -> IO a
+            , setConf_
+            , resetConf_ :: Maybe b -> Connection -> IO () }
+
+-- | Retrieve the value of a config variable, throwing a 'TorControlError'
+-- if the command fails.
+getConf :: (ConfVal b, SameConfVal a b) => ConfVar a b -> Connection -> IO a
+getConf = getConf_
+
+-- | Set the value of a config variable, throwing a 'TorControlError' if the
+-- command fails.
+setConf :: (ConfVal b, SameConfVal a b) =>
+  ConfVar a b -> Maybe b -> Connection -> IO ()
+setConf = setConf_
+
+-- | Reset the value of a config variable, throwing a 'TorControlError' if
+-- the command fails.
+resetConf :: (ConfVal b, SameConfVal a b) =>
+  ConfVar a b -> Maybe b -> Connection -> IO ()
+resetConf = resetConf_
+
+-- | Enables fetching descriptors for non-running routers.
+fetchUselessDescriptors :: ConfVar Bool Bool
+fetchUselessDescriptors = ConfVar get (set setConf') (set resetConf') where
+  get conn = do
+    (key,val):_ <- getConf' [var] conn
+    case fmap decodeConfVal val of
+      -- XXX make these errors useful
+      Nothing       -> E.throwDyn ParseError
+      Just (Left _) -> E.throwDyn ParseError
+      Just (Right val')
+        | B.map toLower key /= var -> E.throwDyn ParseError
+        | otherwise                -> return val'
+  set f val = f [(var, fmap encodeConfVal val)]
+  var = b 23 "fetchuselessdescriptors"#
 
 --------------------------------------------------------------------------------
 -- Asynchronous events

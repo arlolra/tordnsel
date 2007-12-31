@@ -7,7 +7,7 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (pattern guards, concurrency, extended exceptions,
---                             GHC primitives)
+--                             multi-parameter type classes, GHC primitives)
 --
 -- Interfacing with Tor using the Tor control protocol, version 1. We support
 -- fetching router descriptors and router status entries, including those sent
@@ -34,7 +34,6 @@ module TorDNSEL.TorControl (
   , getNetworkStatus
   , getCircuitStatus
   , getStreamStatus
-  , setFetchUselessDescriptors
   , CircuitPurpose(..)
   , createCircuit
   , extendCircuit
@@ -44,6 +43,13 @@ module TorDNSEL.TorControl (
   , CloseCircuitFlags(..)
   , emptyCloseCircuitFlags
   , closeCircuit
+
+  -- ** Config variables
+  , ConfVar
+  , getConf
+  , setConf
+  , resetConf
+  , fetchUselessDescriptors
 
   -- * Asynchronous events
   , EventHandler
