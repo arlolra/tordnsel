@@ -110,6 +110,7 @@ import Data.Time
   ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
   , timeOfDayToTime, timeToTimeOfDay )
 import Data.Word (Word16, Word32)
+import Debug.Trace (trace)
 import Network.Socket (HostAddress, ProtocolNumber)
 import Text.Printf (printf)
 import System.Environment (getProgName)
@@ -193,8 +194,10 @@ handleError :: MonadError e m => (e -> m a) -> m a -> m a
 handleError = flip catchError
 
 -- XXX parsing errors should be logged
-filterRight :: [Either a b] -> [b]
-filterRight xs = [x | Right x <- xs]
+filterRight :: [Either ShowS a] -> [a]
+filterRight []           = []
+filterRight (Left x:xs)  = cat x '\n' `trace` filterRight xs
+filterRight (Right x:xs) = x : filterRight xs
 
 --------------------------------------------------------------------------------
 -- Miscellaneous functions

@@ -109,7 +109,6 @@ module TorDNSEL.TorControl.Internals (
   ) where
 
 import Control.Arrow (second)
-import Control.Concurrent (forkIO, killThread, myThreadId)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, isEmptyChan)
 import Control.Concurrent.MVar
   (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, withMVar, swapMVar)
@@ -130,6 +129,7 @@ import System.IO (Handle, hClose, hSetBuffering, BufferMode(..), hFlush)
 
 import GHC.Prim (Addr#)
 
+import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Future
 import TorDNSEL.Directory
 import TorDNSEL.Document
@@ -155,7 +155,7 @@ data Connection
 withConnection :: Handle -> (Connection -> IO a) -> IO a
 withConnection handle io = do
   tid <- myThreadId
-  E.bracket (openConnection handle (flip whenJust (E.throwTo tid)))
+  E.bracket (openConnection handle (flip whenJust (throwTo tid . Just)))
             closeConnection io
 
 -- | Open a connection with a handle, installing a handler to be invoked when

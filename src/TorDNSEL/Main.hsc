@@ -34,13 +34,13 @@ module TorDNSEL.Main (
 
   -- * Helpers
   , checkStateDirectory
-  , exit
+  , exitWith
   , liftMb
   , b
   , chroot
   ) where
 
-import Control.Concurrent (forkIO, threadDelay, myThreadId)
+import qualified Control.Concurrent as C
 import qualified Control.Exception as E
 import Control.Monad (when, unless, liftM, forM, forM_)
 import Data.Bits ((.&.), (.|.))
@@ -83,6 +83,7 @@ import Foreign.C (CString, CInt, withCString)
 import GHC.Prim (Addr##)
 
 import TorDNSEL.Config
+import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.TorControl
 import TorDNSEL.Directory
 import TorDNSEL.DNS
@@ -123,13 +124,14 @@ main = do
     case b "configfile"## `M.lookup` conf of
       Just fp -> do
         file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp)
-          (exit . cat "Opening config file failed: ")
+          (exitWith . cat "Opening config file failed: ")
         exitLeft $ makeConfig . M.union conf =<< parseConfigFile file
       Nothing -> exitLeft $ makeConfig conf
 
   euid <- getEffectiveUserID
   when (any (isJust . ($ conf)) [cfUser, cfGroup, cfChangeRootDirectory] &&
-        euid /= 0) $ exit ("You must be root to drop privileges or chroot." ++)
+        euid /= 0) $
+    exitWith ("You must be root to drop privileges or chroot." ++)
 
   ids <- getIDs (cfUser conf) (cfGroup conf)
 
@@ -140,7 +142,7 @@ main = do
     testSocks <- forM (snd $ tcfTestListenAddress testConf) $ \port ->
       E.catchJust E.ioErrors
         (bindListeningSocket (fst $ tcfTestListenAddress testConf) port)
-        (exit . cat "Binding listening socket to port " port " failed: ")
+        (exitWith . cat "Binding listening socket to port " port " failed: ")
 
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
@@ -157,16 +159,16 @@ main = do
       (Just dir,_) ->
          E.catchJust E.ioErrors
            (Just `fmap` B.readFile (dir ++ "/control_auth_cookie"))
-           (exit . cat "Opening control auth cookie failed: ")
+           (exitWith . cat "Opening control auth cookie failed: ")
       (_,Just passwd) -> return (Just passwd)
       _               -> return Nothing
 
   pidHandle <- E.catchJust E.ioErrors
                  (flip openFile WriteMode `liftMb` cfPIDFile conf)
-                 (exit . cat "Opening PID file failed: ")
+                 (exitWith . cat "Opening PID file failed: ")
 
   sock <- E.handleJust E.ioErrors
-          (exit . cat "Binding DNS socket failed: ") $ do
+          (exitWith . cat "Binding DNS socket failed: ") $ do
     sock <- socket AF_INET Datagram udpProtoNum
     setSocketOption sock ReuseAddr 1
     bindSocket sock $ cfDNSListenAddress conf
@@ -174,7 +176,8 @@ main = do
 
   -- We lose any other running threads when we 'forkProcess', so don't 'forkIO'
   -- before this point.
-  (if cfRunAsDaemon conf then daemonize else id) $ do
+  (if cfRunAsDaemon conf then daemonize else id) .
+    withLinksDo (showException [showLinkException]) $ do
 
     whenJust pidHandle $ \handle -> do
       hPutStr handle . show =<< getProcessID
@@ -186,7 +189,7 @@ main = do
 
     dropPrivileges ids
 
-    mainThread <- myThreadId
+    mainThread <- C.myThreadId
     forM_ [sigINT, sigTERM] $ \signal ->
       flip (installHandler signal) Nothing . Catch $ do
         unlinkStatsSocket $ cfStateDirectory conf
@@ -225,7 +228,7 @@ main = do
       -- XXX this should be logged
       unless (cfRunAsDaemon conf) $ do
         hPutStrLn stderr (showConnException e) >> hFlush stderr
-      threadDelay (5 * 10^6)
+      C.threadDelay (5 * 10^6)
 
     -- start the DNS server
     forever . E.catchJust E.ioErrors
@@ -234,7 +237,7 @@ main = do
           -- XXX this should be logged
           unless (cfRunAsDaemon conf) $
             hPutStrLn stderr (show e) >> hFlush stderr
-          threadDelay (5 * 10^6)
+          C.threadDelay (5 * 10^6)
   where
     connExceptions e@(E.IOException _)                = Just e
     connExceptions e@(E.DynException e')
@@ -269,7 +272,7 @@ torController net control authSecret = do
 checkStateDirectory :: Maybe UserID -> Maybe FilePath -> FilePath -> IO ()
 checkStateDirectory uid newRoot stateDir =
   E.handleJust E.ioErrors
-    (exit . cat "Preparing state directory failed: ") $ do
+    (exitWith . cat "Preparing state directory failed: ") $ do
       createDirectoryIfMissing True stateDir'
       desiredUID <- maybe getEffectiveUserID return uid
       st <- getFileStatus stateDir'
@@ -290,11 +293,11 @@ setMaxOpenFiles lowerLimit cap = do
   limits <- getResourceLimit ResourceOpenFiles
 
   when (euid /= 0 && hardLimit limits < lowerLimit) $
-    exit $ cat "The hard limit on file descriptors is set to "
-               (hardLimit limits) ", but we need at least " lowerLimit '.'
+    exitWith $ cat "The hard limit on file descriptors is set to "
+                   (hardLimit limits) ", but we need at least " lowerLimit '.'
   when (fdSetSize < lowerLimit) $
-    exit $ cat "FD_SETSIZE is " fdSetSize ", but we need at least " lowerLimit
-               " file descriptors."
+    exitWith $ cat "FD_SETSIZE is " fdSetSize ", but we need at least "
+                   lowerLimit " file descriptors."
 
   let newLimits limit
         | euid /= 0 = limits { softLimit = limit }
@@ -371,8 +374,8 @@ daemonize io = do
   where stdFds = [stdInput, stdOutput, stdError]
 
 -- | Print the given string as an error message and exit.
-exit :: ShowS -> IO a
-exit = exitLeft . Left
+exitWith :: ShowS -> IO a
+exitWith = exitLeft . Left
 
 -- | Lift a 'Maybe' into a monadic action.
 liftMb :: Monad m => (a -> m b) -> Maybe a -> m (Maybe b)

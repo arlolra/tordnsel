@@ -36,6 +36,7 @@ import qualified Data.Set as S
 import Data.Dynamic (Dynamic, fromDynamic, toDyn, Typeable)
 import Data.List (nub)
 import Data.Unique (Unique, newUnique)
+import System.Exit (ExitCode(ExitSuccess))
 import System.IO (hPutStrLn, hFlush, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -79,7 +80,8 @@ threadMap = unsafePerformIO . newMVar $ ThreadMap M.empty M.empty
 -- message to stdout if any assertions fail.
 assertThreadMap :: ThreadMap -> IO ()
 assertThreadMap tm =
-  E.handle (putStr . show) $
+  E.handleJust E.assertions (putStr . ("assertThreadMap: " ++)) $
+    E.assert (M.size (ids tm) > 0) $
     E.assert (M.size (ids tm) == M.size (state tm)) $
     E.assert (M.elems (ids tm) == nub (M.elems (ids tm))) $
     E.assert (all (`M.member` state tm) (M.elems (ids tm))) $
@@ -120,7 +122,7 @@ defaultSignal _   _      Nothing = return ()
 -- to display an uncaught exception. It is an error to call this function
 -- outside the main thread, or to call any other functions in this module
 -- outside this function.
-withLinksDo :: (E.Exception -> String) -> IO a -> IO a
+withLinksDo :: (E.Exception -> String) -> IO a -> IO ()
 withLinksDo showE io = E.block $ do
   E.setUncaughtExceptionHandler . const . return $ ()
   main <- C.myThreadId
@@ -138,11 +140,14 @@ withLinksDo showE io = E.block $ do
        , state = M.insert main initialState (state tm) }
   -- Don't bother propagating signals from the main thread
   -- since it's about to exit.
-  E.unblock io `E.catch` \e -> do
-    whenJust (extractReason e) $ \e' -> do
-      hPutStrLn stderr ("*** Exception: " ++ showE e')
-      hFlush stderr
-    E.throwIO e
+  (E.unblock io >> return ()) `E.catch` \e ->
+    case extractReason e of
+      Nothing                            -> return ()
+      Just (E.ExitException ExitSuccess) -> return ()
+      Just e' -> do
+        hPutStrLn stderr ("*** Exception: " ++ showE e')
+        hFlush stderr
+        E.throwIO e'
 
 -- | Evaluate the given 'IO' action in a new thread, returning its 'ThreadId'.
 forkIO :: IO a -> IO ThreadId
