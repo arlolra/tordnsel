@@ -41,8 +41,10 @@ module TorDNSEL.Main (
   ) where
 
 import qualified Control.Concurrent as C
+import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import qualified Control.Exception as E
 import Control.Monad (when, unless, liftM, forM, forM_)
+import Control.Monad.Fix (fix)
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
@@ -224,11 +226,15 @@ main = do
 
     let controller = torController net (cfTorControlAddress conf) authSecret
     installHandler sigPIPE Ignore Nothing
-    forkIO . forever . E.catchJust connExceptions controller $ \e -> do
-      -- XXX this should be logged
-      unless (cfRunAsDaemon conf) $ do
-        hPutStrLn stderr (showConnException e) >> hFlush stderr
-      C.threadDelay (5 * 10^6)
+    forkIO $ do
+      exitChan <- newChan
+      setTrapExit (curry $ writeChan exitChan)
+      forever $ do
+        E.catchJust connExceptions (controller exitChan) $ \e -> do
+          -- XXX this should be logged
+          unless (cfRunAsDaemon conf) $
+            hPutStrLn stderr (showConnException e) >> hFlush stderr
+          C.threadDelay (5 * 10^6)
 
     -- start the DNS server
     forever . E.catchJust E.ioErrors
@@ -253,11 +259,14 @@ main = do
 -- | Connect to Tor using the controller interface. Initialize our network state
 -- with all the routers Tor knows about and register asynchronous events to
 -- notify us and update the state when updated router info comes in.
-torController :: Network -> SockAddr -> Maybe ByteString -> IO ()
-torController net control authSecret = do
-  sock <- E.bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock ->
-            connect sock control >> return sock
-  handle <- socketToHandle sock ReadWriteMode
+torController :: Network -> SockAddr -> Maybe ByteString
+              -> Chan (ThreadId, ExitReason) -> IO ()
+torController net control authSecret exitChan = do
+  handle <- E.bracketOnError (socket AF_INET Stream tcpProtoNum)
+                             sClose $ \sock -> do
+    connect sock control
+    socketToHandle sock ReadWriteMode
+
   withConnection handle $ \conn -> do
     authenticate authSecret conn
     let newNS = networkStatusEvent (updateNetworkStatus net)
@@ -266,7 +275,12 @@ torController net control authSecret = do
     getNetworkStatus conn >>= updateNetworkStatus net
     getAllDescriptors conn >>= updateDescriptors net
     setConf fetchUselessDescriptors (Just True) conn
-    waitForConnection conn
+
+    fix $ \loop -> do
+      (tid,reason) <- readChan exitChan
+      if tid == connectionThread conn
+        then whenJust reason E.throwIO
+        else maybe loop (const $ exit reason) reason
 
 -- | Set up the state directory with proper ownership and permissions.
 checkStateDirectory :: Maybe UserID -> Maybe FilePath -> FilePath -> IO ()

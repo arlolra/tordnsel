@@ -28,14 +28,13 @@ import Control.Concurrent.MVar
 import qualified Control.Exception as E
 import Control.Monad (when, liftM2)
 import Control.Monad.Fix (fix)
-import Data.Maybe (isJust)
 import Data.Time (UTCTime, getCurrentTime)
 import System.IO
   (Handle, stdout, stderr, openFile, IOMode(AppendMode), hFlush, hClose)
 import System.IO.Unsafe (unsafePerformIO)
 
 import TorDNSEL.Control.Concurrent.Link
-import TorDNSEL.System.Timeout
+import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Util
 
 -- | The logging configuration.
@@ -144,21 +143,6 @@ reconfigureLogger reconf =
 -- to terminate. If the thread hasn't terminated by the timeout, an uncatchable
 -- exit signal will be sent.
 terminateLogger :: Maybe Int -> IO ()
-terminateLogger = withLogger . terminateThread (Terminate Nothing)
-
--- | Terminate the thread @tid@ by sending @termMsg@ to @chan@. @mbWait@
--- specifies the amount of time in microseconds to wait for the thread to
--- terminate. If the thread hasn't terminated by the timeout, an uncatchable
--- exit signal will be sent.
-terminateThread :: a -> Maybe Int -> ThreadId -> Chan a -> IO ()
-terminateThread termMsg mbWait tid chan = do
-  dead <- newEmptyMVar
-  monitorThread tid (const $ putMVar dead ())
-  writeChan chan termMsg
-  case mbWait of
-    Nothing -> takeMVar dead
-    Just wait -> do
-      r <- timeout wait (takeMVar dead)
-      if isJust r then return () else do
-      killThread tid
-      takeMVar dead
+terminateLogger mbWait =
+  withLogger $ \tid logChan ->
+    terminateThread mbWait tid (writeChan logChan $ Terminate Nothing)

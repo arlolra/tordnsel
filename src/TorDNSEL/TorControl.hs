@@ -23,8 +23,8 @@ module TorDNSEL.TorControl (
     Connection
   , withConnection
   , openConnection
-  , waitForConnection
   , closeConnection
+  , connectionThread
 
   -- * Commands
   , authenticate

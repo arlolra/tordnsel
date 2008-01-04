@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, MultiParamTypeClasses, CPP #-}
+{-# LANGUAGE PatternGuards, MultiParamTypeClasses #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------
@@ -29,8 +29,8 @@ module TorDNSEL.TorControl.Internals (
     Connection(..)
   , withConnection
   , openConnection
-  , waitForConnection
   , closeConnection
+  , connectionThread
 
   -- * Commands
   , Command(..)
@@ -84,9 +84,9 @@ module TorDNSEL.TorControl.Internals (
 
   -- * Backend connection manager
   , IOMessage(..)
-  , ioManager
+  , startIOManager
   , ReplyType(..)
-  , socketReader
+  , startSocketReader
 
   -- * Data types
   , CircuitID(..)
@@ -107,7 +107,7 @@ module TorDNSEL.TorControl.Internals (
 
   -- * Errors
   , ReplyCode
-  , replyLine
+  , protocolError
   , TorControlError(..)
   , replyToError
   , parseReplyCode
@@ -120,18 +120,18 @@ module TorDNSEL.TorControl.Internals (
   ) where
 
 import Control.Arrow (second)
-import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, isEmptyChan)
-import Control.Concurrent.MVar
-  (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, withMVar, swapMVar)
+import Control.Concurrent.Chan (newChan, readChan, writeChan)
+import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
 import qualified Control.Exception as E
-import Control.Monad (unless, liftM)
+import Control.Monad (unless, liftM, forM_)
 import Control.Monad.Error (MonadError(..))
+import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
-import Data.Foldable (traverse_)
+import Data.Dynamic (fromDynamic)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, catMaybes, maybeToList, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, catMaybes, maybeToList, listToMaybe, isNothing)
 import qualified Data.Sequence as S
 import Data.Sequence ((<|), ViewR((:>)), viewr)
 import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)
@@ -142,64 +142,41 @@ import GHC.Prim (Addr#)
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Future
+import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
 import TorDNSEL.Document
 import TorDNSEL.Util
-
-#define protocolError(msg) \
-  (E.throwDyn (ProtocolError (escape (msg)) \
-              ((__FILE__ ++) . (':':) . shows __LINE__)))
 
 --------------------------------------------------------------------------------
 -- Connections
 
 -- | A Tor control connection.
 data Connection
-  = Conn {-# UNPACK #-}
-         !(MVar (IOMessage -> IO ())) -- send a message to the 'ioManager'
-         {-# UNPACK #-} !(MVar ())    -- signals a terminated connection
+  = Conn (IOMessage -> IO ()) -- send a message to the I\/O manager
+         ThreadId             -- the I\/O manager's 'ThreadId'
 
--- | Open a connection with a handle and pass it to an IO action. If the IO
--- action throws an exception or an I\/O error occurs during the connection, the
--- connection will be terminated and the exception re-thrown in the current
--- thread.
+-- | Open a connection with a handle and pass it to an 'IO' action. If an
+-- exception interrupts execution, close the connection before re-throwing the
+-- exception.
 withConnection :: Handle -> (Connection -> IO a) -> IO a
-withConnection handle io = do
-  tid <- myThreadId
-  E.bracket (openConnection handle (flip whenJust (throwTo tid . Just)))
-            closeConnection io
+withConnection handle = E.bracket (openConnection handle) (closeConnection)
 
--- | Open a connection with a handle, installing a handler to be invoked when
--- the connection terminates. If the connection is terminated by an I\/O or
--- protocol error we pass an 'Exception' to the handler. Otherwise, it was
--- terminated by 'closeConnection', so it will be passed 'Nothing'.
-openConnection :: Handle -> (Maybe E.Exception -> IO ()) -> IO Connection
-openConnection handle closeHandler = do
+-- | Open a connection with a handle.
+openConnection :: Handle -> IO Connection
+openConnection handle = do
   hSetBuffering handle LineBuffering
-  chan <- newChan
-  send <- newMVar $ writeChan chan
-  mv <- newEmptyMVar
-  -- closeHandler should be called before putMVar so the async exception can
-  -- interrupt waitForConnection inside withConnection. Otherwise, the async
-  -- exception will be delivered outside withConnection, creating a race
-  -- condition for external exception handlers.
-  forkIO $
-    ioManager handle chan
-              (swapMVar send (const $ E.throwDyn ConnectionClosed) >> return ())
-              (\e -> closeHandler e `E.finally` putMVar mv ())
-  return (Conn send mv)
-
--- | Block the current thread until a connection terminates. This can happen
--- when an I\/O error occurs or another thread calls 'closeConnection'.
-waitForConnection :: Connection -> IO ()
-waitForConnection (Conn _ mv) = withMVar mv return
+  startIOManager handle
 
 -- | Close a connection, blocking the current thread until the connection has
 -- terminated.
 closeConnection :: Connection -> IO ()
-closeConnection (Conn send mv) = do
-  withMVar send $ ignoreJust Just . ($ CloseConnection)
-  withMVar mv return
+closeConnection (Conn tellIOManager ioManagerTid) =
+  terminateThread Nothing ioManagerTid (tellIOManager CloseConnection)
+
+-- | The 'ThreadId' associated with a 'Connection'. Useful for monitoring or
+-- linking to a connection.
+connectionThread :: Connection -> ThreadId
+connectionThread (Conn _ ioManagerTid) = ioManagerTid
 
 --------------------------------------------------------------------------------
 -- Commands
@@ -229,7 +206,7 @@ data Reply = Reply
 -- failure.
 authenticate :: Maybe ByteString -> Connection -> IO ()
 authenticate secret conn = do
-  sendCommand command conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive . head
   useFeature [VerboseNames] conn
   where command = Command (b 12 "authenticate"#) (maybeToList secret) []
 
@@ -241,7 +218,7 @@ data Feature = ExtendedEvents -- ^ Extended event syntax
 -- code indicates failure.
 useFeature :: [Feature] -> Connection -> IO ()
 useFeature features conn =
-  sendCommand command conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive . head
   where
     command = Command (b 10 "usefeature"#) (map renderFeature features) []
     renderFeature ExtendedEvents = b 15 "extended_events"#
@@ -280,11 +257,11 @@ getNetworkStatus = fmap filterRight . getDocument arg parseRouterStatuses
 -- and return the parsed document. Otherwise, throw a 'TorControlError'.
 getDocument :: ByteString -> (Document -> a) -> Connection -> IO a
 getDocument key parse conn = do
-  reply:_ <- sendCommand (Command (b 7 "getinfo"#) [key] []) conn
+  reply:_ <- sendCommand (Command (b 7 "getinfo"#) [key] []) Nothing conn
   case reply of
     Reply ('2','5','0') text doc@(_:_)
       | text == B.snoc key '=' -> return . parse . parseDocument $ doc
-    Reply ('2',_,_) _ _        -> protocolError(replyLine reply)
+    Reply ('2',_,_) _ _        -> protocolError reply
     _                          -> E.throwDyn $ replyToError reply
 
 -- | Get the current status of all open circuits. Throw a 'TorControlError' if
@@ -302,17 +279,17 @@ getStreamStatus = getStatus (b 13 "stream-status"#) parseStreamStatus
 -- 'TorControlError' if the reply code isn't 250.
 getStatus :: ByteString -> (ByteString -> Maybe a) -> Connection -> IO [a]
 getStatus key parse conn = do
-  reply:_ <- sendCommand (Command (b 7 "getinfo"#) [key] []) conn
+  reply:_ <- sendCommand (Command (b 7 "getinfo"#) [key] []) Nothing conn
   let prefix   = B.snoc key '='
       validKey = prefix `B.isPrefixOf` repText reply
   case reply of
     Reply ('2','5','0') text []
       | prefix == text                                             -> return []
       | validKey, Just x <- parse $ B.drop (B.length key + 1) text -> return [x]
-      | otherwise        -> protocolError(replyLine reply)
+      | otherwise        -> protocolError reply
     Reply ('2','5','0') _ status
       | validKey, Just xs <- mapM parse status                     -> return xs
-    Reply ('2',_,_) _ _  -> protocolError(replyLine reply)
+    Reply ('2',_,_) _ _  -> protocolError reply
     _                    -> E.throwDyn $ replyToError reply
 
 -- | A circuit's purpose
@@ -338,12 +315,12 @@ extendCircuit'
   :: Maybe CircuitID -> [RouterID] -> Maybe CircuitPurpose -> Connection
   -> IO CircuitID
 extendCircuit' circuit path purpose conn = do
-  reply:_ <- sendCommand command conn
+  reply:_ <- sendCommand command Nothing conn
   case reply of
     Reply ('2','5','0') text _
       | msg:cid':_ <- B.split ' ' text, msg == b 8 "EXTENDED"#
       , maybe True (== CircId cid') circuit -> return $ CircId (B.copy cid')
-      | otherwise                           -> protocolError(replyLine reply)
+      | otherwise                           -> protocolError reply
     _                                       -> E.throwDyn $ replyToError reply
   where
     command = Command (b 13 "extendcircuit"#) args []
@@ -370,7 +347,7 @@ cedeStream sid = attachStream' sid Nothing Nothing
 attachStream'
   :: StreamID -> Maybe CircuitID -> Maybe Integer -> Connection -> IO ()
 attachStream' (StrmId sid) circuit hop conn =
-  sendCommand command conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive . head
   where
     command = Command (b 12 "attachstream"#) (add hop [sid,cid]) []
     CircId cid = fromMaybe nullCircuitID circuit
@@ -380,7 +357,7 @@ attachStream' (StrmId sid) circuit hop conn =
 -- 'TorControlError' if the reply code indicates failure.
 redirectStream :: StreamID -> Address -> Maybe Port -> Connection -> IO ()
 redirectStream (StrmId sid) addr port conn =
-  sendCommand command conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive . head
   where
     command = Command (b 14 "redirectstream"#) args []
     args = [sid, showAddress addr] ++ maybeToList ((B.pack . show) `fmap` port)
@@ -398,7 +375,7 @@ emptyCloseCircuitFlags = CloseCircuitFlags False
 -- indicates failure.
 closeCircuit :: CircuitID -> CloseCircuitFlags -> Connection -> IO ()
 closeCircuit (CircId cid) flags conn =
-  sendCommand command conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive . head
   where
     command = Command (b 12 "closecircuit"#) (cid : flagArgs) []
     flagArgs = [flag | (p,flag) <- [(ifUnused, b 8 "IfUnused"#)], p flags]
@@ -408,12 +385,9 @@ closeCircuit (CircId cid) flags conn =
 -- indicates failure.
 getConf' :: [ByteString] -> Connection -> IO [(ByteString, Maybe ByteString)]
 getConf' keys conn = do
-  rs@(r:_) <- sendCommand (Command (b 7 "getconf"#) keys []) conn
+  rs@(r:_) <- sendCommand (Command (b 7 "getconf"#) keys []) Nothing conn
   throwIfNotPositive r
-  -- XXX make these errors useful
-  case mapM (parseText . repText) rs of
-    Left (_ :: ShowS) -> E.throwDyn ParseError
-    Right vars -> return vars
+  either (E.throwDyn . ProtocolError) return (mapM (parseText . repText) rs)
   where
     parseText text
       | B.null eq      = return (key, Nothing)
@@ -438,19 +412,28 @@ resetConf' = setConf'' (b 9 "resetconf"#)
 setConf''
   :: ByteString -> [(ByteString, Maybe ByteString)] -> Connection -> IO ()
 setConf'' name args conn =
-  sendCommand command conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive . head
   where
     command = Command name (map renderArg args) []
     renderArg (key, Just val) = B.join (b 1 "="#) [key, val]
     renderArg (key, _)        = key
 
 -- | Send a command using a connection, blocking the current thread until all
--- replies have been received.
-sendCommand :: Command -> Connection -> IO [Reply]
-sendCommand c (Conn send _) = do
+-- replies have been received. The optional @mbEvHandlers@ parameter specifies
+-- a list of event handlers to replace the currently installed event handlers.
+sendCommand :: Command -> Maybe [EventHandler] -> Connection -> IO [Reply]
+sendCommand command mbEvHandlers (Conn tellIOManager ioManagerTid) = do
   mv <- newEmptyMVar
-  withMVar send ($ SendCommand c (putMVar mv))
-  takeMVar mv
+  let putResponse = (>> return ()) . tryPutMVar mv
+  withMonitor ioManagerTid (putResponse . Left) $ do
+    tellIOManager $ SendCommand command mbEvHandlers (putResponse . Right)
+    response <- takeMVar mv
+    case response of
+      Left Nothing                                -> E.throwDyn ConnectionClosed
+      Left (Just (E.DynException d))
+        | Just NonexistentThread <- fromDynamic d -> E.throwDyn ConnectionClosed
+      Left (Just e)                               -> E.throwIO e
+      Right replies                               -> return replies
 
 --------------------------------------------------------------------------------
 -- Config variables
@@ -511,14 +494,16 @@ fetchUselessDescriptors = ConfVar get (set setConf') (set resetConf') where
   get conn = do
     (key,val):_ <- getConf' [var] conn
     case fmap decodeConfVal val of
-      -- XXX make these errors useful
-      Nothing       -> E.throwDyn ParseError
-      Just (Left _) -> E.throwDyn ParseError
+      Nothing       -> protErr $ cat "Unexpected empty value for \"" var "\"."
+      Just (Left e) -> protErr $ cat "Failed parsing value for \"" var "\": " e
       Just (Right val')
-        | B.map toLower key /= var -> E.throwDyn ParseError
+        | B.map toLower key /= var -> protErr $ cat "Received conf value "
+            (esc maxVarLen key) ", expecting \"" var "\"."
         | otherwise                -> return val'
   set f val = f [(var, fmap encodeConfVal val)]
   var = b 23 "fetchuselessdescriptors"#
+  protErr = E.throwDyn . ProtocolError
+  maxVarLen = 64
 
 --------------------------------------------------------------------------------
 -- Asynchronous events
@@ -533,10 +518,8 @@ data EventHandler = EventHandler
 -- previously registered event handlers for this connection. Throw a
 -- 'TorControlError' if the reply code indicates failure.
 registerEventHandlers :: [EventHandler] -> Connection -> IO ()
-registerEventHandlers handlers (Conn send _) = do
-  mv <- newEmptyMVar
-  withMVar send ($ RegisterEvents command (putMVar mv) handlers)
-  takeMVar mv >>= throwIfNotPositive . head
+registerEventHandlers handlers conn =
+  sendCommand command (Just handlers) conn >>= throwIfNotPositive . head
   where command = Command (b 9 "setevents"#) (map evCode handlers) []
 
 -- | Create an event handler for new router descriptor events.
@@ -592,93 +575,99 @@ addressMapEvent handler = EventHandler (b 7 "ADDRMAP"#) handleAddrMap
 --------------------------------------------------------------------------------
 -- Backend connection manager
 
--- | A message sent to 'ioManager'.
+-- | A message sent to the I\/O manager.
 data IOMessage
   -- | Send a command to Tor.
-  = SendCommand Command               -- the command to send to Tor
-                ([Reply] -> IO ())    -- invoke this action with replies
-  -- | Register event handlers with Tor.
-  | RegisterEvents Command            -- the SETEVENTS command
-                   ([Reply] -> IO ()) -- invoke this action with replies
-                   [EventHandler]     -- the event handlers to register
+  = SendCommand Command                -- the command to send to Tor
+                (Maybe [EventHandler]) -- event handlers to register
+                ([Reply] -> IO ())     -- invoke this action with replies
   -- | Handle a sequence of replies from Tor.
-  | ReceiveReplies [Reply]
+  | Replies [Reply]
   -- | Terminate the connection with Tor.
   | CloseConnection
-  -- | The 'socketReader' died due to an I\/O or protocol error.
-  | ReaderDied E.Exception
+  -- | An exit signal sent to the I\/O manager.
+  | Exit ThreadId ExitReason
 
--- | Manage all I\/O associated with a Tor control connection. We receive
--- messages from @chan@ and send the appropriate command to Tor. When we receive
--- replies from Tor, we pass them in a message to the thread that requested the
--- corresponding command. Asynchronous event handlers are maintained as local
--- state, invoked as necessary for incoming events. If an I\/O error occurs or
--- a 'CloseConnection' message is received, we pass the possible error to
--- @closeHandler@ and return.
-ioManager
-  :: Handle -> Chan IOMessage -> IO () -> (Maybe E.Exception -> IO ()) -> IO ()
-ioManager handle ioChan closeChan closeHandler = do
-  reader <- forkIO $ socketReader handle (writeChan ioChan)
-  handlerChan <- newChan
-  forkIO $ handleEvents handlerChan
-  ioManager' reader (writeChan handlerChan)
+-- | An internal type containing the I\/O manager state.
+data IOManagerState = IOManagerState
+  { -- | A sequence of actions used to respond to outstanding commands.
+    responds :: S.Seq ([Reply] -> IO ()),
+    -- | The thread in which event handlers are invoked.
+    evHandlerTid :: ThreadId,
+    -- | A map from event name to event handler.
+    evHandlers :: M.Map ByteString ([Reply] -> IO ()) }
+
+-- | Start the thread that manages all I\/O associated with a Tor control
+-- connection, linking it to the calling thread. We receive messages sent with
+-- the returned 'Connection' and send the appropriate command to Tor. When we
+-- receive replies from Tor, we pass them in a message to the thread that
+-- requested the corresponding command. Asynchronous event handlers are
+-- maintained as local state, invoked as necessary for incoming events.
+startIOManager :: Handle -> IO Connection
+startIOManager handle = do
+  ioChan <- newChan
+  ioManagerTid <- forkLinkIO $ do
+    setTrapExit ((writeChan ioChan .) . Exit)
+    socketReaderTid <- startSocketReader handle (writeChan ioChan . Replies)
+    eventChan <- newChan
+    initEventTid <- startEventHandler eventChan
+    let runIOManager io = fix io (IOManagerState S.empty initEventTid M.empty)
+                            `E.finally` hClose handle
+    runIOManager $ \loop s -> do
+      message <- readChan ioChan
+      case message of
+        Exit tid reason
+          | tid == evHandlerTid s -> do
+              newEvHandlerTid <- startEventHandler eventChan
+              loop s { evHandlerTid = newEvHandlerTid }
+          | isNothing reason -> loop s
+          | otherwise        -> exit reason
+
+        CloseConnection ->
+          forM_ [socketReaderTid, evHandlerTid s] $ \tid ->
+            terminateThread Nothing tid . throwTo tid . Just $
+              E.AsyncException E.ThreadKilled
+
+        Replies replies@(r:_)
+          | ('6',_,_) <- repCode r -> do
+              whenJust (eventCode r `M.lookup` evHandlers s) $
+                writeChan eventChan . Right . ($ replies)
+              loop s
+          | responds' :> respond <- viewr (responds s) -> do
+              respond replies
+              loop s { responds = responds' }
+        Replies _ -> loop s
+
+        SendCommand command mbEvHandlers respond -> do
+          B.hPut handle $ renderCommand command
+          hFlush handle
+          case mbEvHandlers of
+            Just hs -> loop s' { evHandlers = M.fromList .
+                                  map (\(EventHandler c h) -> (c, h)) $ hs }
+            _       -> loop s'
+          where s' = s { responds = respond <| responds s }
+
+  return $ Conn (writeChan ioChan) ioManagerTid
   where
-    ioManager' reader invokeHandler = loop S.empty M.empty
-      where
-        loop responds evHandlers = do
-          message <- readChan ioChan
+    startEventHandler eventChan = do
+      ioManagerTid <- myThreadId
+      forkLinkIO $ do
+        setTrapExit (curry $ writeChan eventChan . Left)
+        fix $ \loop -> do
+          message <- readChan eventChan
           case message of
-            ReaderDied e    -> close (Just e)
-            CloseConnection -> close Nothing
-            ReceiveReplies replies@(r:_)
-              -- if we have a handler, invoke it in the event handler thread
-              | ('6',_,_) <- repCode r -> do
-                  whenJust (M.lookup (eventCode r) evHandlers) $
-                    invokeHandler . Just . ($ replies)
-                  loop responds evHandlers
-              -- give replies to the oldest respond action
-              | responds' :> respond <- viewr responds -> do
-                  respond replies
-                  loop responds' evHandlers
-              -- no respond actions to handle these replies
-              | otherwise -> loop responds evHandlers
-            SendCommand command respond ->
-              (E.try . putBS . renderCommand) command
-                >>= either (close . Just)
-                           (const $ loop (respond <| responds) evHandlers)
-            RegisterEvents command respond handlers ->
-              (E.try . putBS . renderCommand) command
-                >>= either (close . Just)
-                           (const . loop (respond <| responds) . M.fromList .
-                             map (\(EventHandler c h) -> (c,h)) $ handlers)
-            ReceiveReplies [] -> error "ioManager: empty replies"
-          where
-            close e = do
-              closeChan
-              messages <- untilM (isEmptyChan ioChan) $ readChan ioChan
-              let responds' = flip mapMaybe messages $ \msg -> case msg of
-                    SendCommand    _ respond   -> Just respond
-                    RegisterEvents _ respond _ -> Just respond
-                    _                          -> Nothing
-                  resourceExausted = ($ [Reply ('4','5','1') B.empty []])
-              -- send resource exhausted to threads blocked waiting for a reply
-              traverse_ resourceExausted responds
-              mapM_ resourceExausted responds'
-              killThread reader
-              invokeHandler Nothing
-              hClose handle `E.finally` closeHandler e
+            Left (tid,reason)
+              | tid == ioManagerTid -> exit reason
+              | otherwise           -> loop
+            Right event             -> event >> loop
 
     renderCommand (Command key args []) =
       B.join (b 1 " "#) (key : args) `B.append` b 2 "\r\n"#
     renderCommand c@(Command _ _ data') =
       B.cons '+' (renderCommand c { comData = [] }) `B.append` renderData data'
-    renderData dataLines =
-      B.join (b 2 "\r\n"#) dataLines `B.append` b 5 "\r\n.\r\n"#
+    renderData =
+      B.concat . foldr (\line xs -> line : b 2 "\r\n"# : xs) [b 3 ".\r\n"#]
     eventCode = B.takeWhile (/= ' ') . repText
-    putBS bs = B.hPut handle bs >> hFlush handle
-
-    handleEvents chan = loop
-      where loop = readChan chan >>= flip whenJust (>> loop)
 
 -- | Reply types in a single sequence of replies.
 data ReplyType
@@ -686,11 +675,11 @@ data ReplyType
   | LastReply {-# UNPACK #-} !Reply -- ^ The last reply.
   deriving Show
 
--- | In an infinite loop, read replies from @handle@ and pass them to @send@.
--- If an I\/O or protocol error occurs, pass it to @send@ and return.
-socketReader :: Handle -> (IOMessage -> IO ()) -> IO ()
-socketReader handle send =
-  E.catch (forever $ readReplies >>= send . ReceiveReplies) (send . ReaderDied)
+-- | Start a thread that reads replies from @handle@ and passes them to
+-- @sendRepliesToIOManager@, linking it to the calling thread.
+startSocketReader :: Handle -> ([Reply] -> IO ()) -> IO ThreadId
+startSocketReader handle sendRepliesToIOManager =
+  forkLinkIO . forever $ readReplies >>= sendRepliesToIOManager
   where
     readReplies = do
       line <- parseReplyLine =<< hGetLine handle crlf maxLineLength
@@ -698,17 +687,17 @@ socketReader handle send =
         MidReply reply  -> fmap (reply :) readReplies
         LastReply reply -> return [reply]
 
-    parseReplyLine line
-      | Just code' <- parseReplyCode code = parseReplyLine' code' typ text
-      | otherwise                         = protocolError(line)
-      where (code,(typ,text)) = second (B.splitAt 1) . B.splitAt 3 $ line
+    parseReplyLine line =
+      either (E.throwDyn . ProtocolError) (parseReplyLine' typ text)
+             (parseReplyCode code)
+      where (code,(typ,text)) = B.splitAt 1 `second` B.splitAt 3 line
 
-    parseReplyLine' code typ text
+    parseReplyLine' typ text code
       | typ == b 1 "-"# = return . MidReply $ Reply code text []
-      | typ == b 1 "+"# = (dataReply . Reply code text) `fmap` readData
+      | typ == b 1 "+"# = (MidReply . Reply code text) `fmap` readData
       | typ == b 1 " "# = return . LastReply $ Reply code text []
-      | otherwise       = protocolError(typ)
-      where dataReply = if code == ('6','5','0') then LastReply else MidReply
+      | otherwise = E.throwDyn . ProtocolError $
+                      cat "Malformed reply line type " (esc 1 typ) '.'
 
     readData = do
       line <- hGetLine handle (b 1 "\n"#) maxLineLength
@@ -877,41 +866,36 @@ instance Show Expiry where
 -- | A reply code designating a status, subsystem, and fine-grained information.
 type ReplyCode = (Char, Char, Char)
 
--- | Reconstruct a reply line from the reply code and reply text.
-replyLine :: Reply -> ByteString
-replyLine (Reply (x,y,z) text _) = B.pack [x,y,z,' '] `B.append` text
+-- | Throw a 'ProtocolError' given a reply.
+protocolError :: Reply -> IO a
+protocolError (Reply (x,y,z) text _) =
+  E.throwDyn . ProtocolError . esc 512 $ B.pack [x,y,z,' '] `B.append` text
 
 -- | An error type used in dynamic exceptions.
 data TorControlError
   -- | A negative reply code and human-readable status message.
-  = TCError ReplyCode EscapedString
-  -- | Parsing a reply from Tor failed.
-  | ParseError
-  -- | A reply from Tor didn't follow the protocol.
-  | ProtocolError EscapedString -- the invalid reply
-                  ShowS         -- file path and line number
-  -- | The control connection is closed.
-  | ConnectionClosed
+  = TCError ReplyCode ByteString
+  | ParseError -- ^ Parsing a reply from Tor failed.
+  | ProtocolError ShowS -- ^ A reply from Tor didn't follow the protocol.
+  | ConnectionClosed -- ^ The control connection is closed.
   deriving Typeable
 
 instance Show TorControlError where
-  showsPrec _ (TCError (x,y,z) text) = cat [x,y,z,' '] (showEscaped 512 text)
+  showsPrec _ (TCError (x,y,z) text) = cat [x,y,z,' '] (esc 512 text)
   showsPrec _ ParseError = ("Parsing document failed" ++)
-  showsPrec _ (ProtocolError reply loc) =
-    cat "Protocol error: got " (showEscaped 512 reply) " at " loc
+  showsPrec _ (ProtocolError msg) = cat "Protocol error: " msg
   showsPrec _ ConnectionClosed = ("Connection is already closed" ++)
 
 -- | Convert a negative reply to a 'TorControlError'.
 replyToError :: Reply -> TorControlError
-replyToError (Reply code text _) = TCError code (escape text)
+replyToError (Reply code text _) = TCError code text
 
 -- | Parse a reply code. 'throwError' in the monad if parsing fails.
 parseReplyCode :: MonadError ShowS m => ByteString -> m ReplyCode
 parseReplyCode bs
   | all isDigit cs, [x,y,z] <- cs = return (x, y, z)
-  | otherwise = throwError $ cat "Malformed reply code " (esc maxCodeLen bs) '.'
+  | otherwise = throwError $ cat "Malformed reply code " (esc 3 bs) '.'
   where cs = B.unpack bs
-        maxCodeLen = 16
 
 -- | Throw a 'TorControlError' if the reply indicates failure.
 throwIfNotPositive :: Reply -> IO ()
