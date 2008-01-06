@@ -124,7 +124,7 @@ import Control.Arrow (second)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
 import qualified Control.Exception as E
-import Control.Monad (unless, liftM, forM_)
+import Control.Monad (unless, liftM)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
@@ -138,6 +138,7 @@ import Data.Sequence ((<|), ViewR((:>)), viewr)
 import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)
 import Data.Typeable (Typeable)
 import System.IO (Handle, hClose, hSetBuffering, BufferMode(..), hFlush)
+import System.IO.Error (isEOFError)
 
 import GHC.Prim (Addr#)
 
@@ -157,8 +158,8 @@ data Connection
          ThreadId             -- the I\/O manager's 'ThreadId'
 
 -- | Open a connection with a handle and pass it to an 'IO' action. If an
--- exception interrupts execution, close the connection before re-throwing the
--- exception.
+-- exception interrupts execution, close the connection gracefully before
+-- re-throwing the exception.
 withConnection :: Handle -> (Connection -> IO a) -> IO a
 withConnection handle = E.bracket (openConnection handle) (closeConnection)
 
@@ -168,11 +169,14 @@ openConnection handle = do
   hSetBuffering handle LineBuffering
   startIOManager handle
 
--- | Close a connection, blocking the current thread until the connection has
--- terminated.
+-- | Close a connection gracefully, blocking the current thread until the
+-- connection has terminated.
 closeConnection :: Connection -> IO ()
-closeConnection (Conn tellIOManager ioManagerTid) =
-  terminateThread Nothing ioManagerTid (tellIOManager CloseConnection)
+closeConnection conn@(Conn tellIOManager ioManagerTid) =
+  E.finally
+    (sendCommand quit True Nothing conn >>= throwIfNotPositive quit . head)
+    (terminateThread Nothing ioManagerTid (tellIOManager CloseConnection))
+  where quit = Command (b 4 "quit"#) [] []
 
 -- | The 'ThreadId' associated with a 'Connection'. Useful for monitoring or
 -- linking to a connection.
@@ -207,7 +211,7 @@ data Reply = Reply
 -- failure.
 authenticate :: Maybe ByteString -> Connection -> IO ()
 authenticate secret conn = do
-  sendCommand command Nothing conn >>= throwIfNotPositive command . head
+  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   useFeature [VerboseNames] conn
   where command = Command (b 12 "authenticate"#) (maybeToList secret) []
 
@@ -219,7 +223,7 @@ data Feature = ExtendedEvents -- ^ Extended event syntax
 -- code indicates failure.
 useFeature :: [Feature] -> Connection -> IO ()
 useFeature features conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive command . head
+  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 10 "usefeature"#) (map renderFeature features) []
     renderFeature ExtendedEvents = b 15 "extended_events"#
@@ -267,7 +271,7 @@ getNetworkStatus conn = do
 -- return the GETINFO 'Command' itself.
 getDocument :: ByteString -> (Document -> a) -> Connection -> IO (a, Command)
 getDocument key parse conn = do
-  reply:_ <- sendCommand command Nothing conn
+  reply:_ <- sendCommand command False Nothing conn
   case reply of
     Reply ('2','5','0') text doc
       | text == B.snoc key '=' -> return (parse $ parseDocument doc, command)
@@ -292,7 +296,7 @@ getStreamStatus = getStatus (b 13 "stream-status"#) parseStreamStatus
 getStatus ::
   ByteString -> (ByteString -> Either ShowS a) -> Connection -> IO [a]
 getStatus key parse conn = do
-  reply:_ <- sendCommand command Nothing conn
+  reply:_ <- sendCommand command False Nothing conn
   let prefix   = B.snoc key '='
       validKey = prefix `B.isPrefixOf` repText reply
   case reply of
@@ -330,7 +334,7 @@ extendCircuit cid path = (>> return ()) . extendCircuit' (Just cid) path Nothing
 extendCircuit' :: Maybe CircuitID -> [RouterID] -> Maybe CircuitPurpose
                -> Connection -> IO CircuitID
 extendCircuit' circuit path purpose conn = do
-  reply:_ <- sendCommand command Nothing conn
+  reply:_ <- sendCommand command False Nothing conn
   case reply of
     Reply ('2','5','0') text _
       | msg:cid':_ <- B.split ' ' text, msg == b 8 "EXTENDED"#
@@ -363,7 +367,7 @@ cedeStream sid = attachStream' sid Nothing Nothing
 attachStream'
   :: StreamID -> Maybe CircuitID -> Maybe Integer -> Connection -> IO ()
 attachStream' (StrmId sid) circuit hop conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive command . head
+  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 12 "attachstream"#) (add hop [sid,cid]) []
     CircId cid = fromMaybe nullCircuitID circuit
@@ -373,7 +377,7 @@ attachStream' (StrmId sid) circuit hop conn =
 -- 'TorControlError' if the reply code indicates failure.
 redirectStream :: StreamID -> Address -> Maybe Port -> Connection -> IO ()
 redirectStream (StrmId sid) addr port conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive command . head
+  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 14 "redirectstream"#) args []
     args = [sid, showAddress addr] ++ maybeToList ((B.pack . show) `fmap` port)
@@ -391,7 +395,7 @@ emptyCloseCircuitFlags = CloseCircuitFlags False
 -- indicates failure.
 closeCircuit :: CircuitID -> CloseCircuitFlags -> Connection -> IO ()
 closeCircuit (CircId cid) flags conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive command . head
+  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 12 "closecircuit"#) (cid : flagArgs) []
     flagArgs = [flag | (p,flag) <- [(ifUnused, b 8 "IfUnused"#)], p flags]
@@ -401,7 +405,7 @@ closeCircuit (CircId cid) flags conn =
 -- indicates failure.
 getConf' :: [ByteString] -> Connection -> IO [(ByteString, Maybe ByteString)]
 getConf' keys conn = do
-  rs@(r:_) <- sendCommand command Nothing conn
+  rs@(r:_) <- sendCommand command False Nothing conn
   throwIfNotPositive command r
   either (protocolError command) return (mapM (parseText . repText) rs)
   where
@@ -429,7 +433,7 @@ resetConf' = setConf'' (b 9 "resetconf"#)
 setConf''
   :: ByteString -> [(ByteString, Maybe ByteString)] -> Connection -> IO ()
 setConf'' name args conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive command . head
+  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command name (map renderArg args) []
     renderArg (key, Just val) = B.join (b 1 "="#) [key, val]
@@ -438,12 +442,14 @@ setConf'' name args conn =
 -- | Send a command using a connection, blocking the current thread until all
 -- replies have been received. The optional @mbEvHandlers@ parameter specifies
 -- a list of event handlers to replace the currently installed event handlers.
-sendCommand :: Command -> Maybe [EventHandler] -> Connection -> IO [Reply]
-sendCommand command mbEvHandlers (Conn tellIOManager ioManagerTid) = do
+-- @isQuit@ specifies whether this is a QUIT command.
+sendCommand
+  :: Command -> Bool -> Maybe [EventHandler] -> Connection -> IO [Reply]
+sendCommand command isQuit mbEvHandlers (Conn tellIOManager ioManagerTid) = do
   mv <- newEmptyMVar
   let putResponse = (>> return ()) . tryPutMVar mv
   withMonitor ioManagerTid (putResponse . Left) $ do
-    tellIOManager $ SendCommand command mbEvHandlers (putResponse . Right)
+    tellIOManager $ SendCommand command isQuit mbEvHandlers (putResponse.Right)
     response <- takeMVar mv
     case response of
       Left Nothing                                -> E.throwDyn ConnectionClosed
@@ -536,7 +542,8 @@ data EventHandler = EventHandler
 -- 'TorControlError' if the reply code indicates failure.
 registerEventHandlers :: [EventHandler] -> Connection -> IO ()
 registerEventHandlers handlers conn =
-  sendCommand command (Just handlers) conn >>= throwIfNotPositive command . head
+  sendCommand command False (Just handlers) conn
+    >>= throwIfNotPositive command . head
   where command = Command (b 9 "setevents"#) (map evCode handlers) []
 
 -- | Create an event handler for new router descriptor events.
@@ -601,6 +608,7 @@ addressMapEvent handler = EventHandler (b 7 "ADDRMAP"#) handleAddrMap
 data IOMessage
   -- | Send a command to Tor.
   = SendCommand Command                -- the command to send to Tor
+                Bool                   -- is this a QUIT command?
                 (Maybe [EventHandler]) -- event handlers to register
                 ([Reply] -> IO ())     -- invoke this action with replies
   -- | Handle a sequence of replies from Tor.
@@ -617,7 +625,9 @@ data IOManagerState = IOManagerState
     -- | The thread in which event handlers are invoked.
     evHandlerTid :: ThreadId,
     -- | A map from event name to event handler.
-    evHandlers :: M.Map ByteString ([Reply] -> IO ()) }
+    evHandlers :: M.Map ByteString ([Reply] -> IO ()),
+    -- | Has the QUIT command been sent?
+    quitSent :: Bool }
 
 -- | Start the thread that manages all I\/O associated with a Tor control
 -- connection, linking it to the calling thread. We receive messages sent with
@@ -633,8 +643,9 @@ startIOManager handle = do
     socketReaderTid <- startSocketReader handle (writeChan ioChan . Replies)
     eventChan <- newChan
     initEventTid <- startEventHandler eventChan
-    let runIOManager io = fix io (IOManagerState S.empty initEventTid M.empty)
-                            `E.finally` hClose handle
+    let runIOManager io =
+          fix io (IOManagerState S.empty initEventTid M.empty False)
+            `E.finally` hClose handle
     runIOManager $ \loop s -> do
       message <- readChan ioChan
       case message of
@@ -643,12 +654,12 @@ startIOManager handle = do
               newEvHandlerTid <- startEventHandler eventChan
               loop s { evHandlerTid = newEvHandlerTid }
           | isNothing reason -> loop s
-          | otherwise        -> exit reason
+          | tid == socketReaderTid
+          , Just (E.IOException e) <- reason, isEOFError e
+          , quitSent s, S.null (responds s) -> kill $ evHandlerTid s
+          | otherwise -> exit reason
 
-        CloseConnection ->
-          forM_ [socketReaderTid, evHandlerTid s] $ \tid ->
-            terminateThread Nothing tid . throwTo tid . Just $
-              E.AsyncException E.ThreadKilled
+        CloseConnection -> mapM_ kill [socketReaderTid, evHandlerTid s]
 
         Replies replies@(r:_)
           | ('6',_,_) <- repCode r -> do
@@ -660,14 +671,14 @@ startIOManager handle = do
               loop s { responds = responds' }
         Replies _ -> loop s
 
-        SendCommand command mbEvHandlers respond -> do
+        SendCommand command isQuit mbEvHandlers respond -> do
           B.hPut handle $ renderCommand command
           hFlush handle
           case mbEvHandlers of
             Just hs -> loop s' { evHandlers = M.fromList .
                                   map (\(EventHandler c h) -> (c, h)) $ hs }
             _       -> loop s'
-          where s' = s { responds = respond <| responds s }
+          where s' = s { responds = respond <| responds s, quitSent = isQuit }
 
   return $ Conn (writeChan ioChan) ioManagerTid
   where
@@ -683,12 +694,17 @@ startIOManager handle = do
               | otherwise           -> loop
             Right event             -> event >> loop
 
+    kill tid = terminateThread Nothing tid . throwTo tid . Just $
+                 E.AsyncException E.ThreadKilled
+
     renderCommand (Command key args []) =
       B.join (b 1 " "#) (key : args) `B.append` b 2 "\r\n"#
     renderCommand c@(Command _ _ data') =
       B.cons '+' (renderCommand c { comData = [] }) `B.append` renderData data'
+
     renderData =
       B.concat . foldr (\line xs -> line : b 2 "\r\n"# : xs) [b 3 ".\r\n"#]
+
     eventCode = B.takeWhile (/= ' ') . repText
 
 -- | Reply types in a single sequence of replies.
