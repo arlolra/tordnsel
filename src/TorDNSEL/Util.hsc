@@ -34,6 +34,8 @@ module TorDNSEL.Util (
   -- * Miscellaneous functions
   , on
   , unfoldAccumR
+  , swap
+  , partitionEither
   , whenJust
   , forever
   , untilM
@@ -213,6 +215,17 @@ unfoldAccumR :: (acc -> Either (x, acc) acc) -> acc -> ([x], acc)
 unfoldAccumR f acc = case f acc of
   Left (x,acc') -> (x :) `first` unfoldAccumR f acc'
   Right acc'    -> ([], acc')
+
+-- | Swap the elements of a pair.
+swap :: (a, b) -> (b, a)
+swap (x,y) = (y,x)
+
+-- | Partition the elements of a list into two separate lists corresponding to
+-- elements tagged 'Left' and 'Right'.
+partitionEither :: [Either a b] -> ([a], [b])
+partitionEither []           = ([], [])
+partitionEither (Left x:xs)  = (x :) `first` partitionEither xs
+partitionEither (Right x:xs) = (x :) `second` partitionEither xs
 
 -- | When the argument matches @Just x@, pass @x@ to a monadic action.
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()

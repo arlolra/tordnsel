@@ -269,11 +269,11 @@ torController net control authSecret exitChan = do
 
   withConnection handle $ \conn -> do
     authenticate authSecret conn
-    let newNS = networkStatusEvent (updateNetworkStatus net)
-        newDesc = newDescriptorsEvent (updateDescriptors net) conn
+    let newNS = networkStatusEvent (const $ updateNetworkStatus net)
+        newDesc = newDescriptorsEvent (const $ updateDescriptors net) conn
     registerEventHandlers [newNS, newDesc] conn
-    getNetworkStatus conn >>= updateNetworkStatus net
-    getAllDescriptors conn >>= updateDescriptors net
+    getNetworkStatus conn >>= updateNetworkStatus net . fst
+    getAllDescriptors conn >>= updateDescriptors net . fst
     setConf fetchUselessDescriptors (Just True) conn
 
     fix $ \loop -> do

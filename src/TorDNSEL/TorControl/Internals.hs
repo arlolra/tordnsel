@@ -107,12 +107,13 @@ module TorDNSEL.TorControl.Internals (
 
   -- * Errors
   , ReplyCode
+  , commandFailed
   , protocolError
+  , parseError
   , TorControlError(..)
-  , replyToError
+  , toTCError
   , parseReplyCode
   , throwIfNotPositive
-  , throwIfNothing
   , isPositive
 
   -- * Aliases
@@ -131,7 +132,7 @@ import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
 import Data.Dynamic (fromDynamic)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, catMaybes, maybeToList, listToMaybe, isNothing)
+import Data.Maybe (fromMaybe, maybeToList, listToMaybe, isNothing)
 import qualified Data.Sequence as S
 import Data.Sequence ((<|), ViewR((:>)), viewr)
 import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)
@@ -206,7 +207,7 @@ data Reply = Reply
 -- failure.
 authenticate :: Maybe ByteString -> Connection -> IO ()
 authenticate secret conn = do
-  sendCommand command Nothing conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive command . head
   useFeature [VerboseNames] conn
   where command = Command (b 12 "authenticate"#) (maybeToList secret) []
 
@@ -218,7 +219,7 @@ data Feature = ExtendedEvents -- ^ Extended event syntax
 -- code indicates failure.
 useFeature :: [Feature] -> Connection -> IO ()
 useFeature features conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 10 "usefeature"#) (map renderFeature features) []
     renderFeature ExtendedEvents = b 15 "extended_events"#
@@ -228,41 +229,52 @@ useFeature features conn =
 -- 'TorControlError' if the reply code isn't 250 or parsing the descriptor
 -- fails.
 getDescriptor :: RouterID -> Connection -> IO Descriptor
-getDescriptor rid =
-  throwIfNothing ParseError . getDocument key parseDescriptor
-  where key = b 8 "desc/id/"# `B.append` encodeBase16RouterID rid
+getDescriptor rid conn = do
+  (r,command) <- getDocument arg parseDescriptor conn
+  either (parseError command) return r
+  where arg = b 8 "desc/id/"# `B.append` encodeBase16RouterID rid
 
 -- | Fetch the most recent descriptor for every router Tor knows about. Throw a
--- 'TorControlError' if the reply code isn't 250.
-getAllDescriptors :: Connection -> IO [Descriptor]
-getAllDescriptors = fmap filterRight . getDocument key parseDescriptors
-  where key = b 15 "desc/all-recent"#
+-- 'TorControlError' if the reply code isn't 250. Also return error messages for
+-- any descriptors that failed to be parsed.
+getAllDescriptors :: Connection -> IO ([Descriptor], [ShowS])
+getAllDescriptors conn = do
+  (r,command) <- getDocument arg parseDescriptors conn
+  return $ map (cat (commandFailed command)) `second` swap (partitionEither r)
+  where arg = b 15 "desc/all-recent"#
 
 -- | Fetch the current status entry for a given router. Throw a
 -- 'TorControlError' if the reply code isn't 250 or parsing the router status
 -- entry fails.
 getRouterStatus :: RouterID -> Connection -> IO RouterStatus
-getRouterStatus rid =
-  throwIfNothing ParseError . getDocument arg parseRouterStatus
+getRouterStatus rid conn = do
+  (r,command) <- getDocument arg parseRouterStatus conn
+  either (parseError command) return r
   where arg = b 6 "ns/id/"# `B.append` encodeBase16RouterID rid
 
 -- | Fetch the current status entries for every router Tor has an opinion about.
--- Throw a 'TorControlError' if the reply code isn't 250.
-getNetworkStatus :: Connection -> IO [RouterStatus]
-getNetworkStatus = fmap filterRight . getDocument arg parseRouterStatuses
+-- Throw a 'TorControlError' if the reply code isn't 250. Also return error
+-- messages for any router status entries that failed to be parsed.
+getNetworkStatus :: Connection -> IO ([RouterStatus], [ShowS])
+getNetworkStatus conn = do
+  (r,command) <- getDocument arg parseRouterStatuses conn
+  return $ map (cat (commandFailed command)) `second` swap (partitionEither r)
   where arg = b 6 "ns/all"#
 
 -- | Send a GETINFO command using @key@ as a single keyword. If the reply code
 -- is 250, pass the document contained in data from the first reply to @parse@
--- and return the parsed document. Otherwise, throw a 'TorControlError'.
-getDocument :: ByteString -> (Document -> a) -> Connection -> IO a
+-- and return the parsed document. Otherwise, throw a 'TorControlError'. Also
+-- return the GETINFO 'Command' itself.
+getDocument :: ByteString -> (Document -> a) -> Connection -> IO (a, Command)
 getDocument key parse conn = do
-  reply:_ <- sendCommand (Command (b 7 "getinfo"#) [key] []) Nothing conn
+  reply:_ <- sendCommand command Nothing conn
   case reply of
-    Reply ('2','5','0') text doc@(_:_)
-      | text == B.snoc key '=' -> return . parse . parseDocument $ doc
-    Reply ('2',_,_) _ _        -> protocolError reply
-    _                          -> E.throwDyn $ replyToError reply
+    Reply ('2','5','0') text doc
+      | text == B.snoc key '=' -> return (parse $ parseDocument doc, command)
+      | otherwise -> protocolError command $ cat "Got " (esc maxRepLen text) '.'
+    _             -> E.throwDyn $ toTCError command reply
+  where command = Command (b 7 "getinfo"#) [key] []
+        maxRepLen = 64
 
 -- | Get the current status of all open circuits. Throw a 'TorControlError' if
 -- the reply code isn't 250.
@@ -277,20 +289,24 @@ getStreamStatus = getStatus (b 13 "stream-status"#) parseStreamStatus
 -- | Get the current status of all open circuits or streams. The GETINFO key is
 -- specified by @key@, and the line-parsing function by @parse@. Throw a
 -- 'TorControlError' if the reply code isn't 250.
-getStatus :: ByteString -> (ByteString -> Maybe a) -> Connection -> IO [a]
+getStatus ::
+  ByteString -> (ByteString -> Either ShowS a) -> Connection -> IO [a]
 getStatus key parse conn = do
-  reply:_ <- sendCommand (Command (b 7 "getinfo"#) [key] []) Nothing conn
+  reply:_ <- sendCommand command Nothing conn
   let prefix   = B.snoc key '='
       validKey = prefix `B.isPrefixOf` repText reply
   case reply of
-    Reply ('2','5','0') text []
-      | prefix == text                                             -> return []
-      | validKey, Just x <- parse $ B.drop (B.length key + 1) text -> return [x]
-      | otherwise        -> protocolError reply
-    Reply ('2','5','0') _ status
-      | validKey, Just xs <- mapM parse status                     -> return xs
-    Reply ('2',_,_) _ _  -> protocolError reply
-    _                    -> E.throwDyn $ replyToError reply
+    Reply ('2','5','0') text dataLines
+      | prefix == text
+      , null dataLines -> return []
+      | not validKey   -> protocolError command $ cat "Got "
+                                                      (esc maxRepLen text) '.'
+      | null dataLines -> check (:[]) (parse $ B.drop (B.length key + 1) text)
+      | otherwise      -> check id $ mapM parse dataLines
+    _                  -> E.throwDyn $ toTCError command reply
+  where command = Command (b 7 "getinfo"#) [key] []
+        check f = either (parseError command) (return . f)
+        maxRepLen = 64
 
 -- | A circuit's purpose
 data CircuitPurpose = CrGeneral    -- ^ General
@@ -311,17 +327,16 @@ extendCircuit cid path = (>> return ()) . extendCircuit' (Just cid) path Nothing
 -- specified @path@ and @purpose@ if @circuit@ is 'Nothing'. Otherwise, extend
 -- an existing circuit according to @path@. Return the (possibly new)
 -- 'CircuitID'. Throw a 'TorControlError' if the reply code isn't 250.
-extendCircuit'
-  :: Maybe CircuitID -> [RouterID] -> Maybe CircuitPurpose -> Connection
-  -> IO CircuitID
+extendCircuit' :: Maybe CircuitID -> [RouterID] -> Maybe CircuitPurpose
+               -> Connection -> IO CircuitID
 extendCircuit' circuit path purpose conn = do
   reply:_ <- sendCommand command Nothing conn
   case reply of
     Reply ('2','5','0') text _
       | msg:cid':_ <- B.split ' ' text, msg == b 8 "EXTENDED"#
       , maybe True (== CircId cid') circuit -> return $ CircId (B.copy cid')
-      | otherwise                           -> protocolError reply
-    _                                       -> E.throwDyn $ replyToError reply
+      | otherwise -> protocolError command $ cat "Got " (esc maxRepLen text) '.'
+    _             -> E.throwDyn $ toTCError command reply
   where
     command = Command (b 13 "extendcircuit"#) args []
     args = add purpose [cid, B.join (b 1 ","#) $ map encodeBase16RouterID path]
@@ -329,6 +344,7 @@ extendCircuit' circuit path purpose conn = do
     renderPurpose CrGeneral    = b 7  "general"#
     renderPurpose CrController = b 10 "controller"#
     add = maybe id (\p -> (++ [b 8 "purpose="# `B.append` renderPurpose p]))
+    maxRepLen = 64
 
 -- | Attach an unattached stream to a completed circuit, exiting from @hop@ if
 -- specified. Throw a 'TorControlError' if the reply code indicates failure.
@@ -347,7 +363,7 @@ cedeStream sid = attachStream' sid Nothing Nothing
 attachStream'
   :: StreamID -> Maybe CircuitID -> Maybe Integer -> Connection -> IO ()
 attachStream' (StrmId sid) circuit hop conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 12 "attachstream"#) (add hop [sid,cid]) []
     CircId cid = fromMaybe nullCircuitID circuit
@@ -357,7 +373,7 @@ attachStream' (StrmId sid) circuit hop conn =
 -- 'TorControlError' if the reply code indicates failure.
 redirectStream :: StreamID -> Address -> Maybe Port -> Connection -> IO ()
 redirectStream (StrmId sid) addr port conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 14 "redirectstream"#) args []
     args = [sid, showAddress addr] ++ maybeToList ((B.pack . show) `fmap` port)
@@ -375,7 +391,7 @@ emptyCloseCircuitFlags = CloseCircuitFlags False
 -- indicates failure.
 closeCircuit :: CircuitID -> CloseCircuitFlags -> Connection -> IO ()
 closeCircuit (CircId cid) flags conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command (b 12 "closecircuit"#) (cid : flagArgs) []
     flagArgs = [flag | (p,flag) <- [(ifUnused, b 8 "IfUnused"#)], p flags]
@@ -385,10 +401,11 @@ closeCircuit (CircId cid) flags conn =
 -- indicates failure.
 getConf' :: [ByteString] -> Connection -> IO [(ByteString, Maybe ByteString)]
 getConf' keys conn = do
-  rs@(r:_) <- sendCommand (Command (b 7 "getconf"#) keys []) Nothing conn
-  throwIfNotPositive r
-  either (E.throwDyn . ProtocolError) return (mapM (parseText . repText) rs)
+  rs@(r:_) <- sendCommand command Nothing conn
+  throwIfNotPositive command r
+  either (protocolError command) return (mapM (parseText . repText) rs)
   where
+    command = Command (b 7 "getconf"#) keys []
     parseText text
       | B.null eq      = return (key, Nothing)
       | eq == b 1 "="# = return (key, Just val)
@@ -412,7 +429,7 @@ resetConf' = setConf'' (b 9 "resetconf"#)
 setConf''
   :: ByteString -> [(ByteString, Maybe ByteString)] -> Connection -> IO ()
 setConf'' name args conn =
-  sendCommand command Nothing conn >>= throwIfNotPositive . head
+  sendCommand command Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command name (map renderArg args) []
     renderArg (key, Just val) = B.join (b 1 "="#) [key, val]
@@ -494,15 +511,15 @@ fetchUselessDescriptors = ConfVar get (set setConf') (set resetConf') where
   get conn = do
     (key,val):_ <- getConf' [var] conn
     case fmap decodeConfVal val of
-      Nothing       -> protErr $ cat "Unexpected empty value for \"" var "\"."
-      Just (Left e) -> protErr $ cat "Failed parsing value for \"" var "\": " e
+      Nothing       -> psErr $ cat "Unexpected empty value for \"" var "\"."
+      Just (Left e) -> psErr $ cat "Failed parsing value for \"" var "\": " e
       Just (Right val')
-        | B.map toLower key /= var -> protErr $ cat "Received conf value "
+        | B.map toLower key /= var -> psErr $ cat "Received conf value "
             (esc maxVarLen key) ", expecting \"" var "\"."
         | otherwise                -> return val'
   set f val = f [(var, fmap encodeConfVal val)]
   var = b 23 "fetchuselessdescriptors"#
-  protErr = E.throwDyn . ProtocolError
+  psErr = E.throwDyn . ParseError
   maxVarLen = 64
 
 --------------------------------------------------------------------------------
@@ -519,57 +536,62 @@ data EventHandler = EventHandler
 -- 'TorControlError' if the reply code indicates failure.
 registerEventHandlers :: [EventHandler] -> Connection -> IO ()
 registerEventHandlers handlers conn =
-  sendCommand command (Just handlers) conn >>= throwIfNotPositive . head
+  sendCommand command (Just handlers) conn >>= throwIfNotPositive command . head
   where command = Command (b 9 "setevents"#) (map evCode handlers) []
 
 -- | Create an event handler for new router descriptor events.
-newDescriptorsEvent :: ([Descriptor] -> IO ()) -> Connection -> EventHandler
+newDescriptorsEvent ::
+  ([TorControlError] -> [Descriptor] -> IO ()) -> Connection -> EventHandler
 newDescriptorsEvent handler conn = EventHandler (b 7 "NEWDESC"#) handleNewDesc
   where
-    safeGetDescriptor rid = Just `fmap` getDescriptor rid conn
-      `E.catchDyn` \(_ :: TorControlError) -> return Nothing
-    handleNewDesc (Reply _ text _:_)
-      | Just rids' <- mapM decodeBase16RouterID rids =
-          -- pipeline descriptor requests
-          mapM (spawn . safeGetDescriptor) rids' >>= mapM resolve
-            >>= handler . catMaybes
-      where rids = map (B.take 40 . B.drop 1) . B.split ' ' . B.drop 8 $ text
+    safeGetDescriptor rid = Right `fmap` getDescriptor rid conn
+      `E.catchDyn` \(e :: TorControlError) -> return (Left e)
+    handleNewDesc (Reply _ text _:_) = do
+      -- pipeline descriptor requests
+      (es',ds) <- fmap partitionEither . mapM resolve
+                    =<< mapM (spawn . safeGetDescriptor) rids
+      handler (map ParseError es ++ es') ds
+      where (es,rids) = partitionEither . map decodeBase16RouterID .
+              map (B.take 40 . B.drop 1) . B.split ' ' . B.drop 8 $ text
     handleNewDesc _ = return ()
 
 -- | Create an event handler for network status events.
-networkStatusEvent :: ([RouterStatus] -> IO ()) -> EventHandler
+networkStatusEvent ::
+  ([TorControlError] -> [RouterStatus] -> IO ()) -> EventHandler
 networkStatusEvent handler = EventHandler (b 2 "NS"#) handleNS
   where
-    handleNS (Reply _ _ doc@(_:_):_) =
-      handler . filterRight . parseRouterStatuses . parseDocument $ doc
+    handleNS (Reply _ _ doc@(_:_):_) = handler (map ParseError es) rs
+      where (es,rs) = partitionEither . parseRouterStatuses $ parseDocument doc
     handleNS _ = return ()
 
 -- | Create an event handler for stream status change events.
-streamEvent :: (StreamStatus -> IO ()) -> EventHandler
+streamEvent :: (Either TorControlError StreamStatus -> IO ()) -> EventHandler
 streamEvent = lineEvent (b 6 "STREAM"#) parseStreamStatus
 
 -- | Create an event handler for circuit status change events.
-circuitEvent :: (CircuitStatus -> IO ()) -> EventHandler
+circuitEvent :: (Either TorControlError CircuitStatus -> IO ()) -> EventHandler
 circuitEvent = lineEvent (b 4 "CIRC"#) parseCircuitStatus
 
 -- | Create an event handler for circuit/stream status change events. The event
 -- code is specified by @code@, and the line-parsing function by @parse@.
-lineEvent
-  :: ByteString -> (ByteString -> Maybe a) -> (a -> IO ()) -> EventHandler
+lineEvent :: ByteString -> (ByteString -> Either ShowS a)
+          -> (Either TorControlError a -> IO ()) -> EventHandler
 lineEvent code parse handler = EventHandler code handleStatus
   where
-    handleStatus (Reply _ text _:_)
-      | Just x <- parse $ B.drop (B.length code + 1) text = handler x
-    handleStatus _                                        = return ()
+    handleStatus (Reply _ text _:_) =
+      handler . either (Left . ParseError) Right .
+        parse . B.drop (B.length code + 1) $ text
+    handleStatus _ = return ()
 
 -- | Create an event handler for new address mapping events.
-addressMapEvent :: (AddressMap -> IO ()) -> EventHandler
+addressMapEvent :: (Either TorControlError AddressMap -> IO ()) -> EventHandler
 addressMapEvent handler = EventHandler (b 7 "ADDRMAP"#) handleAddrMap
   where
     handleAddrMap (Reply _ text _:_) = do
       -- XXX Extended events will provide the UTCTime in 0.2.0.x.
       tz <- getCurrentTimeZone
-      whenJust (parseAddressMap tz $ B.drop 8 text) handler
+      handler . either (Left . ParseError) Right .
+        parseAddressMap tz . B.drop 8 $ text
     handleAddrMap _ = return ()
 
 --------------------------------------------------------------------------------
@@ -866,29 +888,38 @@ instance Show Expiry where
 -- | A reply code designating a status, subsystem, and fine-grained information.
 type ReplyCode = (Char, Char, Char)
 
--- | Throw a 'ProtocolError' given a reply.
-protocolError :: Reply -> IO a
-protocolError (Reply (x,y,z) text _) =
-  E.throwDyn . ProtocolError . esc 512 $ B.pack [x,y,z,' '] `B.append` text
-
 -- | An error type used in dynamic exceptions.
 data TorControlError
-  -- | A negative reply code and human-readable status message.
-  = TCError ReplyCode ByteString
-  | ParseError -- ^ Parsing a reply from Tor failed.
+  -- | A command, negative reply code, and human-readable status message.
+  = TCError Command ReplyCode ByteString
+  | ParseError ShowS -- ^ Parsing a reply from Tor failed.
   | ProtocolError ShowS -- ^ A reply from Tor didn't follow the protocol.
   | ConnectionClosed -- ^ The control connection is closed.
   deriving Typeable
 
 instance Show TorControlError where
-  showsPrec _ (TCError (x,y,z) text) = cat [x,y,z,' '] (esc 512 text)
-  showsPrec _ ParseError = ("Parsing document failed" ++)
+  showsPrec _ (TCError command (x,y,z) text) = cat (commandFailed command)
+                                                   [x,y,z,' '] (esc 512 text)
+  showsPrec _ (ParseError msg) = cat "Parsing error: " msg
   showsPrec _ (ProtocolError msg) = cat "Protocol error: " msg
   showsPrec _ ConnectionClosed = ("Connection is already closed" ++)
 
--- | Convert a negative reply to a 'TorControlError'.
-replyToError :: Reply -> TorControlError
-replyToError (Reply code text _) = TCError code text
+-- | Given a command, return a \"command failed\" message.
+commandFailed :: Command -> ShowS
+commandFailed (Command key args _) =
+  cat "Command \"" key ' ' (B.unwords args) "\" failed with: "
+
+-- | Throw a 'ProtocolError' given a command and error message.
+protocolError :: Command -> ShowS -> IO a
+protocolError command = E.throwDyn . ProtocolError . cat (commandFailed command)
+
+-- | Throw a 'ParseError' given a command and an error message.
+parseError :: Command -> ShowS -> IO a
+parseError command = E.throwDyn . ParseError . cat (commandFailed command)
+
+-- | Convert a command and negative reply to a 'TorControlError'.
+toTCError :: Command -> Reply -> TorControlError
+toTCError command (Reply code text _) = TCError command code text
 
 -- | Parse a reply code. 'throwError' in the monad if parsing fails.
 parseReplyCode :: MonadError ShowS m => ByteString -> m ReplyCode
@@ -898,13 +929,10 @@ parseReplyCode bs
   where cs = B.unpack bs
 
 -- | Throw a 'TorControlError' if the reply indicates failure.
-throwIfNotPositive :: Reply -> IO ()
-throwIfNotPositive reply =
-  unless (isPositive $ repCode reply) . E.throwDyn . replyToError $ reply
-
--- | Run an IO action, throwing a 'TorControlError' if it returns 'Nothing'.
-throwIfNothing :: TorControlError -> IO (Maybe a) -> IO a
-throwIfNothing e = (>>= maybe (E.throwDyn e) return)
+throwIfNotPositive :: Command -> Reply -> IO ()
+throwIfNotPositive command reply =
+  unless (isPositive $ repCode reply) $
+    E.throwDyn $ toTCError command reply
 
 -- | Is a reply successful?
 isPositive :: ReplyCode -> Bool
