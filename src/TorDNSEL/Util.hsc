@@ -26,6 +26,7 @@ module TorDNSEL.Util (
   , inet_atoh
   , parseUTCTime
   , parseLocalTime
+  , parseQuotedString
   , prependError
   , replaceError
   , handleError
@@ -94,12 +95,13 @@ import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
-import Control.Monad (liftM, liftM2, zipWithM_, when, unless)
+import Control.Monad (liftM, liftM2, zipWithM_, when, unless, guard)
 import Control.Monad.Error (Error(..), MonadError(..))
 import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
 import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
-import Data.Char (intToDigit, showLitChar, isPrint, isControl)
+import Data.Char
+  (intToDigit, showLitChar, isPrint, isControl, chr, ord, digitToInt, isAscii)
 import Data.Dynamic (Dynamic)
 import Data.List (foldl', intersperse)
 import Data.Maybe (mapMaybe)
@@ -182,6 +184,41 @@ parseLocalTime bs
                           (timeToTimeOfDay diff)
   | otherwise = throwError $ cat "Malformed time " (esc timeLen bs) '.'
   where timeLen = 19
+
+-- | Parse a quoted string with C-style escape sequences. Also return the
+-- remainder of the input string. 'throwError' in the monad if parsing fails.
+parseQuotedString
+  :: MonadError ShowS m => ByteString -> m (ByteString, ByteString)
+parseQuotedString input =
+  maybe (throwError ("Malformed quoted string." ++)) return $ do
+    guard $ B.take 1 input == b 1 "\""##
+    (content,rest) <- parseContent . B.span isText . B.drop 1 $ input
+    guard $ B.take 1 rest == b 1 "\""##
+    return (B.concat content, B.drop 1 rest)
+  where
+    parseContent (text,rest)
+      | B.take 1 rest /= b 1 "\\"## = return ([text], rest)
+      | otherwise = do
+          guard $ B.length rest >= 2
+          (char,escLen) <- case B.head (B.drop 1 rest) of
+            '\\' -> return ('\\', 2)
+            '"'  -> return ('"', 2)
+            '\'' -> return ('\'', 2)
+            'n'  -> return ('\n', 2)
+            't'  -> return ('\t', 2)
+            'r'  -> return ('\r', 2)
+            _    -> do guard $ B.length ds == 3 && B.all isOctal ds && n <= 0xff
+                       return (chr n, 4)
+              where
+                n = d1 * 8^2 + d2 * 8 + d3
+                [d1,d2,d3] = map (digitToInt . B.index ds) [0..2]
+                ds = B.take 3 (B.drop 1 rest)
+                isOctal x = 48 <= ord x && ord x <= 55
+          (parsed,unparsed) <- parseContent . B.span isText $ B.drop escLen rest
+          return (text : B.singleton char : parsed, unparsed)
+
+    isText x = isAscii x && isPrint x && x /= '\\' && x /= '"'
+    b addr = B.unsafePackAddress addr
 
 -- | Prepend a string to any error message thrown by the given action.
 prependError :: MonadError ShowS m => ShowS -> m a -> m a

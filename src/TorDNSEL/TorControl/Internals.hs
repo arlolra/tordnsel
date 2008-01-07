@@ -30,7 +30,9 @@ module TorDNSEL.TorControl.Internals (
   , withConnection
   , openConnection
   , closeConnection
+  , closeConnection'
   , connectionThread
+  , protocolInfo
 
   -- * Commands
   , Command(..)
@@ -62,6 +64,7 @@ module TorDNSEL.TorControl.Internals (
   , resetConf'
   , setConf''
   , sendCommand
+  , sendCommand'
 
   -- ** Config variables
   , ConfVal(..)
@@ -89,6 +92,11 @@ module TorDNSEL.TorControl.Internals (
   , startSocketReader
 
   -- * Data types
+  , TorVersion(..)
+  , parseTorVersion
+  , AuthMethods(..)
+  , ProtocolInfo(..)
+  , parseProtocolInfo
   , CircuitID(..)
   , nullCircuitID
   , parseID
@@ -120,17 +128,19 @@ module TorDNSEL.TorControl.Internals (
   , b
   ) where
 
-import Control.Arrow (second)
+import Control.Arrow (first, second)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
 import qualified Control.Exception as E
-import Control.Monad (unless, liftM)
+import Control.Monad (unless, liftM, mzero, mplus)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)
+import Control.Monad.State (StateT(StateT), get, put, lift, evalStateT)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
 import Data.Dynamic (fromDynamic)
+import Data.List (find)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, maybeToList, listToMaybe, isNothing)
 import qualified Data.Sequence as S
@@ -156,6 +166,7 @@ import TorDNSEL.Util
 data Connection
   = Conn (IOMessage -> IO ()) -- send a message to the I\/O manager
          ThreadId             -- the I\/O manager's 'ThreadId'
+         ProtocolInfo         -- protocol information for this connection
 
 -- | Open a connection with a handle and pass it to an 'IO' action. If an
 -- exception interrupts execution, close the connection gracefully before
@@ -163,25 +174,44 @@ data Connection
 withConnection :: Handle -> (Connection -> IO a) -> IO a
 withConnection handle = E.bracket (openConnection handle) (closeConnection)
 
--- | Open a connection with a handle.
+-- | Open a connection with a handle. Throw a 'TorControlError' if fetching
+-- protocol information fails.
 openConnection :: Handle -> IO Connection
 openConnection handle = do
   hSetBuffering handle LineBuffering
-  startIOManager handle
+  conn@(tellIOManager,ioManagerTid) <- startIOManager handle
+  protInfo <- sendProtocolInfo conn
+    `E.catch` \e -> closeConnection' conn >> E.throwIO e
+  return $! Conn tellIOManager ioManagerTid protInfo
+  where
+    sendProtocolInfo conn = do
+      rs@(r:_) <- sendCommand' command False Nothing conn
+      throwIfNotPositive command r
+      either (protocolError command) return (parseProtocolInfo rs)
+    command = Command (b 12 "protocolinfo"#) [b 1 "1"#] []
 
 -- | Close a connection gracefully, blocking the current thread until the
 -- connection has terminated.
 closeConnection :: Connection -> IO ()
-closeConnection conn@(Conn tellIOManager ioManagerTid) =
+closeConnection (Conn tellIOManager ioManagerTid _) =
+  closeConnection' (tellIOManager, ioManagerTid)
+
+-- | 'closeConnection' with unpacked parameters.
+closeConnection' :: (IOMessage -> IO (), ThreadId) -> IO ()
+closeConnection' conn@(tellIOManager,ioManagerTid) =
   E.finally
-    (sendCommand quit True Nothing conn >>= throwIfNotPositive quit . head)
+    (sendCommand' quit True Nothing conn >>= throwIfNotPositive quit . head)
     (terminateThread Nothing ioManagerTid (tellIOManager CloseConnection))
   where quit = Command (b 4 "quit"#) [] []
 
 -- | The 'ThreadId' associated with a 'Connection'. Useful for monitoring or
 -- linking to a connection.
 connectionThread :: Connection -> ThreadId
-connectionThread (Conn _ ioManagerTid) = ioManagerTid
+connectionThread (Conn _ ioManagerTid _) = ioManagerTid
+
+-- | 'ProtocolInfo' associated with a 'Connection'.
+protocolInfo :: Connection -> ProtocolInfo
+protocolInfo (Conn _ _ protInfo) = protInfo
 
 --------------------------------------------------------------------------------
 -- Commands
@@ -445,7 +475,13 @@ setConf'' name args conn =
 -- @isQuit@ specifies whether this is a QUIT command.
 sendCommand
   :: Command -> Bool -> Maybe [EventHandler] -> Connection -> IO [Reply]
-sendCommand command isQuit mbEvHandlers (Conn tellIOManager ioManagerTid) = do
+sendCommand command isQuit mbEvHandlers (Conn tellIOManager ioManagerTid _) =
+  sendCommand' command isQuit mbEvHandlers (tellIOManager, ioManagerTid)
+
+-- | 'sendCommand' with unpacked parameters.
+sendCommand' :: Command -> Bool -> Maybe [EventHandler]
+             -> ((IOMessage -> IO ()), ThreadId) -> IO [Reply]
+sendCommand' command isQuit mbEvHandlers (tellIOManager,ioManagerTid) = do
   mv <- newEmptyMVar
   let putResponse = (>> return ()) . tryPutMVar mv
   withMonitor ioManagerTid (putResponse . Left) $ do
@@ -513,8 +549,8 @@ resetConf = resetConf_
 
 -- | Enables fetching descriptors for non-running routers.
 fetchUselessDescriptors :: ConfVar Bool Bool
-fetchUselessDescriptors = ConfVar get (set setConf') (set resetConf') where
-  get conn = do
+fetchUselessDescriptors = ConfVar getc (setc setConf') (setc resetConf') where
+  getc conn = do
     (key,val):_ <- getConf' [var] conn
     case fmap decodeConfVal val of
       Nothing       -> psErr $ cat "Unexpected empty value for \"" var "\"."
@@ -523,7 +559,7 @@ fetchUselessDescriptors = ConfVar get (set setConf') (set resetConf') where
         | B.map toLower key /= var -> psErr $ cat "Received conf value "
             (esc maxVarLen key) ", expecting \"" var "\"."
         | otherwise                -> return val'
-  set f val = f [(var, fmap encodeConfVal val)]
+  setc f val = f [(var, fmap encodeConfVal val)]
   var = b 23 "fetchuselessdescriptors"#
   psErr = E.throwDyn . ParseError
   maxVarLen = 64
@@ -631,11 +667,11 @@ data IOManagerState = IOManagerState
 
 -- | Start the thread that manages all I\/O associated with a Tor control
 -- connection, linking it to the calling thread. We receive messages sent with
--- the returned 'Connection' and send the appropriate command to Tor. When we
+-- the returned 'IO' action and send the appropriate command to Tor. When we
 -- receive replies from Tor, we pass them in a message to the thread that
 -- requested the corresponding command. Asynchronous event handlers are
 -- maintained as local state, invoked as necessary for incoming events.
-startIOManager :: Handle -> IO Connection
+startIOManager :: Handle -> IO (IOMessage -> IO (), ThreadId)
 startIOManager handle = do
   ioChan <- newChan
   ioManagerTid <- forkLinkIO $ do
@@ -680,7 +716,7 @@ startIOManager handle = do
             _       -> loop s'
           where s' = s { responds = respond <| responds s, quitSent = isQuit }
 
-  return $ Conn (writeChan ioChan) ioManagerTid
+  return (writeChan ioChan, ioManagerTid)
   where
     startEventHandler eventChan = do
       ioManagerTid <- myThreadId
@@ -749,6 +785,89 @@ startSocketReader handle sendRepliesToIOManager =
 
 --------------------------------------------------------------------------------
 -- Data types
+
+-- | A new-style (since 0.1.0) Tor version number.
+data TorVersion
+  = TorVersion Integer    -- major
+               Integer    -- minor
+               Integer    -- micro
+               Integer    -- patch level
+               ByteString -- status tag
+  deriving (Eq, Ord)
+
+instance Show TorVersion where
+  showsPrec _ (TorVersion major minor micro patchLevel statusTag)
+    | B.null statusTag = prefix
+    | otherwise        = cat prefix '-' statusTag
+    where prefix = cat major '.' minor '.' micro '.' patchLevel
+
+-- | Parse a new-style (since 0.1.0) Tor version number. 'throwError' in the
+-- monad if parsing fails.
+parseTorVersion :: MonadError ShowS m => ByteString -> m TorVersion
+parseTorVersion bs
+  | Just v <- evalStateT version bs = return v
+  | otherwise = throwError $ cat "Malformed Tor version " (esc maxVerLen bs) '.'
+  where
+    version :: StateT ByteString Maybe TorVersion
+    version = do
+      major <- int; dot
+      minor <- int; dot
+      micro <- int
+      patchLevel <- (dot >> int) `mplus` return 0
+      statusTag <- (hyphen >> get) `mplus` (eof >> return B.empty)
+      return $! TorVersion major minor micro patchLevel statusTag
+
+    int = StateT (maybe mzero return . B.readInteger)
+
+    (dot,hyphen) = (str (b 1 "."#), str (b 1 "-"#))
+
+    str x = do
+      (x',rest) <- B.splitAt (B.length x) `fmap` get
+      if x == x' then put rest
+                 else lift mzero
+
+    eof = get >>= flip unless (lift mzero) . B.null
+
+    maxVerLen = 32
+
+-- | Authentication methods accepted by Tor.
+data AuthMethods = AuthMethods
+  { nullAuth                     -- ^ No authentication is required
+  , hashedPasswordAuth :: Bool   -- ^ The original password must be supplied
+  , cookieAuth :: Maybe FilePath -- ^ The contents of a cookie must be supplied
+  } deriving Show
+
+-- | Control protocol information for a connection.
+data ProtocolInfo = ProtocolInfo TorVersion AuthMethods
+  deriving Show
+
+-- | Parse a response to a PROTOCOLINFO command. 'throwError' in the monad if
+-- parsing fails.
+parseProtocolInfo :: MonadError ShowS m => [Reply] -> m ProtocolInfo
+parseProtocolInfo [] = throwError ("Missing PROTOCOLINFO reply." ++)
+parseProtocolInfo (Reply _ text _:rs)
+  | not $ B.isPrefixOf (b 12 "PROTOCOLINFO"#) text
+  = throwError ("Malformed PROTOCOLINFO reply." ++)
+  | B.drop 13 text /= b 1 "1"#
+  = throwError ("Unsupported PROTOCOLINFO version." ++)
+  | otherwise = do
+      authLine <- findPrefix (b 13 "AUTH METHODS="#)
+      let (methods,restAuth) = B.split ',' `first` B.span (/= ' ') authLine
+      cookiePath <- if b 12 " COOKIEFILE="# `B.isPrefixOf` restAuth
+        then (Just . fst) `liftM` parseQuotedString (B.drop 12 restAuth)
+        else return Nothing
+      versionLine <- findPrefix (b 12 "VERSION Tor="#)
+      version <- parseTorVersion . fst =<< parseQuotedString versionLine
+      return $! ProtocolInfo version AuthMethods
+        { nullAuth           = b 4 "NULL"# `elem` methods
+        , hashedPasswordAuth = b 14 "HASHEDPASSWORD"# `elem` methods
+        , cookieAuth         = B.unpack `liftM` cookiePath }
+  where
+    findPrefix prefix
+      | Just r <- find (B.isPrefixOf prefix . repText) rs
+      = return . B.drop (B.length prefix) . repText $ r
+      | otherwise = throwError $ cat "Missing " (B.takeWhile (/= ' ') prefix)
+                                     " line."
 
 -- | A circuit identifier.
 newtype CircuitID = CircId ByteString

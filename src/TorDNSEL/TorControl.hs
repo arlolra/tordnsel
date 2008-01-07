@@ -25,6 +25,7 @@ module TorDNSEL.TorControl (
   , openConnection
   , closeConnection
   , connectionThread
+  , protocolInfo
 
   -- * Commands
   , authenticate
@@ -61,6 +62,9 @@ module TorDNSEL.TorControl (
   , addressMapEvent
 
   -- * Data types
+  , TorVersion(..)
+  , AuthMethods(..)
+  , ProtocolInfo(..)
   , CircuitID
   , CircuitStatus(..)
   , CircuitState(..)
