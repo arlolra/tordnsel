@@ -50,6 +50,7 @@ module TorDNSEL.TorControl (
   , setConf
   , resetConf
   , fetchUselessDescriptors
+  , fetchDirInfoEarly
 
   -- * Asynchronous events
   , EventHandler

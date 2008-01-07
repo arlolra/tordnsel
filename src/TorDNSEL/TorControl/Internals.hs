@@ -74,6 +74,8 @@ module TorDNSEL.TorControl.Internals (
   , setConf
   , resetConf
   , fetchUselessDescriptors
+  , fetchDirInfoEarly
+  , boolVar
 
   -- * Asynchronous events
   , EventHandler(..)
@@ -251,13 +253,12 @@ data Reply = Reply
 -- or an 'IOError' if reading the authentication cookie fails.
 authenticate :: Maybe ByteString -> Connection -> IO ()
 authenticate mbPasswd conn = do
-  let ProtocolInfo _ authMethods = protocolInfo conn
+  let methods = authMethods $ protocolInfo conn
   secret <- fmap encodeBase16 `fmap` case () of
-   _| nullAuth authMethods                            -> return Nothing
-    | hashedPasswordAuth authMethods, isJust mbPasswd -> return mbPasswd
-    | Just cookiePath <- cookieAuth authMethods ->
-        Just `fmap` B.readFile cookiePath
-    | otherwise                                       -> return Nothing
+   _| nullAuth methods                            -> return Nothing
+    | hashedPasswordAuth methods, isJust mbPasswd -> return mbPasswd
+    | Just cookiePath <- cookieAuth methods -> Just `fmap` B.readFile cookiePath
+    | otherwise                                   -> return Nothing
   let authCommand = Command (b 12 "authenticate"#) (maybeToList secret) []
   sendCommand authCommand False Nothing conn
     >>= throwIfNotPositive authCommand . head
@@ -566,7 +567,17 @@ resetConf = resetConf_
 
 -- | Enables fetching descriptors for non-running routers.
 fetchUselessDescriptors :: ConfVar Bool Bool
-fetchUselessDescriptors = ConfVar getc (setc setConf') (setc resetConf') where
+fetchUselessDescriptors = boolVar (b 23 "fetchuselessdescriptors"#)
+
+-- | Enables fetching directory info on the mirror schedule, preferably from
+-- authorities.
+fetchDirInfoEarly :: ConfVar Bool Bool
+fetchDirInfoEarly = boolVar (b 17 "fetchdirinfoearly"#)
+
+-- | Given the name of a boolean conf variable, return the corresponding
+-- 'ConfVar'.
+boolVar :: ByteString -> ConfVar Bool Bool
+boolVar var = ConfVar getc (setc setConf') (setc resetConf') where
   getc conn = do
     (key,val):_ <- getConf' [var] conn
     case fmap decodeConfVal val of
@@ -577,7 +588,6 @@ fetchUselessDescriptors = ConfVar getc (setc setConf') (setc resetConf') where
             (esc maxVarLen key) ", expecting \"" var "\"."
         | otherwise                -> return val'
   setc f val = f [(var, fmap encodeConfVal val)]
-  var = b 23 "fetchuselessdescriptors"#
   psErr = E.throwDyn . ParseError
   maxVarLen = 64
 
@@ -855,7 +865,9 @@ data AuthMethods = AuthMethods
   } deriving Show
 
 -- | Control protocol information for a connection.
-data ProtocolInfo = ProtocolInfo TorVersion AuthMethods
+data ProtocolInfo = ProtocolInfo
+  { torVersion  :: TorVersion
+  , authMethods :: AuthMethods }
   deriving Show
 
 -- | Parse a response to a PROTOCOLINFO command. 'throwError' in the monad if
