@@ -49,7 +49,6 @@ config = toConfig
   , "TestListenAddress"      ~> "10.0.0.1:80,443,110,53,22,5190,6667,9030"
   , "TorControlAddress"      ~> "127.0.0.1:9051"
   , "TorControlPassword"     ~> "password"
-  , "TorDataDirectory"       ~> "/var/lib/tor"
   , "TorSocksAddress"        ~> "127.0.0.1:9050"
   , "User"                   ~> "tordnsel" ]
 
@@ -88,11 +87,6 @@ configFile = B.pack
   \## Detach from the controlling terminal and run in the background as a\n\
   \## daemon. The default is \"False\".\n\
   \RunAsDaemon True\n\
-  \\n\
-  \## Tor's data directory. Only specify this when you're using Tor's\n\
-  \## CookieAuthentication for controller connections. The control auth cookie\n\
-  \## is read before chrooting or dropping privileges.\n\
-  \TorDataDirectory /var/lib/tor\n\
   \\n\
   \## The password you used to generate the HashedControlPassword in Tor's\n\
   \## torrc. This is only required when you have a HashedControlPassword.\n\

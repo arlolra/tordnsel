@@ -156,15 +156,6 @@ main = do
       , etTestPorts   = snd $ tcfTestDestinationAddress testConf
       , etRandom      = random }
 
-  authSecret <- fmap encodeBase16 `fmap`
-    case (cfTorDataDirectory conf, cfTorControlPassword conf) of
-      (Just dir,_) ->
-         E.catchJust E.ioErrors
-           (Just `fmap` B.readFile (dir ++ "/control_auth_cookie"))
-           (exitWith . cat "Opening control auth cookie failed: ")
-      (_,Just passwd) -> return (Just passwd)
-      _               -> return Nothing
-
   pidHandle <- E.catchJust E.ioErrors
                  (flip openFile WriteMode `liftMb` cfPIDFile conf)
                  (exitWith . cat "Opening PID file failed: ")
@@ -224,7 +215,8 @@ main = do
       _ ->
         newNetwork Nothing
 
-    let controller = torController net (cfTorControlAddress conf) authSecret
+    let controller = torController net (cfTorControlAddress conf)
+                                  (cfTorControlPassword conf)
     installHandler sigPIPE Ignore Nothing
     forkIO $ do
       exitChan <- newChan
@@ -261,14 +253,13 @@ main = do
 -- notify us and update the state when updated router info comes in.
 torController :: Network -> SockAddr -> Maybe ByteString
               -> Chan (ThreadId, ExitReason) -> IO ()
-torController net control authSecret exitChan = do
+torController net control mbPasswd exitChan = do
   handle <- E.bracketOnError (socket AF_INET Stream tcpProtoNum)
                              sClose $ \sock -> do
     connect sock control
     socketToHandle sock ReadWriteMode
 
-  withConnection handle $ \conn -> do
-    authenticate authSecret conn
+  withConnection handle mbPasswd $ \conn -> do
     let newNS = networkStatusEvent (const $ updateNetworkStatus net)
         newDesc = newDescriptorsEvent (const $ updateDescriptors net) conn
     registerEventHandlers [newNS, newDesc] conn

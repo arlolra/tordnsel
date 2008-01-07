@@ -28,7 +28,6 @@ module TorDNSEL.TorControl (
   , protocolInfo
 
   -- * Commands
-  , authenticate
   , getDescriptor
   , getAllDescriptors
   , getRouterStatus

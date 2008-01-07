@@ -68,8 +68,6 @@ data Config = Config
   , cfTestConfig          :: Maybe TestConfig -- ^ Exit test config.
     -- | A record to return for our zone of authority.
   , cfAddress             :: Maybe HostAddress
-    -- | Where to look for the Tor control auth cookie.
-  , cfTorDataDirectory    :: Maybe FilePath
     -- | The password used for Tor controller auth.
   , cfTorControlPassword  :: Maybe ByteString
   , cfUser                :: Maybe String -- ^ User name to run under.
@@ -104,7 +102,6 @@ knownConfigItems
   , "TestListenAddress"
   , "TestDestinationAddress"
   , "Address"
-  , "TorDataDirectory"
   , "TorControlPassword"
   , "User"
   , "Group"
@@ -128,7 +125,6 @@ makeConfig conf =
     "ConfigFile"# `ap`
     testConf `app`
     "Address"# `app`
-    "TorDataDirectory"# `app`
     "TorControlPassword"# `app`
     "User"# `app`
     "Group"# `app`

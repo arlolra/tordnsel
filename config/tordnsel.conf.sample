@@ -40,11 +40,6 @@
 ## daemon. The default is "False".
 #RunAsDaemon True
 
-## Tor's data directory. Only specify this when you're using Tor's
-## CookieAuthentication for controller connections. The control auth cookie
-## is read before chrooting or dropping privileges.
-#TorDataDirectory /var/lib/tor
-
 ## The password you used to generate the HashedControlPassword in Tor's
 ## torrc. This is only required when you have a HashedControlPassword.
 #TorControlPassword password

@@ -142,7 +142,7 @@ import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
 import Data.Dynamic (fromDynamic)
 import Data.List (find)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, maybeToList, listToMaybe, isNothing)
+import Data.Maybe (fromMaybe, maybeToList, listToMaybe, isNothing, isJust)
 import qualified Data.Sequence as S
 import Data.Sequence ((<|), ViewR((:>)), viewr)
 import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)
@@ -168,27 +168,38 @@ data Connection
          ThreadId             -- the I\/O manager's 'ThreadId'
          ProtocolInfo         -- protocol information for this connection
 
--- | Open a connection with a handle and pass it to an 'IO' action. If an
--- exception interrupts execution, close the connection gracefully before
--- re-throwing the exception.
-withConnection :: Handle -> (Connection -> IO a) -> IO a
-withConnection handle = E.bracket (openConnection handle) (closeConnection)
+-- | Open a connection with a handle and an optional password and pass it to an
+-- 'IO' action. If an exception interrupts execution, close the connection
+-- gracefully before re-throwing the exception.
+withConnection :: Handle -> Maybe ByteString -> (Connection -> IO a) -> IO a
+withConnection handle mbPasswd io =
+  E.block $ do
+    conn <- openConnection handle mbPasswd
+    r <- E.catch (E.unblock $ io conn) $ \e -> do
+           -- so the original exception isn't lost
+           ignoreJust syncExceptions (closeConnection conn)
+           E.throwIO e
+    closeConnection conn
+    return r
 
--- | Open a connection with a handle. Throw a 'TorControlError' if fetching
--- protocol information fails.
-openConnection :: Handle -> IO Connection
-openConnection handle = do
+-- | Open a connection with a handle and an optional password. Throw a
+-- 'TorControlError' or 'IOError' if initializing the connection fails.
+openConnection :: Handle -> Maybe ByteString -> IO Connection
+openConnection handle mbPasswd = do
   hSetBuffering handle LineBuffering
   conn@(tellIOManager,ioManagerTid) <- startIOManager handle
-  protInfo <- sendProtocolInfo conn
-    `E.catch` \e -> closeConnection' conn >> E.throwIO e
-  return $! Conn tellIOManager ioManagerTid protInfo
-  where
-    sendProtocolInfo conn = do
-      rs@(r:_) <- sendCommand' command False Nothing conn
-      throwIfNotPositive command r
-      either (protocolError command) return (parseProtocolInfo rs)
-    command = Command (b 12 "protocolinfo"#) [b 1 "1"#] []
+
+  E.handle (\e -> closeConnection' conn >> E.throwIO e) $ do
+    let protInfoCommand = Command (b 12 "protocolinfo"#) [b 1 "1"#] []
+    rs@(r:_) <- sendCommand' protInfoCommand False Nothing conn
+    throwIfNotPositive protInfoCommand r
+    protInfo <- either (protocolError protInfoCommand) return
+                       (parseProtocolInfo rs)
+
+    let conn' = Conn tellIOManager ioManagerTid protInfo
+    authenticate mbPasswd conn'
+    useFeature [VerboseNames] conn'
+    return conn'
 
 -- | Close a connection gracefully, blocking the current thread until the
 -- connection has terminated.
@@ -236,14 +247,20 @@ data Reply = Reply
   , repData :: {-# UNPACK #-} ![ByteString]
   } deriving Show
 
--- | Authenticate with Tor using a password or cookie, then enable required
--- protocol extensions. Throw a 'TorControlError' if either reply code indicates
--- failure.
+-- | Authenticate with Tor. Throw a 'TorControlError' if authenticating fails
+-- or an 'IOError' if reading the authentication cookie fails.
 authenticate :: Maybe ByteString -> Connection -> IO ()
-authenticate secret conn = do
-  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
-  useFeature [VerboseNames] conn
-  where command = Command (b 12 "authenticate"#) (maybeToList secret) []
+authenticate mbPasswd conn = do
+  let ProtocolInfo _ authMethods = protocolInfo conn
+  secret <- fmap encodeBase16 `fmap` case () of
+   _| nullAuth authMethods                            -> return Nothing
+    | hashedPasswordAuth authMethods, isJust mbPasswd -> return mbPasswd
+    | Just cookiePath <- cookieAuth authMethods ->
+        Just `fmap` B.readFile cookiePath
+    | otherwise                                       -> return Nothing
+  let authCommand = Command (b 12 "authenticate"#) (maybeToList secret) []
+  sendCommand authCommand False Nothing conn
+    >>= throwIfNotPositive authCommand . head
 
 -- | Control protocol extensions
 data Feature = ExtendedEvents -- ^ Extended event syntax
