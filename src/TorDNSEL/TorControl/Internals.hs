@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, MultiParamTypeClasses #-}
+{-# LANGUAGE PatternGuards, MultiParamTypeClasses, ExistentialQuantification #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------
@@ -10,7 +10,8 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (pattern guards, concurrency, extended exceptions,
---                             multi-parameter type classes, GHC primitives)
+--                             multi-parameter type classes, existentially
+--                             quantified types, GHC primitives)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
@@ -27,6 +28,9 @@
 module TorDNSEL.TorControl.Internals (
   -- * Connections
     Connection(..)
+  , Connection'
+  , toConn'
+  , ConfSetting(..)
   , withConnection
   , openConnection
   , closeConnection
@@ -73,6 +77,9 @@ module TorDNSEL.TorControl.Internals (
   , getConf
   , setConf
   , resetConf
+  , onCloseSetConf
+  , onCloseRollback
+  , setConfWithRollback
   , fetchUselessDescriptors
   , fetchDirInfoEarly
   , boolVar
@@ -132,9 +139,10 @@ module TorDNSEL.TorControl.Internals (
 
 import Control.Arrow (first, second)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar, tryPutMVar)
+import Control.Concurrent.MVar
+  (MVar, newMVar, newEmptyMVar, takeMVar, tryPutMVar, withMVar, modifyMVar_)
 import qualified Control.Exception as E
-import Control.Monad (unless, liftM, mzero, mplus)
+import Control.Monad (when, unless, liftM, mzero, mplus)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)
 import Control.Monad.State (StateT(StateT), get, put, lift, evalStateT)
@@ -169,6 +177,20 @@ data Connection
   = Conn (IOMessage -> IO ()) -- send a message to the I\/O manager
          ThreadId             -- the I\/O manager's 'ThreadId'
          ProtocolInfo         -- protocol information for this connection
+         (MVar [ConfSetting]) -- conf settings that should be rolled back
+
+-- | A synonym for the values making up an incompletely initialized
+-- 'Connection'.
+type Connection' = (IOMessage -> IO (), ThreadId)
+
+-- | Convert a 'Connection' to a 'Connection\''
+toConn' :: Connection -> Connection'
+toConn' (Conn tellIOManager ioManagerTid _ _) = (tellIOManager, ioManagerTid)
+
+-- | An existential type containing a reference to a conf variable and a value
+-- to which it should be rolled back when the connection is closed.
+data ConfSetting = forall a b. (ConfVal b, SameConfVal a b) =>
+  ConfSetting (ConfVar a b) (Maybe b)
 
 -- | Open a connection with a handle and an optional password and pass it to an
 -- 'IO' action. If an exception interrupts execution, close the connection
@@ -190,15 +212,16 @@ openConnection :: Handle -> Maybe ByteString -> IO Connection
 openConnection handle mbPasswd = do
   hSetBuffering handle LineBuffering
   conn@(tellIOManager,ioManagerTid) <- startIOManager handle
+  confSettings <- newMVar []
 
-  E.handle (\e -> closeConnection' conn >> E.throwIO e) $ do
+  E.handle (\e -> closeConnection' conn confSettings >> E.throwIO e) $ do
     let protInfoCommand = Command (b 12 "protocolinfo"#) [b 1 "1"#] []
     rs@(r:_) <- sendCommand' protInfoCommand False Nothing conn
     throwIfNotPositive protInfoCommand r
     protInfo <- either (protocolError protInfoCommand) return
                        (parseProtocolInfo rs)
 
-    let conn' = Conn tellIOManager ioManagerTid protInfo
+    let conn' = Conn tellIOManager ioManagerTid protInfo confSettings
     authenticate mbPasswd conn'
     useFeature [VerboseNames] conn'
     return conn'
@@ -206,25 +229,32 @@ openConnection handle mbPasswd = do
 -- | Close a connection gracefully, blocking the current thread until the
 -- connection has terminated.
 closeConnection :: Connection -> IO ()
-closeConnection (Conn tellIOManager ioManagerTid _) =
-  closeConnection' (tellIOManager, ioManagerTid)
+closeConnection conn@(Conn _ _ _ confSettings) =
+  closeConnection' (toConn' conn) confSettings
 
--- | 'closeConnection' with unpacked parameters.
-closeConnection' :: (IOMessage -> IO (), ThreadId) -> IO ()
-closeConnection' conn@(tellIOManager,ioManagerTid) =
-  E.finally
+-- | 'closeConnection' with unpack parameters.
+closeConnection' :: Connection' -> MVar [ConfSetting] -> IO ()
+closeConnection' conn@(tellIOManager,ioManagerTid) confSettingsMv =
+  -- hold a lock here until the connection has terminated so onCloseSetConf
+  -- blocks in other threads while we're trying to close the connection
+  withMVar confSettingsMv $ \confSettings ->
+    -- roll back all the registered conf settings
+    foldl E.finally (return ()) (map set confSettings)
+    `E.finally`
     (sendCommand' quit True Nothing conn >>= throwIfNotPositive quit . head)
-    (terminateThread Nothing ioManagerTid (tellIOManager CloseConnection))
-  where quit = Command (b 4 "quit"#) [] []
+    `E.finally`
+    terminateThread Nothing ioManagerTid (tellIOManager CloseConnection)
+  where set (ConfSetting var val) = setConf_ var val conn
+        quit = Command (b 4 "quit"#) [] []
 
 -- | The 'ThreadId' associated with a 'Connection'. Useful for monitoring or
 -- linking to a connection.
 connectionThread :: Connection -> ThreadId
-connectionThread (Conn _ ioManagerTid _) = ioManagerTid
+connectionThread (Conn _ ioManagerTid _ _) = ioManagerTid
 
 -- | 'ProtocolInfo' associated with a 'Connection'.
 protocolInfo :: Connection -> ProtocolInfo
-protocolInfo (Conn _ _ protInfo) = protInfo
+protocolInfo (Conn _ _ protInfo _) = protInfo
 
 --------------------------------------------------------------------------------
 -- Commands
@@ -451,9 +481,9 @@ closeCircuit (CircId cid) flags conn =
 -- | Send a GETCONF command with a set of config variable names, returning
 -- a set of key-value pairs. Throw a 'TorControlError' if the reply code
 -- indicates failure.
-getConf' :: [ByteString] -> Connection -> IO [(ByteString, Maybe ByteString)]
+getConf' :: [ByteString] -> Connection' -> IO [(ByteString, Maybe ByteString)]
 getConf' keys conn = do
-  rs@(r:_) <- sendCommand command False Nothing conn
+  rs@(r:_) <- sendCommand' command False Nothing conn
   throwIfNotPositive command r
   either (protocolError command) return (mapM (parseText . repText) rs)
   where
@@ -468,20 +498,20 @@ getConf' keys conn = do
 
 -- | Send a SETCONF command with a set of key-value pairs. Throw a
 -- 'TorControlError' if the reply code indicates failure.
-setConf' :: [(ByteString, Maybe ByteString)] -> Connection -> IO ()
+setConf' :: [(ByteString, Maybe ByteString)] -> Connection' -> IO ()
 setConf' = setConf'' (b 7 "setconf"#)
 
 -- | Send a RESETCONF command with a set of key-value pairs. Throw a
 -- 'TorControlError' if the reply code indicates failure.
-resetConf' :: [(ByteString, Maybe ByteString)] -> Connection -> IO ()
+resetConf' :: [(ByteString, Maybe ByteString)] -> Connection' -> IO ()
 resetConf' = setConf'' (b 9 "resetconf"#)
 
 -- | Send a SETCONF or RESETCONF command with a set of key-value pairs. Throw a
 -- 'TorControlError' if the reply code indicates failure.
 setConf''
-  :: ByteString -> [(ByteString, Maybe ByteString)] -> Connection -> IO ()
+  :: ByteString -> [(ByteString, Maybe ByteString)] -> Connection' -> IO ()
 setConf'' name args conn =
-  sendCommand command False Nothing conn >>= throwIfNotPositive command . head
+  sendCommand' command False Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command name (map renderArg args) []
     renderArg (key, Just val) = B.join (b 1 "="#) [key, val]
@@ -493,12 +523,12 @@ setConf'' name args conn =
 -- @isQuit@ specifies whether this is a QUIT command.
 sendCommand
   :: Command -> Bool -> Maybe [EventHandler] -> Connection -> IO [Reply]
-sendCommand command isQuit mbEvHandlers (Conn tellIOManager ioManagerTid _) =
-  sendCommand' command isQuit mbEvHandlers (tellIOManager, ioManagerTid)
+sendCommand command isQuit mbEvHandlers =
+  sendCommand' command isQuit mbEvHandlers . toConn'
 
 -- | 'sendCommand' with unpacked parameters.
-sendCommand' :: Command -> Bool -> Maybe [EventHandler]
-             -> ((IOMessage -> IO ()), ThreadId) -> IO [Reply]
+sendCommand'
+  :: Command -> Bool -> Maybe [EventHandler] -> Connection' -> IO [Reply]
 sendCommand' command isQuit mbEvHandlers (tellIOManager,ioManagerTid) = do
   mv <- newEmptyMVar
   let putResponse = (>> return ()) . tryPutMVar mv
@@ -536,34 +566,66 @@ instance ConfVal Bool where
 
 -- | A constraint requiring 'setConf' and 'resetConf' to take the same type of
 -- config value as 'getConf' returns.
-class SameConfVal a b
+class SameConfVal a b where
+  -- | Convert a value returned by 'getConf' to a value suitable for 'setConf'.
+  getToSet :: a -> Maybe b
 
-instance SameConfVal a a
+instance SameConfVal a a where
+  getToSet = Just
 
-instance SameConfVal (Maybe a) a
+instance SameConfVal (Maybe a) a where
+  getToSet = id
 
 -- | A functional reference to a config variable.
 data (ConfVal b, SameConfVal a b) => ConfVar a b
-  = ConfVar { getConf_   :: Connection -> IO a
+  = ConfVar { getConf_   :: Connection' -> IO a
             , setConf_
-            , resetConf_ :: Maybe b -> Connection -> IO () }
+            , resetConf_ :: Maybe b -> Connection' -> IO () }
 
 -- | Retrieve the value of a config variable, throwing a 'TorControlError'
 -- if the command fails.
 getConf :: (ConfVal b, SameConfVal a b) => ConfVar a b -> Connection -> IO a
-getConf = getConf_
+getConf var = getConf_ var . toConn'
 
 -- | Set the value of a config variable, throwing a 'TorControlError' if the
 -- command fails.
 setConf :: (ConfVal b, SameConfVal a b) =>
   ConfVar a b -> Maybe b -> Connection -> IO ()
-setConf = setConf_
+setConf var val = setConf_ var val . toConn'
 
 -- | Reset the value of a config variable, throwing a 'TorControlError' if
 -- the command fails.
 resetConf :: (ConfVal b, SameConfVal a b) =>
   ConfVar a b -> Maybe b -> Connection -> IO ()
-resetConf = resetConf_
+resetConf var val = resetConf_ var val . toConn'
+
+-- | When the connection is closed, set the given conf variable to the given
+-- value.
+onCloseSetConf :: (ConfVal b, SameConfVal a b) =>
+  ConfVar a b -> Maybe b -> Connection -> IO ()
+onCloseSetConf var val (Conn _ _ _ confSettings) =
+  modifyMVar_ confSettings (return . (ConfSetting var val :))
+
+-- | Get the current value of a conf variable, then ensure that the variable
+-- will be rolled back to that value when the connection is closed. Throw a
+-- 'TorControlError' if a command fails.
+onCloseRollback :: (ConfVal b, SameConfVal a b) =>
+  ConfVar a b -> Connection -> IO ()
+onCloseRollback var conn = do
+  val <- getConf var conn
+  onCloseSetConf var (getToSet val) conn
+
+-- | Get the current value of a conf variable. If the current value is different
+-- from the given value, ensure that the original value is rolled back when the
+-- connection is closed, then set the variable to the given value. Throw a
+-- 'TorControlError' if a command fails.
+setConfWithRollback :: (Eq b, ConfVal b, SameConfVal a b) =>
+  ConfVar a b -> Maybe b -> Connection -> IO ()
+setConfWithRollback var newVal conn = do
+  origVal <- getToSet `fmap` getConf var conn
+  when (origVal /= newVal) $ do
+    onCloseSetConf var origVal conn
+    setConf var newVal conn
 
 -- | Enables fetching descriptors for non-running routers.
 fetchUselessDescriptors :: ConfVar Bool Bool
@@ -694,11 +756,11 @@ data IOManagerState = IOManagerState
 
 -- | Start the thread that manages all I\/O associated with a Tor control
 -- connection, linking it to the calling thread. We receive messages sent with
--- the returned 'IO' action and send the appropriate command to Tor. When we
+-- the returned 'Connection\'' and send the appropriate command to Tor. When we
 -- receive replies from Tor, we pass them in a message to the thread that
 -- requested the corresponding command. Asynchronous event handlers are
 -- maintained as local state, invoked as necessary for incoming events.
-startIOManager :: Handle -> IO (IOMessage -> IO (), ThreadId)
+startIOManager :: Handle -> IO Connection'
 startIOManager handle = do
   ioChan <- newChan
   ioManagerTid <- forkLinkIO $ do

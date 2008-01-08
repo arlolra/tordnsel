@@ -260,9 +260,9 @@ torController net control mbPasswd exitChan = do
     socketToHandle sock ReadWriteMode
 
   withConnection handle mbPasswd $ \conn -> do
-    setConf fetchUselessDescriptors (Just True) conn
+    setConfWithRollback fetchUselessDescriptors (Just True) conn
     when (torVersion (protocolInfo conn) >= TorVersion 0 2 0 13 B.empty) $
-      setConf fetchDirInfoEarly (Just True) conn
+      setConfWithRollback fetchDirInfoEarly (Just True) conn
 
     let newNS = networkStatusEvent (const $ updateNetworkStatus net)
         newDesc = newDescriptorsEvent (const $ updateDescriptors net) conn
