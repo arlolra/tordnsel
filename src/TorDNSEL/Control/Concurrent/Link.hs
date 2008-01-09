@@ -31,11 +31,13 @@ module TorDNSEL.Control.Concurrent.Link (
   , withMonitor
   , exit
   , throwTo
+  , throwDynTo
   , killThread
   , setTrapExit
   , unsetTrapExit
   , ExitReason
   , extractReason
+  , fromExitSignal
   , LinkException(..)
   , showLinkException
   ) where

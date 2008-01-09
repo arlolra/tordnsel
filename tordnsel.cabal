@@ -22,8 +22,8 @@ Other-Modules:   TorDNSEL.Config, TorDNSEL.Config.Internals,
   TorDNSEL.Control.Concurrent.Link, TorDNSEL.Control.Concurrent.Link.Internals,
   TorDNSEL.DeepSeq, TorDNSEL.Directory, TorDNSEL.Directory.Internals,
   TorDNSEL.Document, TorDNSEL.NetworkState, TorDNSEL.NetworkState.Internals,
-  TorDNSEL.DNS, TorDNSEL.DNS.Internals, TorDNSEL.DNS.Handler,
-  TorDNSEL.DNS.Handler.Internals, TorDNSEL.Main, TorDNSEL.Random,
+  TorDNSEL.DNS, TorDNSEL.DNS.Internals, TorDNSEL.DNS.Server,
+  TorDNSEL.DNS.Server.Internals, TorDNSEL.Main, TorDNSEL.Random,
   TorDNSEL.Socks, TorDNSEL.Socks.Internals, TorDNSEL.Statistics,
   TorDNSEL.Statistics.Internals, TorDNSEL.System.Timeout, TorDNSEL.TorControl,
   TorDNSEL.TorControl.Internals, TorDNSEL.Util
@@ -36,7 +36,7 @@ Executable:      runtests
 Buildable:       False
 Main-Is:         runtests.hs
 Other-Modules:   TorDNSEL.Config.Tests, TorDNSEL.Directory.Tests,
-  TorDNSEL.DNS.Tests, TorDNSEL.DNS.Handler.Tests
+  TorDNSEL.DNS.Tests, TorDNSEL.DNS.Server.Tests
 HS-Source-Dirs:  src
 Includes:        openssl/rand.h, netinet/in.h
 Extra-Libraries: crypto

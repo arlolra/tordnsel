@@ -56,9 +56,8 @@ import System.IO
   ( openFile, hPutStr, hPutStrLn, hFlush, hClose, stderr
   , IOMode(WriteMode, ReadWriteMode) )
 import Network.Socket
-  ( socket, sClose, connect, bindSocket, setSocketOption, socketToHandle
-  , SockAddr, Family(AF_INET), SocketType(Datagram, Stream)
-  , SocketOption(ReuseAddr) )
+  ( socket, sClose, connect, socketToHandle, SockAddr, Family(AF_INET)
+  , SocketType(Stream) )
 
 import System.Exit (ExitCode(ExitSuccess))
 import System.Directory (setCurrentDirectory, createDirectoryIfMissing)
@@ -89,7 +88,7 @@ import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.TorControl
 import TorDNSEL.Directory
 import TorDNSEL.DNS
-import TorDNSEL.DNS.Handler
+import TorDNSEL.DNS.Server
 import TorDNSEL.NetworkState
 import TorDNSEL.Random
 import TorDNSEL.Statistics
@@ -160,12 +159,9 @@ main = do
                  (flip openFile WriteMode `liftMb` cfPIDFile conf)
                  (exitWith . cat "Opening PID file failed: ")
 
-  sock <- E.handleJust E.ioErrors
-          (exitWith . cat "Binding DNS socket failed: ") $ do
-    sock <- socket AF_INET Datagram udpProtoNum
-    setSocketOption sock ReuseAddr 1
-    bindSocket sock $ cfDNSListenAddress conf
-    return sock
+  dnsSock <- E.catchJust E.ioErrors
+               (bindUDPSocket $ cfDNSListenAddress conf)
+               (exitWith . cat "Binding DNS socket failed: ")
 
   -- We lose any other running threads when we 'forkProcess', so don't 'forkIO'
   -- before this point.
@@ -188,18 +184,6 @@ main = do
         unlinkStatsSocket $ cfStateDirectory conf
         E.throwTo mainThread (E.ExitException ExitSuccess)
 
-    statsHandle <- openStatsListener $ cfStateDirectory conf
-
-    let DomainName authLabels = cfAuthoritativeZone conf
-        dnsConf = DNSConfig
-          { dnsAuthZone = DomainName $ reverse authLabels
-          , dnsMyName   = cfDomainName conf
-          , dnsSOA      = SOA (cfAuthoritativeZone conf) ttl (cfDomainName conf)
-                              (cfSOARName conf) 0 ttl ttl ttl ttl
-          , dnsNS       = NS (cfAuthoritativeZone conf) ttl (cfDomainName conf)
-          , dnsA        = A (cfAuthoritativeZone conf) ttl `fmap` cfAddress conf
-          , dnsStats    = incrementResponses statsHandle }
-
     net <- case testConf of
       Just testConf' -> do
         exitTestChan <- newExitTestChan
@@ -216,26 +200,46 @@ main = do
         newNetwork Nothing
 
     let controller = torController net (cfTorControlAddress conf)
-                                  (cfTorControlPassword conf)
+                                   (cfTorControlPassword conf)
     installHandler sigPIPE Ignore Nothing
     forkIO $ do
       exitChan <- newChan
       setTrapExit (curry $ writeChan exitChan)
-      forever $ do
-        E.catchJust connExceptions (controller exitChan) $ \e -> do
-          -- XXX this should be logged
-          unless (cfRunAsDaemon conf) $
-            hPutStrLn stderr (showConnException e) >> hFlush stderr
-          C.threadDelay (5 * 10^6)
+      forever . E.catchJust connExceptions (controller exitChan) $ \e -> do
+        -- XXX this should be logged
+        unless (cfRunAsDaemon conf) $
+          hPutStrLn stderr (showConnException e) >> hFlush stderr
+        C.threadDelay (5 * 10^6)
+
+    statsHandle <- openStatsListener $ cfStateDirectory conf
+
+    let DomainName authLabels = cfAuthoritativeZone conf
+        dnsConf = DNSConfig
+          { dnsSocket = dnsSock
+          , dnsAuthZone = DomainName $ reverse authLabels
+          , dnsMyName = cfDomainName conf
+          , dnsSOA = SOA (cfAuthoritativeZone conf) ttl (cfDomainName conf)
+                         (cfSOARName conf) 0 ttl ttl ttl ttl
+          , dnsNS = NS (cfAuthoritativeZone conf) ttl (cfDomainName conf)
+          , dnsA = A (cfAuthoritativeZone conf) ttl `fmap` cfAddress conf
+          , dnsByteStats = incrementBytes statsHandle
+          , dnsRespStats = incrementResponses statsHandle }
 
     -- start the DNS server
-    forever . E.catchJust E.ioErrors
-      (runServer sock (incrementBytes statsHandle) (dnsHandler dnsConf net)) $
-        \e -> do
-          -- XXX this should be logged
-          unless (cfRunAsDaemon conf) $
-            hPutStrLn stderr (show e) >> hFlush stderr
-          C.threadDelay (5 * 10^6)
+    exitChan <- newChan
+    setTrapExit (curry $ writeChan exitChan)
+    forever $ E.catchJust E.ioErrors
+        (do dnsTid <- startDNSServer net dnsConf
+            fix $ \loop -> do
+              (tid,reason) <- readChan exitChan
+              if tid == dnsTid
+                then whenJust reason E.throwIO
+                else maybe loop (const $ exit reason) reason)
+
+        (\e -> do unless (cfRunAsDaemon conf) $
+                    -- XXX this should be logged
+                    hPutStrLn stderr (show e) >> hFlush stderr
+                  C.threadDelay (5 * 10^6))
   where
     connExceptions e@(E.IOException _)                = Just e
     connExceptions e@(E.DynException e')

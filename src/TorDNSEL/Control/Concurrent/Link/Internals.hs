@@ -112,6 +112,13 @@ extractReason (E.DynException dyn)
   | Just (ExitSignal _ e) <- fromDynamic dyn = e
 extractReason e                              = Just e
 
+-- | Extract an exit signal from an 'E.Exception' if it has the right type.
+fromExitSignal :: Typeable a => E.Exception -> Maybe (ThreadId, a)
+fromExitSignal (E.DynException d)
+  | Just (ExitSignal tid (Just (E.DynException d'))) <- fromDynamic d
+  = (,) tid `fmap` fromDynamic d'
+fromExitSignal _ = Nothing
+
 -- | The default action used to signal a thread. Abnormal 'ExitReason's are
 -- sent to the thread and normal exits are ignored.
 defaultSignal :: C.ThreadId -> ThreadId -> ExitReason -> IO ()
@@ -319,6 +326,10 @@ throwTo tid e = do
                           return $ signal (state tm M.! tid') me'
   -- since signal can block, we don't want to hold a lock on threadMap
   whenJust mbSignal ($ e)
+
+-- | A variant of 'throwTo' for dynamically typed 'ExitReason's.
+throwDynTo :: Typeable a => ThreadId -> a -> IO ()
+throwDynTo tid = throwTo tid . Just . E.DynException . toDyn
 
 -- | Send an untrappable exit signal to a thread, if it exists.
 killThread :: ThreadId -> IO ()

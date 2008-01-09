@@ -3,7 +3,7 @@
 
 -----------------------------------------------------------------------------
 -- |
--- Module      : TorDNSEL.DNS.Handler.Internals
+-- Module      : TorDNSEL.DNS.Server.Internals
 -- Copyright   : (c) tup 2007
 -- License     : Public domain (see LICENSE)
 --
@@ -13,63 +13,119 @@
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
--- Handling DNS queries for exit list information.
+-- Implements a DNS server thread that answers DNS queries for exit list
+-- information.
 --
 -----------------------------------------------------------------------------
 
 -- #not-home
-module TorDNSEL.DNS.Handler.Internals (
-    DNSConfig(..)
-  , ResponseType(..)
-  , dnsHandler
-  , dropAuthZone
-  , parseExitListQuery
-  , ttl
-  , b
-  ) where
+module TorDNSEL.DNS.Server.Internals where
 
-import Control.Monad (guard, liftM2, liftM3)
+import Control.Concurrent.MVar (newEmptyMVar, tryPutMVar, takeMVar)
+import qualified Control.Exception as E
+import Control.Monad (when, guard, liftM2, liftM3)
 import Data.Bits ((.|.), shiftL)
 import qualified Data.ByteString.Char8 as B
+import Data.Dynamic (Typeable)
 import Data.Char (toLower)
 import Data.List (foldl')
 import Data.Maybe (isNothing, maybeToList)
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Data.Word (Word8, Word32)
+import Network.Socket
+  ( socket, sClose, bindSocket, setSocketOption, Socket, SockAddr
+  , Family(AF_INET), SocketType(Datagram), SocketOption(ReuseAddr) )
 
 import GHC.Prim (Addr#)
 
-import TorDNSEL.Util
+import TorDNSEL.Control.Concurrent.Link
+import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.DNS
 import TorDNSEL.NetworkState
+import TorDNSEL.Util
 
 -- | The DNS handler configuration data.
 data DNSConfig
   = DNSConfig
-  { dnsAuthZone :: !DomainName     -- ^ The zone we're authoritative for.
+  { dnsSocket   :: !Socket         -- ^ The server's bound UDP socket.
+  , dnsAuthZone :: !DomainName     -- ^ The zone we're authoritative for.
   , dnsMyName   :: !DomainName     -- ^ The domain name where we're located.
   , dnsSOA      :: !ResourceRecord -- ^ Our SOA record.
   , dnsNS       :: !ResourceRecord -- ^ Our own NS record.
   -- | The A record we return for our authoritative zone.
   , dnsA        :: !(Maybe ResourceRecord)
+  -- | An action invoked with bytes received and sent for recording statistics.
+  , dnsByteStats :: !(Int -> Int -> IO ())
   -- | A statistics tracking action invoked with each response.
-  , dnsStats    :: !(ResponseType -> IO ())
-  }
+  , dnsRespStats :: !(ResponseType -> IO ()) }
 
 -- | The response type reported in statistics. 'Positive' and 'Negative' are for
 -- valid DNSEL queries.
 data ResponseType = Positive | Negative | Other
 
+-- | Open a new UDP socket and bind it to the given 'SockAddr'.
+bindUDPSocket :: SockAddr -> IO Socket
+bindUDPSocket sockAddr =
+  E.bracketOnError (socket AF_INET Datagram udpProtoNum) sClose $ \sock -> do
+    setSocketOption sock ReuseAddr 1
+    bindSocket sock sockAddr
+    return sock
+
+-- | An internal type for messages sent to the DNS server thread.
+data DNSMessage
+  = Reconfigure (DNSConfig -> DNSConfig) (IO ()) -- ^ Reconfigure the DNS server
+  | Terminate ExitReason -- ^ Terminate the DNS server gracefully
+  deriving Typeable
+
+-- | Given a 'Network' and an initial 'DNSConfig', start the DNS server and
+-- return its 'ThreadId'. Link the DNS server to the calling thread.
+startDNSServer :: Network -> DNSConfig -> IO ThreadId
+startDNSServer net = forkLinkIO . E.block . loop where
+  loop conf = do
+    r <- E.tryJust fromExitSignal . E.unblock $
+           runServer (dnsSocket conf) (dnsByteStats conf) (dnsHandler conf net)
+    case r of
+      Left (_,Reconfigure reconf signal) -> do
+        let newConf = reconf conf
+        when (dnsSocket conf /= dnsSocket newConf) $
+          sClose $ dnsSocket conf
+        signal
+        loop newConf
+      Left (_,Terminate reason) -> exit reason
+      Right _ -> loop conf -- impossible
+
+-- | Reconfigure the DNS server synchronously with the given function. If the
+-- server exits abnormally before reconfiguring itself, throw its exit signal in
+-- the calling thread.
+reconfigureDNSServer :: (DNSConfig -> DNSConfig) -> ThreadId -> IO ()
+reconfigureDNSServer reconf tid = do
+  mv <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar mv
+  withMonitor tid (putResponse . Just) $ do
+    throwDynTo tid . Reconfigure reconf $ putResponse Nothing
+    response <- takeMVar mv
+    case response of
+      Just (Just e) -> E.throwIO e
+      _             -> return ()
+
+-- | Terminate the DNS server gracefully. The optional parameter specifies the
+-- amount of time in microseconds to wait for the thread to terminate. If the
+-- thread hasn't terminated by the timeout, an uncatchable exit signal will be
+-- sent.
+terminateDNSServer :: Maybe Int -> ThreadId -> IO ()
+terminateDNSServer mbWait tid =
+  terminateThread mbWait tid (throwDynTo tid $ Terminate Nothing)
+
 -- | A stateful wrapper for 'dnsResponse'.
 dnsHandler :: DNSConfig -> Network -> Message -> IO (Maybe Message)
 {-# INLINE dnsHandler #-}
-dnsHandler c net msg
+dnsHandler conf net msg
   -- draft-arends-dnsext-qr-clarification-00
   | msgQR msg = return Nothing
   | otherwise = do
-      (typ,resp) <- liftM2 (dnsResponse c msg) getPOSIXTime
-                                               (readNetworkState net)
-      dnsStats c typ
+      (typ,resp) <- liftM2 (dnsResponse conf msg) getPOSIXTime
+                           (readNetworkState net)
+      dnsRespStats conf typ
       return $ Just resp
 
 -- | Given our config data and a DNS query, parse the exit list query contained

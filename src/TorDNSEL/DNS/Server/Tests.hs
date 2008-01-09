@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      : TorDNSEL.DNS.Handler.Tests
+-- Module      : TorDNSEL.DNS.Server.Tests
 -- Copyright   : (c) tup 2007
 -- License     : Public domain (see LICENSE)
 --
@@ -13,13 +13,13 @@
 -----------------------------------------------------------------------------
 
 -- #hide
-module TorDNSEL.DNS.Handler.Tests (tests) where
+module TorDNSEL.DNS.Server.Tests (tests) where
 
 import qualified Data.ByteString.Char8 as B
 import Test.HUnit (Test(..), (@=?))
 
 import TorDNSEL.DNS
-import TorDNSEL.DNS.Handler.Internals
+import TorDNSEL.DNS.Server.Internals
 import TorDNSEL.NetworkState
 import TorDNSEL.Util
 

@@ -42,7 +42,7 @@ import System.Directory (removeFile)
 import System.IO (hClose, IOMode(ReadWriteMode))
 import System.Posix.Files (setFileMode)
 
-import TorDNSEL.DNS.Handler
+import TorDNSEL.DNS.Server
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 

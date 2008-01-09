@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      : TorDNSEL.DNS.Handler
+-- Module      : TorDNSEL.DNS.Server
 -- Copyright   : (c) tup 2007
 -- License     : Public domain (see LICENSE)
 --
@@ -8,15 +8,19 @@
 -- Stability   : alpha
 -- Portability : non-portable (pattern guards)
 --
--- Handling DNS queries for exit list information.
+-- Implements a DNS server thread that answers DNS queries for exit list
+-- information.
 --
 -----------------------------------------------------------------------------
 
-module TorDNSEL.DNS.Handler (
+module TorDNSEL.DNS.Server (
     DNSConfig(..)
   , ResponseType(..)
-  , dnsHandler
+  , bindUDPSocket
+  , startDNSServer
+  , reconfigureDNSServer
+  , terminateDNSServer
   , ttl
   ) where
 
-import TorDNSEL.DNS.Handler.Internals
+import TorDNSEL.DNS.Server.Internals
