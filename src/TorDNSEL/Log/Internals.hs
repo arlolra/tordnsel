@@ -24,7 +24,8 @@ module TorDNSEL.Log.Internals where
 import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import Control.Concurrent.MVar
-  (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, readMVar, swapMVar)
+  ( MVar, newEmptyMVar, newMVar, takeMVar, putMVar, readMVar, swapMVar
+  , tryPutMVar )
 import qualified Control.Exception as E
 import Control.Monad (when, liftM2)
 import Control.Monad.Fix (fix)
@@ -133,8 +134,9 @@ reconfigureLogger :: (LogConfig -> LogConfig) -> IO ()
 reconfigureLogger reconf =
   withLogger $ \tid logChan -> do
     err <- newEmptyMVar
-    withMonitor tid (putMVar err) $ do
-      writeChan logChan . Reconfigure reconf $ putMVar err Nothing
+    let putResponse = (>> return ()) . tryPutMVar err
+    withMonitor tid putResponse $ do
+      writeChan logChan . Reconfigure reconf $ putResponse Nothing
       takeMVar err >>= flip whenJust E.throwIO
 
 -- | Terminate the logger gracefully: process any pending messages, flush the
