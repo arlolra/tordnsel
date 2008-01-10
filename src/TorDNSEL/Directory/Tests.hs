@@ -3,7 +3,6 @@
 -----------------------------------------------------------------------------
 -- |
 -- Module      : TorDNSEL.Directory.Tests
--- Copyright   : (c) tup 2007
 -- License     : Public domain (see LICENSE)
 --
 -- Maintainer  : tup.tuple@googlemail.com
