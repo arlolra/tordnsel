@@ -12,11 +12,13 @@
 -----------------------------------------------------------------------------
 module TorDNSEL.Control.Concurrent.Util where
 
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar)
+import qualified Control.Exception as E
+import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar, tryPutMVar)
 import Data.Maybe (isJust)
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.System.Timeout
+import TorDNSEL.Util
 
 -- | Terminate the thread @tid@ by calling @terminate@. @mbWait@ specifies the
 -- amount of time in microseconds to wait for the thread to terminate. If the
@@ -34,3 +36,14 @@ terminateThread mbWait tid terminate = do
         if isJust r then return () else do
         killThread tid
         takeMVar dead
+
+-- | Send a message to @tid@ by invoking @sendMsg@ with a synchronizing action.
+-- If the thread exits abnormally before synchronizing, throw its exit signal in
+-- the calling thread.
+sendSyncMessage :: (IO () -> IO ()) -> ThreadId -> IO ()
+sendSyncMessage sendMsg tid = do
+  err <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar err
+  withMonitor tid putResponse $ do
+    sendMsg $ putResponse Nothing
+    takeMVar err >>= flip whenJust E.throwIO

@@ -20,7 +20,6 @@
 -- #not-home
 module TorDNSEL.DNS.Server.Internals where
 
-import Control.Concurrent.MVar (newEmptyMVar, tryPutMVar, takeMVar)
 import qualified Control.Exception as E
 import Control.Monad (when, guard, liftM2, liftM3)
 import Data.Bits ((.|.), shiftL)
@@ -97,15 +96,8 @@ startDNSServer net = forkLinkIO . E.block . loop where
 -- server exits abnormally before reconfiguring itself, throw its exit signal in
 -- the calling thread.
 reconfigureDNSServer :: (DNSConfig -> DNSConfig) -> ThreadId -> IO ()
-reconfigureDNSServer reconf tid = do
-  mv <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar mv
-  withMonitor tid (putResponse . Just) $ do
-    throwDynTo tid . Reconfigure reconf $ putResponse Nothing
-    response <- takeMVar mv
-    case response of
-      Just (Just e) -> E.throwIO e
-      _             -> return ()
+reconfigureDNSServer reconf tid =
+  sendSyncMessage (throwDynTo tid . Reconfigure reconf) tid
 
 -- | Terminate the DNS server gracefully. The optional parameter specifies the
 -- amount of time in microseconds to wait for the thread to terminate. If the
