@@ -12,9 +12,11 @@
 -----------------------------------------------------------------------------
 
 module TorDNSEL.Statistics (
-    StatsHandle
-  , openStatsListener
-  , unlinkStatsSocket
+    StatsConfig(..)
+  , StatsServer
+  , startStatsServer
+  , reconfigureStatsServer
+  , terminateStatsServer
   , incrementBytes
   , incrementResponses
   ) where

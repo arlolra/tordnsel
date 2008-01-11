@@ -179,8 +179,7 @@ main = do
 
     mainThread <- C.myThreadId
     forM_ [sigINT, sigTERM] $ \signal ->
-      flip (installHandler signal) Nothing . Catch $ do
-        unlinkStatsSocket $ cfStateDirectory conf
+      flip (installHandler signal) Nothing . Catch $
         E.throwTo mainThread (E.ExitException ExitSuccess)
 
     net <- case testConf of
@@ -210,7 +209,7 @@ main = do
           hPutStrLn stderr (showConnException e) >> hFlush stderr
         C.threadDelay (5 * 10^6)
 
-    statsHandle <- openStatsListener $ cfStateDirectory conf
+    startStatsServer StatsConfig { scfStateDir = cfStateDirectory conf }
 
     let DomainName authLabels = cfAuthoritativeZone conf
         dnsConf = DNSConfig
@@ -221,8 +220,8 @@ main = do
                          (cfSOARName conf) 0 ttl ttl ttl ttl
           , dnsNS = NS (cfAuthoritativeZone conf) ttl (cfDomainName conf)
           , dnsA = A (cfAuthoritativeZone conf) ttl `fmap` cfAddress conf
-          , dnsByteStats = incrementBytes statsHandle
-          , dnsRespStats = incrementResponses statsHandle }
+          , dnsByteStats = incrementBytes
+          , dnsRespStats = incrementResponses }
 
     -- start the DNS server
     exitChan <- newChan
