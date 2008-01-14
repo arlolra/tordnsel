@@ -18,14 +18,13 @@
 -- #not-home
 module TorDNSEL.Statistics.Internals where
 
-import Control.Concurrent.Chan (newChan, readChan, writeChan, isEmptyChan)
+import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_, readMVar)
 import Control.Concurrent.QSem (newQSem, waitQSem, signalQSem)
 import qualified Control.Exception as E
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
-import qualified Data.Foldable as F
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import qualified Data.Set as S
 import Network.Socket
   ( socket, bindSocket, listen, accept, sClose, setSocketOption, socketToHandle
@@ -74,7 +73,8 @@ data StatsState = StatsState
   { statsConf :: StatsConfig
   , listenerTid :: ThreadId
   , deadListeners :: S.Set ThreadId
-  , handlers :: S.Set ThreadId }
+  , handlers :: S.Set ThreadId
+  , terminateReason :: Maybe ExitReason }
 
 -- | Given an initial 'StatsConfig', start a server offering access to load
 -- statistics through a Unix domain stream socket in our state directory.
@@ -100,7 +100,7 @@ startStatsServer initConf = do
     initListenerTid <- startListenerThread initListenSock (scfStateDir initConf)
 
     let runStatsServer = flip fix $ StatsState initConf initListenerTid S.empty
-                                               S.empty
+                                               S.empty Nothing
     runStatsServer $ \loop s -> do
       message <- readChan statsChan
 
@@ -112,7 +112,7 @@ startStatsServer initConf = do
                 B.hPut handle . renderStats =<< readMVar statsState
           loop s { handlers = S.insert handlerTid (handlers s) }
 
-        Reconfigure reconf signal -> do
+        Reconfigure reconf signal | isNothing $ terminateReason s -> do
           let newConf = reconf (statsConf s)
           if scfStateDir newConf /= scfStateDir (statsConf s)
             then do
@@ -127,27 +127,32 @@ startStatsServer initConf = do
                      , deadListeners = S.insert (listenerTid s)
                                                 (deadListeners s) }
             else signal >> loop s { statsConf = newConf }
+        -- do nothing if we're in the process of terminating
+        Reconfigure _ signal -> signal >> loop s
 
         Terminate reason -> do
           terminateThread Nothing (listenerTid s) (killThread $ listenerTid s)
-          msgs <- untilM (isEmptyChan statsChan) (readChan statsChan)
-          ignoreJust E.ioErrors . foldl E.finally (return ()) $
-            [sClose client | NewClient client <- msgs]
-          F.mapM_ (\tid -> terminateThread Nothing tid (return ())) (handlers s)
-          exit reason
+          loop s { terminateReason = Just reason }
 
         Exit tid reason
-          | tid == listenerTid s -> do
-              -- XXX this should be logged
-              listenSock <- bindStatsSocket . scfStateDir . statsConf $ s
-              newListenerTid <- startListenerThread listenSock
-                                  (statsSocket . scfStateDir . statsConf $ s)
-              loop s { listenerTid = newListenerTid }
+          | tid == listenerTid s ->
+              if isNothing $ terminateReason s
+                then do
+                  -- XXX this should be logged
+                  let stateDir = scfStateDir $ statsConf s
+                  listenSock <- bindStatsSocket stateDir
+                  newListenerTid <- startListenerThread listenSock stateDir
+                  loop s { listenerTid = newListenerTid }
+                else loop s
           | tid `S.member` handlers s -> do
               whenJust reason $ \_ -> do
                 -- XXX this should be logged
                 return ()
-              loop s { handlers = S.delete tid (handlers s) }
+              let newHandlers = S.delete tid (handlers s)
+              case terminateReason s of
+                -- all the handlers have finished, so let's exit
+                Just exitReason | S.null newHandlers -> exit exitReason
+                _ -> loop s { handlers = newHandlers }
           | tid `S.member` deadListeners s ->
               loop s { deadListeners = S.delete tid (deadListeners s) }
           | isJust reason -> exit reason
