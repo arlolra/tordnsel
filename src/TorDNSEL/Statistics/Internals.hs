@@ -91,7 +91,8 @@ startStatsServer initConf = do
           forkLinkIO . E.block $
             (forever $ do
               waitQSem handlerQSem
-              (client,_) <- E.unblock $ accept listenSock
+              (client,_) <- E.unblock (accept listenSock)
+                `E.catch` \e -> signalQSem handlerQSem >> E.throwIO e
               writeChan statsChan $ NewClient client)
             `E.finally` sClose listenSock
             `E.finally` removeFile (statsSocket stateDir)
