@@ -5,7 +5,8 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (pattern guards, GHC primitives)
+-- Portability : non-portable (pattern guards, type synonym instances,
+--                             GHC primitives)
 --
 -- Parsing and processing router descriptors, exit policies, and router
 -- status entries from the Tor directory protocol, version 2. We only
