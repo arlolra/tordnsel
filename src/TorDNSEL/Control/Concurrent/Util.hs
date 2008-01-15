@@ -20,6 +20,10 @@ import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
+-- | A type representing a handle to a thread.
+class Thread a where
+  threadId :: a -> ThreadId -- ^ The 'ThreadId' contained within a handle.
+
 -- | Terminate the thread @tid@ by calling @terminate@. @mbWait@ specifies the
 -- amount of time in microseconds to wait for the thread to terminate. If the
 -- thread hasn't terminated by the timeout, an uncatchable exit signal will be

@@ -69,6 +69,12 @@ bindUDPSocket sockAddr =
     bindSocket sock sockAddr
     return sock
 
+-- | A handle to the DNS server.
+newtype DNSServer = DNSServer ThreadId
+
+instance Thread DNSServer where
+  threadId (DNSServer tid) = tid
+
 -- | An internal type for messages sent to the DNS server thread.
 data DNSMessage
   = Reconfigure (DNSConfig -> DNSConfig) (IO ()) -- ^ Reconfigure the DNS server
@@ -76,9 +82,9 @@ data DNSMessage
   deriving Typeable
 
 -- | Given a 'Network' and an initial 'DNSConfig', start the DNS server and
--- return its 'ThreadId'. Link the DNS server to the calling thread.
-startDNSServer :: Network -> DNSConfig -> IO ThreadId
-startDNSServer net = forkLinkIO . E.block . loop where
+-- return a handle to it. Link the DNS server to the calling thread.
+startDNSServer :: Network -> DNSConfig -> IO DNSServer
+startDNSServer net = fmap DNSServer . forkLinkIO . E.block . loop where
   loop conf = do
     r <- E.tryJust fromExitSignal . E.unblock $
            runServer (dnsSocket conf) (dnsByteStats conf) (dnsHandler conf net)
@@ -95,16 +101,16 @@ startDNSServer net = forkLinkIO . E.block . loop where
 -- | Reconfigure the DNS server synchronously with the given function. If the
 -- server exits abnormally before reconfiguring itself, throw its exit signal in
 -- the calling thread.
-reconfigureDNSServer :: (DNSConfig -> DNSConfig) -> ThreadId -> IO ()
-reconfigureDNSServer reconf tid =
+reconfigureDNSServer :: (DNSConfig -> DNSConfig) -> DNSServer -> IO ()
+reconfigureDNSServer reconf (DNSServer tid) =
   sendSyncMessage (throwDynTo tid . Reconfigure reconf) tid
 
 -- | Terminate the DNS server gracefully. The optional parameter specifies the
 -- amount of time in microseconds to wait for the thread to terminate. If the
 -- thread hasn't terminated by the timeout, an uncatchable exit signal will be
 -- sent.
-terminateDNSServer :: Maybe Int -> ThreadId -> IO ()
-terminateDNSServer mbWait tid =
+terminateDNSServer :: Maybe Int -> DNSServer -> IO ()
+terminateDNSServer mbWait (DNSServer tid) =
   terminateThread mbWait tid (throwDynTo tid $ Terminate Nothing)
 
 -- | A stateful wrapper for 'dnsResponse'.

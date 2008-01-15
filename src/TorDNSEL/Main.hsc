@@ -84,6 +84,7 @@ import GHC.Prim (Addr##)
 
 import TorDNSEL.Config
 import TorDNSEL.Control.Concurrent.Link
+import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.TorControl
 import TorDNSEL.Directory
 import TorDNSEL.DNS
@@ -227,10 +228,10 @@ main = do
     exitChan <- newChan
     setTrapExit (curry $ writeChan exitChan)
     forever $ E.catchJust E.ioErrors
-        (do dnsTid <- startDNSServer net dnsConf
+        (do dnsServer <- startDNSServer net dnsConf
             fix $ \loop -> do
               (tid,reason) <- readChan exitChan
-              if tid == dnsTid
+              if tid == threadId dnsServer
                 then whenJust reason E.throwIO
                 else maybe loop (const $ exit reason) reason)
 
@@ -275,7 +276,7 @@ torController net control mbPasswd exitChan = do
 
     fix $ \loop -> do
       (tid,reason) <- readChan exitChan
-      if tid == connectionThread conn
+      if tid == threadId conn
         then whenJust reason E.throwIO
         else maybe loop (const $ exit reason) reason
 

@@ -34,7 +34,6 @@ module TorDNSEL.TorControl.Internals (
   , openConnection
   , closeConnection
   , closeConnection'
-  , connectionThread
   , protocolInfo
 
   -- * Commands
@@ -178,6 +177,9 @@ data Connection
          ProtocolInfo         -- protocol information for this connection
          (MVar [ConfSetting]) -- conf settings that should be rolled back
 
+instance Thread Connection where
+  threadId (Conn _ tid _ _) = tid
+
 -- | A synonym for the values making up an incompletely initialized
 -- 'Connection'.
 type Connection' = (IOMessage -> IO (), ThreadId)
@@ -231,7 +233,7 @@ closeConnection :: Connection -> IO ()
 closeConnection conn@(Conn _ _ _ confSettings) =
   closeConnection' (toConn' conn) confSettings
 
--- | 'closeConnection' with unpack parameters.
+-- | 'closeConnection' with unpacked parameters.
 closeConnection' :: Connection' -> MVar [ConfSetting] -> IO ()
 closeConnection' conn@(tellIOManager,ioManagerTid) confSettingsMv =
   -- hold a lock here until the connection has terminated so onCloseSetConf
@@ -245,11 +247,6 @@ closeConnection' conn@(tellIOManager,ioManagerTid) confSettingsMv =
     terminateThread Nothing ioManagerTid (tellIOManager CloseConnection)
   where set (ConfSetting var val) = setConf_ var val conn
         quit = Command (b 4 "quit"#) [] []
-
--- | The 'ThreadId' associated with a 'Connection'. Useful for monitoring or
--- linking to a connection.
-connectionThread :: Connection -> ThreadId
-connectionThread (Conn _ ioManagerTid _ _) = ioManagerTid
 
 -- | 'ProtocolInfo' associated with a 'Connection'.
 protocolInfo :: Connection -> ProtocolInfo

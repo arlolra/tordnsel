@@ -24,7 +24,6 @@ module TorDNSEL.TorControl (
   , withConnection
   , openConnection
   , closeConnection
-  , connectionThread
   , protocolInfo
 
   -- * Commands

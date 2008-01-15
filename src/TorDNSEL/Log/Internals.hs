@@ -23,7 +23,7 @@ module TorDNSEL.Log.Internals where
 import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import Control.Concurrent.MVar
-  (MVar, newEmptyMVar, newMVar, takeMVar, putMVar, readMVar, swapMVar)
+  (MVar, newEmptyMVar, newMVar, takeMVar, tryPutMVar, readMVar, swapMVar)
 import qualified Control.Exception as E
 import Control.Monad (when, liftM2)
 import Control.Monad.Fix (fix)
@@ -79,17 +79,24 @@ logger = unsafePerformIO $ newMVar Nothing
 withLogger :: (ThreadId -> Chan LogMessage -> IO ()) -> IO ()
 withLogger io = readMVar logger >>= flip whenJust (uncurry io)
 
--- | Start the global logger with an initial 'LogConfig', returning its
--- 'ThreadId'. Link the logger to the calling thread. If the logger exits before
--- fully starting, throw its exit signal in the calling thread.
-startLogger :: LogConfig -> IO ThreadId
+-- | A handle to the logger thread.
+newtype Logger = Logger ThreadId
+
+instance Thread Logger where
+  threadId (Logger tid) = tid
+
+-- | Start the global logger with an initial 'LogConfig', returning a handle to
+-- it. Link the logger to the calling thread. If the logger exits before fully
+-- starting, throw its exit signal in the calling thread.
+startLogger :: LogConfig -> IO Logger
 startLogger config = do
   err <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar err
   tid <- forkLinkIO $ do
     curLogger@(_,logChan) <- liftM2 (,) myThreadId newChan
     setTrapExit . const $ writeChan logChan . Terminate
     E.bracket_ (swapMVar logger $ Just curLogger) (swapMVar logger Nothing) $
-      flip fix (config, putMVar err Nothing) $ \resetLogger (conf, signal) -> do
+      flip fix (config, putResponse Nothing) $ \resetLogger (conf, signal) -> do
         (resetLogger =<<) . withLogTarget (logTarget conf) $ \handle -> do
           signal
           fix $ \nextMsg -> do
@@ -101,8 +108,9 @@ startLogger config = do
                 nextMsg
               Reconfigure reconf newSignal -> return (reconf conf, newSignal)
               Terminate reason -> exit reason
-  withMonitor tid (putMVar err) $
-    takeMVar err >>= maybe (return tid) E.throwIO
+  withMonitor tid putResponse $
+    takeMVar err >>= flip whenJust E.throwIO
+  return $ Logger tid
 
 -- | Implements the variable parameter support for 'log'.
 class LogType r where

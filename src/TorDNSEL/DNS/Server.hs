@@ -16,6 +16,7 @@ module TorDNSEL.DNS.Server (
     DNSConfig(..)
   , ResponseType(..)
   , bindUDPSocket
+  , DNSServer
   , startDNSServer
   , reconfigureDNSServer
   , terminateDNSServer

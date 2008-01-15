@@ -19,6 +19,7 @@ module TorDNSEL.Log (
   , Severity(..)
   , LogType
   , log
+  , Logger
   , startLogger
   , reconfigureLogger
   , terminateLogger

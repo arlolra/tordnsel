@@ -68,6 +68,9 @@ data StatsMessage
 -- | A handle to a stats server.
 data StatsServer = StatsServer (StatsMessage -> IO ()) ThreadId
 
+instance Thread StatsServer where
+  threadId (StatsServer _ tid) = tid
+
 -- | An internal type representing the current stats server state.
 data StatsState = StatsState
   { statsConf :: StatsConfig
@@ -79,7 +82,7 @@ data StatsState = StatsState
 -- | Given an initial 'StatsConfig', start a server offering access to load
 -- statistics through a Unix domain stream socket in our state directory.
 -- Link the server thread to the calling thread.
-startStatsServer :: StatsConfig -> IO (StatsServer, ThreadId)
+startStatsServer :: StatsConfig -> IO StatsServer
 startStatsServer initConf = do
   initListenSock <- bindStatsSocket $ scfStateDir initConf
   statsChan <- newChan
@@ -158,7 +161,7 @@ startStatsServer initConf = do
           | isJust reason -> exit reason
           | otherwise -> loop s
 
-  return (StatsServer (writeChan statsChan) statsServerTid, statsServerTid)
+  return $ StatsServer (writeChan statsChan) statsServerTid
   where
     maxStatsHandlers = 32
     handlerTimeout = 10 * 10^6
