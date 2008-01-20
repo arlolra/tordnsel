@@ -51,3 +51,18 @@ sendSyncMessage sendMsg tid = do
   withMonitor tid putResponse $ do
     sendMsg $ putResponse Nothing
     takeMVar err >>= flip whenJust E.throwIO
+
+-- | Send a message parameterized by a reply action to @tid@, returning the
+-- response value. If the thread exits before responding to the message, throw
+-- its exit signal or 'NonexistentThread' in the calling thread.
+call :: ((a -> IO ()) -> IO ()) -> ThreadId -> IO a
+call sendMsg tid = do
+  mv <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar mv
+  withMonitor tid (putResponse . Left) $ do
+    sendMsg $ putResponse . Right
+    response <- takeMVar mv
+    case response of
+      Left Nothing  -> E.throwDyn NonexistentThread
+      Left (Just e) -> E.throwIO e
+      Right r       -> return r

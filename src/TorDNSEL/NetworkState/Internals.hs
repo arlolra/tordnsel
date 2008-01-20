@@ -71,23 +71,13 @@ module TorDNSEL.NetworkState.Internals (
   , newCookie
   , cookieLen
 
-  -- ** Exit test result storage
-  , ExitAddress(..)
-  , renderExitAddress
-  , parseExitAddress
-  , readExitAddresses
-  , replaceExitAddresses
-  , mkExitAddress
-  , appendExitAddressToJournal
-  , isJournalTooLarge
-
-  -- * Helpers
+  -- * Aliases
   , b
   ) where
 
-import Control.Arrow ((&&&), second)
+import Control.Arrow ((&&&))
 import Control.Monad (liftM2, forM_, replicateM_, guard)
-import Control.Monad.Error (MonadError(..))
+import Control.Monad.Fix (fix)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar
@@ -96,9 +86,9 @@ import Control.Concurrent.STM (atomically)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as L
-import Data.Char (toLower, toUpper, isSpace)
+import Data.Char (toLower, isSpace)
 import Data.Dynamic (fromDynamic)
-import Data.List (foldl', sortBy)
+import Data.List (foldl')
 import Data.Maybe (mapMaybe)
 import qualified Data.Map as M
 import Data.Map (Map)
@@ -112,15 +102,13 @@ import Network.Socket
   ( Socket, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
   , SocketOption(ReuseAddr), SocketType(Stream), socket, connect, bindSocket
   , listen, accept, setSocketOption, sOMAXCONN, socketToHandle, sClose )
-import System.Directory (renameFile)
-import System.IO
-  (Handle, hClose, IOMode(ReadWriteMode, WriteMode), hFlush, openFile)
-import System.Posix.Files (getFileStatus, fileSize)
+import System.IO (Handle, hClose, IOMode(ReadWriteMode))
 
 import GHC.Prim (Addr#)
 
 import TorDNSEL.Directory
-import TorDNSEL.Document
+import TorDNSEL.NetworkState.Storage
+import TorDNSEL.NetworkState.Types
 import TorDNSEL.Random
 import TorDNSEL.Socks
 import TorDNSEL.System.Timeout
@@ -157,24 +145,6 @@ data NetworkState = NetworkState
 -- | The empty network state.
 emptyNetworkState :: NetworkState
 emptyNetworkState = NetworkState M.empty M.empty
-
--- | A Tor router.
-data Router = Router
-  { -- | This router's descriptor, if we have it yet.
-    rtrDescriptor  :: {-# UNPACK #-} !(Maybe Descriptor),
-    -- | This router's exit test results, if one has been completed.
-    rtrTestResults :: {-# UNPACK #-} !(Maybe TestResults),
-    -- | Whether we think this router is running.
-    rtrIsRunning   :: {-# UNPACK #-} !Bool,
-    -- | The last time we received a router status entry for this router.
-    rtrLastStatus  :: {-# UNPACK #-} !UTCTime }
-
--- | The results of exit tests.
-data TestResults = TestResults
-  { -- | The descriptor's published time when the last exit test was initiated.
-    tstPublished :: {-# UNPACK #-} !UTCTime,
-    -- | A map from exit address to when the address was last seen.
-    tstAddresses :: {-# UNPACK #-} !(Map HostAddress UTCTime) }
 
 --------------------------------------------------------------------------------
 -- State events
@@ -235,10 +205,7 @@ data StateEvent
 -- | An internal type representing the current exit test state.
 data TestState = TestState
   { tsTests      :: Seq (RouterID, Maybe Port)
-  , tsCookies    :: !(Map Cookie (RouterID, UTCTime, Port))
-  , tsAddrLen
-  , tsJournalLen :: !Integer
-  , tsJournal    :: !Handle }
+  , tsCookies    :: !(Map Cookie (RouterID, UTCTime, Port)) }
 
 -- | Receive and carry out state update events.
 stateEventHandler
@@ -274,14 +241,15 @@ eventHandler net = loop emptyNetworkState
 testingEventHandler
   :: Network -> (ExitTestChan, FilePath, ExitPolicy -> Bool) -> IO ()
 testingEventHandler net (testChan,stateDir,allowsExit) = do
+  storage <- startStorageManager StorageConfig { stcfStateDir = stateDir }
+
   -- initialize network state with test results from state directory
-  exitAddrs <- readExitAddresses stateDir
-  s <- flip expireOldInfo (initialNetState exitAddrs) `fmap` getCurrentTime
-  swapMVar (nState net) s
+  exitAddrs <- readExitAddressesFromStorage storage
+  initNS <- flip expireOldInfo (initialNetState exitAddrs) `fmap` getCurrentTime
+  swapMVar (nState net) initNS
 
   -- remove old info and merge journal into exit-addresses
-  addrLen <- replaceExitAddresses stateDir (nsRouters s)
-  journal <- openFile (stateDir ++ "/exit-addresses.new") WriteMode
+  rebuildExitAddressStorage (nsRouters initNS) storage
 
   forkIO . forever $ do
     -- rebuild exit-addresses every 15 minutes so LastStatus entries
@@ -299,74 +267,71 @@ testingEventHandler net (testChan,stateDir,allowsExit) = do
     threadDelay (3 * 10^6)
     writeChan (nChan net) RunExitTest
 
-  loop s (TestState Seq.empty M.empty addrLen 0 journal)
+  flip fix (initNS, TestState Seq.empty M.empty) $ \loop s@(ns,ts) -> do
+    event <- readChan $ nChan net
+    now <- getCurrentTime
+    case event of
+      NewDesc ds -> do
+        let ns' = foldl' (newDescriptor now) ns ds
+        ns' `seq` swapMVar (nState net) ns'
+        loop (ns', ts
+          { tsTests = scheduleExitTests (map descRouterID ds) (nsRouters ns')
+                                        (tsTests ts) })
+
+      NewNS rss -> do
+        let ns' = foldl' (newRouterStatus now) ns rss
+        ns' `seq` swapMVar (nState net) ns'
+        loop (ns', ts
+          { tsTests = scheduleExitTests (map rsRouterID rss) (nsRouters ns')
+                                        (tsTests ts) })
+
+      SchedulePeriodicTests ->
+        let canTest r = rtrIsRunning r && isPeriodicTestable allowsExit now r
+            rids = M.keys . M.filter canTest . nsRouters $ ns
+        in loop (ns, ts { tsTests = enqueueTests (tsTests ts) rids })
+
+      RunExitTest -> do
+        isReading <- isReadingExitTestChan testChan
+        case (isReading, viewr (tsTests ts)) of
+          (True, tests :> (rid, port)) -> do
+            addExitTest testChan port rid
+            loop (ns, ts { tsTests = tests })
+          _ -> loop s
+
+      ExpireOldInfo ->
+        let ns' = expireOldInfo now ns
+        in ns' `seq` swapMVar (nState net) ns' >> loop (ns', ts)
+
+      AddCookie c rid published port ->
+        loop (ns, ts { tsCookies = M.insert c (rid, published, port)
+                                              (tsCookies ts) })
+
+      DeleteCookie c -> loop (ns, ts { tsCookies = M.delete c (tsCookies ts) })
+
+      NewExitAddress tested c addr
+        | Just (rid,published,port) <- c  `M.lookup` tsCookies ts
+        , Just r                    <- rid `M.lookup` nsRouters ns -> do
+
+        let (r',ns') = newExitAddress tested published r rid addr ns
+        ns' `seq` swapMVar (nState net) ns'
+
+        -- Have we seen this exit address before?
+        let ts' = case (M.member addr . tstAddresses) `fmap` rtrTestResults r of
+              -- Test this port twice more in case exit addresses vary.
+              -- The exponential increase in tests should catch more exit
+              -- addresses.
+              Just False -> ts { tsTests = tsTests ts |> (rid, Just port)
+                                                      |> (rid, Just port) }
+              _          -> ts
+
+        storeNewExitAddress rid r' (nsRouters ns') storage
+        loop (ns', ts')
+
+        | otherwise -> loop s -- XXX log this
+
+      ReplaceExitAddresses ->
+        rebuildExitAddressStorage (nsRouters ns) storage >> loop s
   where
-    loop ns ts = do
-      event <- readChan $ nChan net
-      now <- getCurrentTime
-      case event of
-        NewDesc ds -> do
-          let ns' = foldl' (newDescriptor now) ns ds
-          ns' `seq` swapMVar (nState net) ns'
-          loop ns' ts
-            { tsTests = scheduleExitTests (map descRouterID ds) (nsRouters ns')
-                                          (tsTests ts) }
-
-        NewNS rss -> do
-          let ns' = foldl' (newRouterStatus now) ns rss
-          ns' `seq` swapMVar (nState net) ns'
-          loop ns' ts
-            { tsTests = scheduleExitTests (map rsRouterID rss) (nsRouters ns')
-                                          (tsTests ts) }
-
-        SchedulePeriodicTests ->
-          let canTest r = rtrIsRunning r && isPeriodicTestable allowsExit now r
-              rids = M.keys . M.filter canTest . nsRouters $ ns
-          in loop ns ts { tsTests = enqueueTests (tsTests ts) rids }
-
-        RunExitTest -> do
-          isReading <- isReadingExitTestChan testChan
-          case (isReading, viewr (tsTests ts)) of
-            (True, tests :> (rid, port)) -> do
-              addExitTest testChan port rid
-              loop ns ts { tsTests = tests }
-            _ -> loop ns ts
-
-        ExpireOldInfo ->
-          let ns' = expireOldInfo now ns
-          in ns' `seq` swapMVar (nState net) ns' >> loop ns' ts
-
-        AddCookie c rid published port ->
-          loop ns ts { tsCookies = M.insert c (rid, published, port)
-                                              (tsCookies ts) }
-
-        DeleteCookie c -> loop ns ts { tsCookies = M.delete c (tsCookies ts) }
-
-        NewExitAddress tested c addr
-          | Just (rid,published,port) <- c  `M.lookup` tsCookies ts
-          , Just r                    <- rid `M.lookup` nsRouters ns -> do
-
-          let (r',ns') = newExitAddress tested published r rid addr ns
-          ns' `seq` swapMVar (nState net) ns'
-
-          -- have we seen this exit address before?
-          let ts' = case (M.member addr . tstAddresses) `fmap` rtrTestResults r
-               of -- test this port twice more in case exit addresses vary
-                  -- the exponential increase in tests should catch more exit
-                  -- addresses
-                  Just False -> ts { tsTests = tsTests ts |> (rid, Just port)
-                                                          |> (rid, Just port) }
-                  _          -> ts
-
-          len <- appendExitAddressToJournal (tsJournal ts) rid r'
-          if isJournalTooLarge (tsAddrLen ts) (tsJournalLen ts + len)
-            then rebuildExitStorage ns' ts' >>= loop ns'
-            else loop ns' ts' { tsJournalLen = tsJournalLen ts + len }
-
-          | otherwise -> loop ns ts -- XXX log this
-
-        ReplaceExitAddresses -> rebuildExitStorage ns ts >>= loop ns
-
     enqueueTests = foldl' (\a x -> (x, Nothing) <| a)
 
     scheduleExitTests rids routers tests =
@@ -377,19 +342,13 @@ testingEventHandler net (testChan,stateDir,allowsExit) = do
           guard $ rtrIsRunning r && isTestable allowsExit r
           return rid
 
-    rebuildExitStorage ns ts = do
-      hClose $ tsJournal ts
-      addrLen <- replaceExitAddresses stateDir (nsRouters ns)
-      h <- openFile (stateDir ++ "/exit-addresses.new") WriteMode
-      return ts { tsAddrLen = addrLen, tsJournalLen = 0, tsJournal = h }
-
     initialNetState exitAddrs =
       NetworkState (foldl' insertExits M.empty exitAddrs)
                    (M.fromDistinctAscList $ map initialRouter exitAddrs)
       where
         insertExits addrs (ExitAddress rid _ _ exits) =
-          foldl' (\addrs' (addr,_) -> insertAddress addr rid addrs') addrs
-                 (M.assocs exits)
+          foldl' (\addrs' addr -> insertAddress addr rid addrs') addrs
+                 (M.keys exits)
         initialRouter (ExitAddress rid pub status exits) =
           (rid, Router Nothing (Just (TestResults pub exits)) False status)
 
@@ -779,108 +738,7 @@ cookieLen :: Int
 cookieLen = 32
 
 --------------------------------------------------------------------------------
--- Exit test result storage
-
--- | An exit address entry stored in our state directory. The design here is the
--- same as Tor uses for storing router descriptors.
-data ExitAddress = ExitAddress
-  { -- | The identity of the exit node we tested through.
-    eaRouterID   :: {-# UNPACK #-} !RouterID,
-    -- | The current descriptor published time when the test was initiated. We
-    -- don't perform another test until a newer descriptor arrives.
-    eaPublished  :: {-# UNPACK #-} !UTCTime,
-    -- | When we last received a network status update for this router. This
-    -- helps us decide when to discard a router.
-    eaLastStatus :: {-# UNPACK #-} !UTCTime,
-    -- | A map from exit address to when the address was last seen.
-    eaAddresses  :: {-# UNPACK #-} !(Map HostAddress UTCTime) } deriving Eq
-
-instance Show ExitAddress where
-  showsPrec _ = cat . renderExitAddress
-
--- | Exit test results are represented using the same document meta-format Tor
--- uses for router descriptors and network status documents.
-renderExitAddress :: ExitAddress -> B.ByteString
-renderExitAddress x = B.unlines $
-  [ b 9 "ExitNode "# `B.append` renderID (eaRouterID x)
-  , b 10 "Published "# `B.append` renderTime (eaPublished x)
-  , b 11 "LastStatus "# `B.append` renderTime (eaLastStatus x) ] ++
-  (map renderTest . sortBy (compare `on` snd) . M.assocs . eaAddresses $ x)
-  where
-    renderID = B.map toUpper . encodeBase16RouterID
-    renderTest (addr,time) =
-      B.unwords [b 11 "ExitAddress"#, B.pack $ inet_htoa addr, renderTime time]
-    renderTime = B.pack . take 19 . show
-
--- | Parse a single exit address entry. Return the result or 'throwError' in the
--- monad if parsing fails.
-parseExitAddress :: MonadError ShowS m => Document -> m ExitAddress
-parseExitAddress items =
-  prependError ("Failed parsing exit address entry: " ++) $ do
-    rid        <- decodeBase16RouterID =<< findArg (b 8  "ExitNode"#) items
-    published  <- parseUTCTime         =<< findArg (b 9  "Published"#) items
-    lastStatus <- parseUTCTime         =<< findArg (b 10 "LastStatus"#) items
-    addrs <- mapM parseAddr . filter ((b 11 "ExitAddress"# ==) . iKey) $ items
-    return $! ExitAddress rid published lastStatus (M.fromList addrs)
-  where
-    parseAddr Item { iArg = Just line } =
-      let (addr,testTime) = B.dropWhile isSpace `second` B.break isSpace line
-      in prependError ("Failed parsing exit address item: " ++)
-                      (liftM2 (,) (inet_atoh addr) (parseUTCTime testTime))
-    parseAddr _ = throwError ("Failed parsing exit address item." ++)
-
--- | On startup, read the exit test results from the state directory. Return the
--- results in ascending order of their fingerprints.
-readExitAddresses :: FilePath -> IO [ExitAddress]
-readExitAddresses stateDir =
-  M.elems `fmap`
-    liftM2 (M.unionWith merge)
-           (M.fromListWith merge `fmap` addrs "/exit-addresses.new")
-           (M.fromDistinctAscList `fmap` addrs "/exit-addresses")
-  where
-    merge new old = new { eaAddresses = (M.union `on` eaAddresses) new old }
-    addrs fp = (map (eaRouterID &&& id) . filterRight .
-                 parseSubDocs (b 8 "ExitNode"#) parseExitAddress .
-                 parseDocument . B.lines) `fmap`
-               E.catchJust E.ioErrors (B.readFile (stateDir ++ fp))
-                                      (const $ return B.empty)
-
--- | On startup, and when the journal becomes too large, replace the
--- exit-addresses file with our most current test results and clear the journal.
--- Return the new exit-addresses file's size in bytes.
-replaceExitAddresses :: Integral a => FilePath -> Map RouterID Router -> IO a
-replaceExitAddresses stateDir routers = do
-  L.writeFile (dir "/exit-addresses.tmp") (L.fromChunks $ addrs routers)
-  renameFile (dir "/exit-addresses.tmp") (dir "/exit-addresses")
-  writeFile (dir "/exit-addresses.new") ""
-  (fromIntegral . fileSize) `fmap` getFileStatus (dir "/exit-addresses")
-  where
-    addrs = mapMaybe (fmap renderExitAddress . mkExitAddress) . M.toList
-    dir = (stateDir ++)
-
--- | Return an exit address entry if we have enough information to create one.
-mkExitAddress :: (RouterID, Router) -> Maybe ExitAddress
-mkExitAddress (rid,r) = do
-  t <- rtrTestResults r
-  return $! ExitAddress rid (tstPublished t) (rtrLastStatus r) (tstAddresses t)
-
--- | Add an exit address entry to the journal. Return the entry's length in
--- bytes.
-appendExitAddressToJournal :: Integral a => Handle -> RouterID -> Router -> IO a
-appendExitAddressToJournal journal rid r
-  | Just addr <- renderExitAddress `fmap` mkExitAddress (rid,r) = do
-      B.hPut journal addr >> hFlush journal
-      return $! fromIntegral . B.length $ addr
-  | otherwise = return 0
-
--- | Is the exit address journal large enough that it should be cleared?
-isJournalTooLarge :: Integral a => a -> a -> Bool
-isJournalTooLarge addrLen journalLen
-  | addrLen > 65536 = journalLen > addrLen
-  | otherwise       = journalLen > 65536
-
---------------------------------------------------------------------------------
--- Helpers
+-- Aliases
 
 -- | An alias for unsafePackAddress.
 b :: Int -> Addr# -> B.ByteString

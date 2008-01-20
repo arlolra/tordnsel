@@ -18,15 +18,34 @@ Data-Files:      config/tordnsel.conf.sample, config/cacti-input.pl,
 
 Executable:      tordnsel
 Main-Is:         tordnsel.hs
-Other-Modules:   TorDNSEL.Config, TorDNSEL.Config.Internals,
-  TorDNSEL.Control.Concurrent.Link, TorDNSEL.Control.Concurrent.Link.Internals,
-  TorDNSEL.DeepSeq, TorDNSEL.Directory, TorDNSEL.Directory.Internals,
-  TorDNSEL.Document, TorDNSEL.NetworkState, TorDNSEL.NetworkState.Internals,
-  TorDNSEL.DNS, TorDNSEL.DNS.Internals, TorDNSEL.DNS.Server,
-  TorDNSEL.DNS.Server.Internals, TorDNSEL.Main, TorDNSEL.Random,
-  TorDNSEL.Socks, TorDNSEL.Socks.Internals, TorDNSEL.Statistics,
-  TorDNSEL.Statistics.Internals, TorDNSEL.System.Timeout, TorDNSEL.TorControl,
-  TorDNSEL.TorControl.Internals, TorDNSEL.Util
+Other-Modules:   TorDNSEL.Config,
+                 TorDNSEL.Config.Internals,
+                 TorDNSEL.Control.Concurrent.Link,
+                 TorDNSEL.Control.Concurrent.Link.Internals,
+                 TorDNSEL.Control.Concurrent.Util,
+                 TorDNSEL.DeepSeq,
+                 TorDNSEL.Directory,
+                 TorDNSEL.Directory.Internals,
+                 TorDNSEL.Document,
+                 TorDNSEL.NetworkState,
+                 TorDNSEL.NetworkState.Internals,
+                 TorDNSEL.NetworkState.Storage,
+                 TorDNSEL.NetworkState.Storage.Internals,
+                 TorDNSEL.NetworkState.Types,
+                 TorDNSEL.DNS,
+                 TorDNSEL.DNS.Internals,
+                 TorDNSEL.DNS.Server,
+                 TorDNSEL.DNS.Server.Internals,
+                 TorDNSEL.Main,
+                 TorDNSEL.Random,
+                 TorDNSEL.Socks,
+                 TorDNSEL.Socks.Internals,
+                 TorDNSEL.Statistics,
+                 TorDNSEL.Statistics.Internals,
+                 TorDNSEL.System.Timeout,
+                 TorDNSEL.TorControl,
+                 TorDNSEL.TorControl.Internals,
+                 TorDNSEL.Util
 HS-Source-Dirs:  src
 Includes:        openssl/rand.h, netinet/in.h, sys/types.h
 Extra-Libraries: crypto
@@ -35,8 +54,10 @@ GHC-Options:     -O2 -Wall -Werror
 Executable:      runtests
 Buildable:       False
 Main-Is:         runtests.hs
-Other-Modules:   TorDNSEL.Config.Tests, TorDNSEL.Directory.Tests,
-  TorDNSEL.DNS.Tests, TorDNSEL.DNS.Server.Tests
+Other-Modules:   TorDNSEL.Config.Tests,
+                 TorDNSEL.Directory.Tests,
+                 TorDNSEL.DNS.Tests,
+                 TorDNSEL.DNS.Server.Tests
 HS-Source-Dirs:  src
 Includes:        openssl/rand.h, netinet/in.h
 Extra-Libraries: crypto
