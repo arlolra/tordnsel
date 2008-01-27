@@ -54,6 +54,9 @@ module TorDNSEL.Util (
   , showException
   , showUTCTime
 
+  -- * Monads
+  , MaybeT(..)
+
   -- * Address
   , Address(..)
   , showAddress
@@ -94,8 +97,10 @@ import Control.Concurrent.STM
   ( STM, check, TVar, newTVar, readTVar, writeTVar
   , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
-import Control.Monad (liftM, liftM2, zipWithM_, when, unless, guard)
-import Control.Monad.Error (Error(..), MonadError(..))
+import Control.Monad
+  (liftM, liftM2, zipWithM_, when, unless, guard, MonadPlus(..))
+import Control.Monad.Error
+  (Error(..), MonadError(..), MonadTrans(..), MonadIO(..))
 import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
 import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
@@ -471,6 +476,35 @@ showUTCTime time = printf "%s %02d:%02d:%s" date hours mins secStr'
     secs = fromRational (frac % d) + fromIntegral sec
     secStr = printf "%02.4f" (secs :: Double)
     secStr' = (if length secStr < 7 then ('0':) else id) secStr
+
+--------------------------------------------------------------------------------
+-- Monads
+
+-- | The transformer version of 'Maybe'.
+newtype MaybeT m a = MaybeT { runMaybeT :: m (Maybe a) }
+
+instance Functor f => Functor (MaybeT f) where
+  f `fmap` MaybeT m = MaybeT $ fmap f `fmap` m
+
+instance Monad m => Monad (MaybeT m) where
+  return = MaybeT . return . Just
+  MaybeT m >>= f = MaybeT $ m >>= maybe (return Nothing) (runMaybeT . f)
+  fail = const . MaybeT $ return Nothing
+
+instance MonadTrans MaybeT where
+  lift = MaybeT . liftM Just
+
+instance MonadIO m => MonadIO (MaybeT m) where
+  liftIO io = lift $ liftIO io
+
+instance Monad m => MonadPlus (MaybeT m) where
+  mzero = MaybeT $ return Nothing
+  MaybeT m1 `mplus` MaybeT m2 = MaybeT $ m1 >>= maybe m2 (return . Just)
+
+instance Monad m => MonadError ShowS (MaybeT m) where
+  throwError = const . MaybeT $ return Nothing
+  MaybeT m `catchError` f =
+    MaybeT $ m >>= maybe (runMaybeT $ f noMsg) (return . Just)
 
 --------------------------------------------------------------------------------
 -- Addresses
