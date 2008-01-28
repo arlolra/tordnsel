@@ -72,6 +72,12 @@ module TorDNSEL.Util (
   , readBoundedTChan
   , writeBoundedTChan
 
+  -- * Transactional quantity semaphores
+  , TQSemN
+  , newTQSemN
+  , waitTQSemN
+  , signalTQSemN
+
   -- * Escaped strings
   , EscapedString
   , escaped
@@ -583,6 +589,30 @@ writeBoundedTChan (BTChan chan currentSize maxSize) x = do
   check (size < maxSize)
   writeTVar currentSize (size + 1)
   writeTChan chan x
+
+--------------------------------------------------------------------------------
+-- Transactional quantity semaphores
+
+-- | A quantity semaphore in which the available quantity may be signalled or
+-- waited for in arbitrary amounts. An STM analogue of 'QSemN'.
+newtype TQSemN = TQSemN (TVar Integer)
+
+-- | Create a new semaphore with the given intial quantity.
+newTQSemN :: Integer -> STM TQSemN
+newTQSemN = fmap TQSemN . newTVar
+
+-- | Wait for the specified quantity to become available.
+waitTQSemN :: TQSemN -> Integer -> STM ()
+waitTQSemN (TQSemN sem) quantity = do
+  available <- readTVar sem
+  check (quantity <= available)
+  writeTVar sem (available - quantity)
+
+-- | Signal that a given quantity is now available.
+signalTQSemN :: TQSemN -> Integer -> STM ()
+signalTQSemN (TQSemN sem) quantity = do
+  available <- readTVar sem
+  writeTVar sem (available + quantity)
 
 --------------------------------------------------------------------------------
 -- Escaped strings
