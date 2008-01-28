@@ -62,15 +62,6 @@ module TorDNSEL.NetworkState.Internals (
   , startTestListeners
   , startExitTests
 
-  -- ** HTTP requests
-  , createRequest
-  , parseRequest
-
-  -- ** Cookies
-  , Cookie(..)
-  , newCookie
-  , cookieLen
-
   -- * Aliases
   , b
   ) where
@@ -85,8 +76,6 @@ import Control.Concurrent.MVar
 import Control.Concurrent.STM (atomically)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
-import qualified Data.ByteString.Lazy.Char8 as L
-import Data.Char (toLower, isSpace)
 import Data.Dynamic (fromDynamic)
 import Data.List (foldl')
 import Data.Maybe (mapMaybe)
@@ -107,9 +96,9 @@ import System.IO (Handle, hClose, IOMode(ReadWriteMode))
 import GHC.Prim (Addr#)
 
 import TorDNSEL.Directory
+import TorDNSEL.ExitTest.Request
 import TorDNSEL.NetworkState.Storage
 import TorDNSEL.NetworkState.Types
-import TorDNSEL.Random
 import TorDNSEL.Socks
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
@@ -578,7 +567,7 @@ startTestListeners net listenSockets concTests = do
     (client,addr) <- atomically $ readBoundedTChan clients
     handle <- socketToHandle client ReadWriteMode
     timeout (30 * 10^6) . ignoreJust E.ioErrors $ do
-      r <- (parseRequest . L.take 2048) `fmap` L.hGetContents handle
+      r <- runMaybeT $ getRequest handle
       case r of
         Just cookie -> do
           now <- getCurrentTime
@@ -664,78 +653,6 @@ startExitTests conf@ExitTestConfig { etChan = ExitTestChan chan reading } = do
     connExceptions e@(E.DynException e')
       | Just (_ :: SocksError) <- fromDynamic e' = Just e
     connExceptions _                             = Nothing
-
---------------------------------------------------------------------------------
--- HTTP requests
-
--- | Create an HTTP request that POSTs a cookie to one of our listening ports.
-createRequest :: B.ByteString -> Port -> Cookie -> B.ByteString
-createRequest host port cookie =
-  B.join (b 2 "\r\n"#)
-  -- POST should force caching proxies to forward the request.
-  [ b 15 "POST / HTTP/1.0"#
-  -- Host doesn't exist in HTTP 1.0. We'll use it anyway to help the request
-  -- traverse transparent proxies.
-  , b 6 "Host: "# `B.append` hostValue
-  , b 38 "Content-Type: application/octet-stream"#
-  , b 16 "Content-Length: "# `B.append` B.pack (show cookieLen)
-  , b 17 "Connection: close"#
-  , b 2 "\r\n"# `B.append` unCookie cookie ]
-  where
-    hostValue
-      | port == 80 = host
-      | otherwise  = B.concat [host, b 1 ":"#, B.pack $ show port]
-
--- | Given an HTTP request, return the cookie contained in the body if it's
--- well-formatted, otherwise return 'Nothing'.
-parseRequest :: L.ByteString -> Maybe Cookie
-parseRequest req = do
-  (reqLine:headerLines,body) <- return $ breakHeaders req
-  return $! length headerLines -- read all headers before parsing them
-  [method,_,http] <- return $ L.split ' ' reqLine
-  [prot,ver]      <- return $ L.split '/' http
-  guard $ and [ method == l 4 "POST"#, prot == l 4 "HTTP"#
-              , ver `elem` [l 3 "1.0"#, l 3 "1.1"#] ]
-
-  let headers = M.fromList $ map parseHeader headerLines
-  typ <- l 12 "content-type"# `M.lookup` headers
-  len <- (readInt . B.concat . L.toChunks)
-      =<< l 14 "content-length"# `M.lookup` headers
-  guard $ typ == l 24 "application/octet-stream"# && len == cookieLen
-
-  return $! Cookie . B.concat . L.toChunks . L.take cookieLen' $ body
-
-  where
-    parseHeader line = (L.map toLower name, L.dropWhile isSpace $ L.drop 1 rest)
-      where (name,rest) = L.break (==':') line
-
-    breakHeaders bs
-      | L.null x  = ([], L.drop 2 rest)
-      | otherwise = (x:xs, rest')
-      where
-        (x,rest)   = L.break (=='\r') bs
-        (xs,rest') = breakHeaders (L.drop 2 rest)
-
-    cookieLen' = fromIntegral cookieLen
-
-    l len addr = L.fromChunks [B.unsafePackAddress len addr]
-
---------------------------------------------------------------------------------
--- Cookies
-
--- | A cookie containing pseudo-random data that we send in an HTTP request. We
--- associate it with the exit node we're testing through and use it look up that
--- exit node when we receive it on a listening port.
-newtype Cookie = Cookie { unCookie :: B.ByteString }
-  deriving (Eq, Ord)
-
--- | Create a new cookie from pseudo-random data.
-newCookie :: Handle -> IO Cookie
-newCookie random = Cookie `fmap` randBytes random cookieLen
-
--- | The cookie length in bytes.
-cookieLen :: Int
-cookieLen = 32
 
 --------------------------------------------------------------------------------
 -- Aliases
