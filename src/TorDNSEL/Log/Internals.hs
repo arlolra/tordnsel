@@ -45,6 +45,7 @@ data LogConfig = LogConfig
 
 -- | Where log messages should be sent.
 data LogTarget = ToStdOut | ToStdErr | ToFile FilePath
+  deriving Eq
 
 instance Show LogTarget where
   show ToStdErr    = "stderr"
@@ -96,7 +97,7 @@ startLogger config = do
     curLogger@(_,logChan) <- liftM2 (,) myThreadId newChan
     setTrapExit . const $ writeChan logChan . Terminate
     E.bracket_ (swapMVar logger $ Just curLogger) (swapMVar logger Nothing) $
-      flip fix (config, putResponse Nothing) $ \resetLogger (conf, signal) -> do
+      flip fix (config, putResponse Nothing) $ \resetLogger (conf, signal) ->
         (resetLogger =<<) . withLogTarget (logTarget conf) $ \handle -> do
           signal
           fix $ \nextMsg -> do

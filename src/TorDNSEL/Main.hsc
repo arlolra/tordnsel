@@ -32,6 +32,7 @@ module TorDNSEL.Main (
   , daemonize
 
   -- * Helpers
+  , checkLogTarget
   , checkStateDirectory
   , exitWith
   , liftMb
@@ -53,7 +54,7 @@ import Data.Maybe (isJust)
 import System.Environment (getArgs)
 import System.IO
   ( openFile, hPutStr, hPutStrLn, hFlush, hClose, stderr
-  , IOMode(WriteMode, ReadWriteMode) )
+  , IOMode(WriteMode, ReadWriteMode, AppendMode) )
 import Network.Socket
   ( socket, sClose, connect, socketToHandle, SockAddr, Family(AF_INET)
   , SocketType(Stream) )
@@ -89,6 +90,7 @@ import TorDNSEL.TorControl
 import TorDNSEL.Directory
 import TorDNSEL.DNS
 import TorDNSEL.DNS.Server
+import TorDNSEL.Log
 import TorDNSEL.NetworkState
 import TorDNSEL.Random
 import TorDNSEL.Statistics
@@ -177,6 +179,12 @@ main = do
       setCurrentDirectory "/"
 
     dropPrivileges ids
+
+    newLogTarget <- checkLogTarget . logTarget . cfLogConfig $ conf
+    let newLogConfig = (cfLogConfig conf) { logTarget = newLogTarget }
+    if cfRunAsDaemon conf && any (newLogTarget ==) [ToStdOut, ToStdErr]
+      then startLogger newLogConfig { logEnabled = False }
+      else startLogger newLogConfig
 
     mainThread <- C.myThreadId
     forM_ [sigINT, sigTERM] $ \signal ->
@@ -279,6 +287,16 @@ torController net control mbPasswd exitChan = do
       if tid == threadId conn
         then whenJust reason E.throwIO
         else maybe loop (const $ exit reason) reason
+
+-- | Check if the log target can be used. If it can, return it. Otherwise,
+-- return 'ToStdOut'.
+checkLogTarget :: LogTarget -> IO LogTarget
+checkLogTarget target@(ToFile logPath) =
+  E.catchJust E.ioErrors
+    (do E.bracket (openFile logPath AppendMode) hClose (const $ return ())
+        return target)
+    (const $ return ToStdOut)
+checkLogTarget target = return target
 
 -- | Set up the state directory with proper ownership and permissions.
 checkStateDirectory :: Maybe UserID -> Maybe FilePath -> FilePath -> IO ()
