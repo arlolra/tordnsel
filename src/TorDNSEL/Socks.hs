@@ -21,6 +21,7 @@ module TorDNSEL.Socks (
 
   -- * Errors
   , SocksError(..)
+  , showSocksError
   ) where
 
 import TorDNSEL.Socks.Internals

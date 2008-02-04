@@ -17,7 +17,6 @@ module TorDNSEL.NetworkState (
   -- * Network state
     Network
   , newNetwork
-  , NetworkState
   , readNetworkState
 
   -- * State events
@@ -29,11 +28,8 @@ module TorDNSEL.NetworkState (
   , isExitNode
 
   -- * Exit tests
-  , ExitTestConfig(..)
-  , ExitTestChan
-  , newExitTestChan
   , bindListeningSocket
-  , startExitTests
+  , startExitTestListeners
   ) where
 
 import TorDNSEL.NetworkState.Internals

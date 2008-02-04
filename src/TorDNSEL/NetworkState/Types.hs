@@ -15,6 +15,7 @@ module TorDNSEL.NetworkState.Types where
 
 import Data.Map (Map)
 import Data.Time (UTCTime)
+import Data.Set (Set)
 import Network.Socket (HostAddress)
 
 import TorDNSEL.Directory
@@ -36,3 +37,10 @@ data TestResults = TestResults
     tstPublished :: {-# UNPACK #-} !UTCTime,
     -- | A map from exit address to when the address was last seen.
     tstAddresses :: {-# UNPACK #-} !(Map HostAddress UTCTime) }
+
+-- | Our current view of the Tor network.
+data NetworkState = NetworkState
+  { -- | A map from listen address to routers.
+    nsAddrs   :: {-# UNPACK #-} !(Map HostAddress (Set RouterID)),
+    -- | All the routers we know about.
+    nsRouters :: {-# UNPACK #-} !(Map RouterID Router) }

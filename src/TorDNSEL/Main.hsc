@@ -86,14 +86,13 @@ import GHC.Prim (Addr##)
 import TorDNSEL.Config
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
-import TorDNSEL.TorControl
-import TorDNSEL.Directory
 import TorDNSEL.DNS
 import TorDNSEL.DNS.Server
 import TorDNSEL.Log
 import TorDNSEL.NetworkState
 import TorDNSEL.Random
 import TorDNSEL.Statistics
+import TorDNSEL.TorControl
 import TorDNSEL.Util
 
 #include <sys/types.h>
@@ -149,13 +148,9 @@ main = do
 
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
-    return ExitTestConfig
-      { etConcTests   = (availableFileDesc - extraFileDesc) `div` 2
-      , etSocksServer = cfTorSocksAddress conf
-      , etListenSocks = testSocks
-      , etTestAddr    = fst $ tcfTestDestinationAddress testConf
-      , etTestPorts   = snd $ tcfTestDestinationAddress testConf
-      , etRandom      = random }
+    return ( testSocks, random, (availableFileDesc - extraFileDesc) `div` 2
+           , cfTorSocksAddress conf, fst $ tcfTestDestinationAddress testConf
+           , snd $ tcfTestDestinationAddress testConf)
 
   pidHandle <- E.catchJust E.ioErrors
                  (flip openFile WriteMode `liftMb` cfPIDFile conf)
@@ -192,16 +187,10 @@ main = do
         E.throwTo mainThread (E.ExitException ExitSuccess)
 
     net <- case testConf of
-      Just testConf' -> do
-        exitTestChan <- newExitTestChan
-
-        let acceptsPort = flip $ exitPolicyAccepts (etTestAddr testConf')
-            allowsExit policy = any (acceptsPort policy) (etTestPorts testConf')
-
-        net <- newNetwork $ Just (exitTestChan,cfStateDirectory conf,allowsExit)
-        startExitTests $ testConf'
-          { etChan    = exitTestChan
-          , etNetwork = net }
+      Just (testSocks, random, concLimit, socksAddr, testAddr, testPorts) -> do
+        net <- newNetwork $ Just ( random, concLimit, socksAddr, testAddr
+                                 , testPorts, cfStateDirectory conf )
+        startExitTestListeners net testSocks concLimit
         return net
       _ ->
         newNetwork Nothing

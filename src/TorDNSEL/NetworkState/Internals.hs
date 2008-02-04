@@ -23,10 +23,7 @@ module TorDNSEL.NetworkState.Internals (
   -- * Network state
     Network(..)
   , newNetwork
-  , NetworkState(..)
   , emptyNetworkState
-  , Router(..)
-  , TestResults(..)
 
   -- * State events
   , updateDescriptors
@@ -35,11 +32,9 @@ module TorDNSEL.NetworkState.Internals (
   , updateExitAddress
   , readNetworkState
   , StateEvent(..)
-  , TestState(..)
   , stateEventHandler
   , eventHandler
   , testingEventHandler
-  , isTestable
   , newExitAddress
   , newDescriptor
   , newRouterStatus
@@ -52,54 +47,46 @@ module TorDNSEL.NetworkState.Internals (
   , isExitNode
   , isRunning
 
-  -- * Exit tests
-  , ExitTestChan(..)
-  , newExitTestChan
-  , addExitTest
-  , isReadingExitTestChan
-  , ExitTestConfig(..)
+  -- * Exit test server
   , bindListeningSocket
-  , startTestListeners
-  , startExitTests
+  , startExitTestListeners
 
   -- * Aliases
   , b
   ) where
 
+import Prelude hiding (log)
 import Control.Arrow ((&&&))
-import Control.Monad (liftM2, forM_, replicateM_, guard)
+import Control.Monad (liftM2, forM_, replicateM_, when)
 import Control.Monad.Fix (fix)
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
-import Control.Concurrent.MVar
-  (MVar, newMVar, readMVar, swapMVar, withMVar, isEmptyMVar)
+import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
 import Control.Concurrent.STM (atomically)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
-import Data.Dynamic (fromDynamic)
 import Data.List (foldl')
 import Data.Maybe (mapMaybe)
 import qualified Data.Map as M
 import Data.Map (Map)
-import qualified Data.Sequence as Seq
-import Data.Sequence (Seq, (<|), (|>), viewr, ViewR(..))
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
-import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
+import Data.Time.Clock.POSIX (POSIXTime)
 import Network.Socket
   ( Socket, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
-  , SocketOption(ReuseAddr), SocketType(Stream), socket, connect, bindSocket
-  , listen, accept, setSocketOption, sOMAXCONN, socketToHandle, sClose )
+  , SocketOption(ReuseAddr), SocketType(Stream), socket, bindSocket, listen
+  , accept, setSocketOption, sOMAXCONN, socketToHandle )
 import System.IO (Handle, hClose, IOMode(ReadWriteMode))
 
 import GHC.Prim (Addr#)
 
 import TorDNSEL.Directory
+import TorDNSEL.ExitTest.Initiator
 import TorDNSEL.ExitTest.Request
+import TorDNSEL.Log
 import TorDNSEL.NetworkState.Storage
 import TorDNSEL.NetworkState.Types
-import TorDNSEL.Socks
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
@@ -110,26 +97,20 @@ import TorDNSEL.Util
 -- network state.
 data Network = Network
   { -- | A channel over which state changes are sent.
-    nChan  :: {-# UNPACK #-} !(Chan StateEvent)
+    nChan  :: {-# UNPACK #-} !(Chan StateEvent),
     -- | The network state shared with an 'MVar'. This 'MVar' is read-only from
     -- the point of view of other threads. It exists to overcome a performance
     -- problem with pure message passing.
-  , nState :: {-# UNPACK #-} !(MVar NetworkState) }
+    nState :: {-# UNPACK #-} !(MVar NetworkState) }
 
--- | Create a new network event handler given the exit test chan and the path to
--- our state directory. This should only be called once.
-newNetwork :: Maybe (ExitTestChan, FilePath, ExitPolicy -> Bool) -> IO Network
+-- | Create a new network event handler given the exit initiator config and the
+-- path to our state directory. This should only be called once.
+newNetwork :: Maybe (Handle, Integer, SockAddr, HostAddress, [Port], FilePath)
+           -> IO Network
 newNetwork testConf = do
   net <- liftM2 Network newChan (newMVar emptyNetworkState)
   forkIO $ stateEventHandler net testConf
   return net
-
--- | Our current view of the Tor network.
-data NetworkState = NetworkState
-  { -- | A map from listen address to routers.
-    nsAddrs   :: {-# UNPACK #-} !(Map HostAddress (Set RouterID)),
-    -- | All the routers we know about.
-    nsRouters :: {-# UNPACK #-} !(Map RouterID Router) }
 
 -- | The empty network state.
 emptyNetworkState :: NetworkState
@@ -186,19 +167,11 @@ data StateEvent
                    {-# UNPACK #-} !HostAddress
   -- | Rebuild the exit addresses storage.
   | ReplaceExitAddresses
-  -- | Schedule periodic exit tests.
-  | SchedulePeriodicTests
-  -- | Run a single scheduled exit test.
-  | RunExitTest
-
--- | An internal type representing the current exit test state.
-data TestState = TestState
-  { tsTests      :: Seq (RouterID, Maybe Port)
-  , tsCookies    :: !(Map Cookie (RouterID, UTCTime, Port)) }
 
 -- | Receive and carry out state update events.
 stateEventHandler
-  :: Network -> Maybe (ExitTestChan, FilePath, ExitPolicy -> Bool) -> IO ()
+  :: Network -> Maybe (Handle, Integer, SockAddr, HostAddress, [Port], FilePath)
+  -> IO ()
 stateEventHandler net testConf = do
   forkIO . forever $ do
     -- check for and discard old routers every 30 minutes
@@ -224,12 +197,15 @@ eventHandler net = loop emptyNetworkState
         ExpireOldInfo ->
           let s' = expireOldInfo now s
           in s' `seq` swapMVar (nState net) s' >> loop s'
-        _ -> error "unexpected message" -- XXX log this
+        _ -> log Warn "Bug: TorDNSEL.NetworkState.Internals.eventHandler: \
+                      \Unexpected message"
 
 -- | Handle testing events.
 testingEventHandler
-  :: Network -> (ExitTestChan, FilePath, ExitPolicy -> Bool) -> IO ()
-testingEventHandler net (testChan,stateDir,allowsExit) = do
+  :: Network -> (Handle, Integer, SockAddr, HostAddress, [Port], FilePath)
+  -> IO ()
+testingEventHandler net
+                   (random,concLimit,socksAddr,testAddr,testPorts,stateDir) = do
   storage <- startStorageManager StorageConfig { stcfStateDir = stateDir }
 
   -- initialize network state with test results from state directory
@@ -240,96 +216,77 @@ testingEventHandler net (testChan,stateDir,allowsExit) = do
   -- remove old info and merge journal into exit-addresses
   rebuildExitAddressStorage (nsRouters initNS) storage
 
+  testInitiator <- startExitTestInitiator ExitTestInitiatorConfig
+    { eticfGetNetworkState = readNetworkState net
+    , eticfWithCookie = withCookie net random
+    , eticfConcClientLimit = concLimit
+    , eticfSocksServer = socksAddr
+    , eticfTestAddr = testAddr
+    , eticfTestPorts = testPorts }
+
   forkIO . forever $ do
     -- rebuild exit-addresses every 15 minutes so LastStatus entries
     -- stay up to date
     threadDelay (15 * 60 * 10^6)
     writeChan (nChan net) ReplaceExitAddresses
 
-  forkIO . forever $ do
-    -- run periodic tests every 150 minutes
-    replicateM_ 5 $ threadDelay (30 * 60 * 10^6)
-    writeChan (nChan net) SchedulePeriodicTests
-
-  forkIO . forever $ do
-    -- rate-limit exit tests to one router every 3 seconds
-    threadDelay (3 * 10^6)
-    writeChan (nChan net) RunExitTest
-
-  flip fix (initNS, TestState Seq.empty M.empty) $ \loop s@(ns,ts) -> do
+  flip fix (initNS, M.empty) $ \loop s@(ns, cookies) -> do
     event <- readChan $ nChan net
     now <- getCurrentTime
     case event of
       NewDesc ds -> do
         let ns' = foldl' (newDescriptor now) ns ds
         ns' `seq` swapMVar (nState net) ns'
-        loop (ns', ts
-          { tsTests = scheduleExitTests (map descRouterID ds) (nsRouters ns')
-                                        (tsTests ts) })
+        notifyNewDirInfo (lookupRouters ns' descRouterID ds) testInitiator
+        loop (ns', cookies)
 
       NewNS rss -> do
         let ns' = foldl' (newRouterStatus now) ns rss
         ns' `seq` swapMVar (nState net) ns'
-        loop (ns', ts
-          { tsTests = scheduleExitTests (map rsRouterID rss) (nsRouters ns')
-                                        (tsTests ts) })
-
-      SchedulePeriodicTests ->
-        let canTest r = rtrIsRunning r && isPeriodicTestable allowsExit now r
-            rids = M.keys . M.filter canTest . nsRouters $ ns
-        in loop (ns, ts { tsTests = enqueueTests (tsTests ts) rids })
-
-      RunExitTest -> do
-        isReading <- isReadingExitTestChan testChan
-        case (isReading, viewr (tsTests ts)) of
-          (True, tests :> (rid, port)) -> do
-            addExitTest testChan port rid
-            loop (ns, ts { tsTests = tests })
-          _ -> loop s
+        notifyNewDirInfo (lookupRouters ns' rsRouterID rss) testInitiator
+        loop (ns', cookies)
 
       ExpireOldInfo ->
         let ns' = expireOldInfo now ns
-        in ns' `seq` swapMVar (nState net) ns' >> loop (ns', ts)
+        in ns' `seq` swapMVar (nState net) ns' >> loop (ns', cookies)
 
       AddCookie c rid published port ->
-        loop (ns, ts { tsCookies = M.insert c (rid, published, port)
-                                              (tsCookies ts) })
+        loop (ns, M.insert c (rid, published, port) cookies)
 
-      DeleteCookie c -> loop (ns, ts { tsCookies = M.delete c (tsCookies ts) })
+      DeleteCookie c -> loop (ns, M.delete c cookies)
 
       NewExitAddress tested c addr
-        | Just (rid,published,port) <- c  `M.lookup` tsCookies ts
-        , Just r                    <- rid `M.lookup` nsRouters ns -> do
+        | Just (rid,published,port) <- c  `M.lookup` cookies ->
+          case rid `M.lookup` nsRouters ns of
+            Nothing -> do
+              log Info "Received cookie for unrecognized router " rid
+                       "; discarding."
+              loop s
+            Just r -> do
+              log Info "Exit test through router " rid " port " port
+                       " accepted from " (inet_htoa addr) '.'
+              let (r',ns') = newExitAddress tested published r rid addr ns
+              ns' `seq` swapMVar (nState net) ns'
 
-        let (r',ns') = newExitAddress tested published r rid addr ns
-        ns' `seq` swapMVar (nState net) ns'
+              when ((M.member addr . tstAddresses) `fmap` rtrTestResults r ==
+                    Just False) $
+                -- If we haven't seen this address before, test through this
+                -- router again in case the router is rotating exit addresses.
+                scheduleNextExitTest rid testInitiator
 
-        -- Have we seen this exit address before?
-        let ts' = case (M.member addr . tstAddresses) `fmap` rtrTestResults r of
-              -- Test this port twice more in case exit addresses vary.
-              -- The exponential increase in tests should catch more exit
-              -- addresses.
-              Just False -> ts { tsTests = tsTests ts |> (rid, Just port)
-                                                      |> (rid, Just port) }
-              _          -> ts
-
-        storeNewExitAddress rid r' (nsRouters ns') storage
-        loop (ns', ts')
-
-        | otherwise -> loop s -- XXX log this
+              storeNewExitAddress rid r' (nsRouters ns') storage
+              loop (ns', cookies)
+      NewExitAddress _tested _c addr -> do
+        log Info "Received unrecognized cookie from " (inet_htoa addr)
+                 "; discarding."
+        loop s
 
       ReplaceExitAddresses ->
         rebuildExitAddressStorage (nsRouters ns) storage >> loop s
   where
-    enqueueTests = foldl' (\a x -> (x, Nothing) <| a)
-
-    scheduleExitTests rids routers tests =
-      enqueueTests tests (mapMaybe isTestable' rids)
-      where
-        isTestable' rid = do
-          r <- M.lookup rid routers
-          guard $ rtrIsRunning r && isTestable allowsExit r
-          return rid
+    lookupRouters ns f =
+      mapMaybe $ \x -> let rid = f x
+                       in (,) rid `fmap` M.lookup rid (nsRouters ns)
 
     initialNetState exitAddrs =
       NetworkState (foldl' insertExits M.empty exitAddrs)
@@ -340,27 +297,6 @@ testingEventHandler net (testChan,stateDir,allowsExit) = do
                  (M.keys exits)
         initialRouter (ExitAddress rid pub status exits) =
           (rid, Router Nothing (Just (TestResults pub exits)) False status)
-
--- | Should a router be added to the test queue?
-isTestable :: (ExitPolicy -> Bool) -> Router -> Bool
-isTestable allowsExit r =
-  case (rtrDescriptor r, rtrTestResults r) of
-    (Nothing,_)      -> False
-    (Just d,Nothing) -> allowsExit (descExitPolicy d)
-    (Just d,Just t)  -> allowsExit (descExitPolicy d) &&
-                     -- have we already done a test for this descriptor version?
-                        tstPublished t < posixSecondsToUTCTime (descPublished d)
-
--- | A router is eligible for periodic testing if we have its descriptor and it
--- hasn't been tested in the last @minTestInterval@ seconds.
-isPeriodicTestable :: (ExitPolicy -> Bool) -> UTCTime -> Router -> Bool
-isPeriodicTestable allowsExit now r
-  | Nothing <- rtrDescriptor r                                       = False
-  | Just d <- rtrDescriptor r, not . allowsExit . descExitPolicy $ d = False
-  | Just t <- rtrTestResults r
-  = now `diffUTCTime` (maximum . M.elems . tstAddresses $ t) > minTestInterval
-  | otherwise                                                        = True
-  where minTestInterval = 60 * 60
 
 -- | Update the network state with the results of an exit test. Return the
 -- updated router information.
@@ -513,21 +449,6 @@ isRunning now d = now - descPublished d < maxRouterAge
 --------------------------------------------------------------------------------
 -- Exit tests
 
--- | The exit test channel.
-data ExitTestChan = ExitTestChan (Chan (RouterID, Maybe Port)) (MVar ())
-
--- | Create a new exit test channel to be passed to 'newNetwork'.
-newExitTestChan :: IO ExitTestChan
-newExitTestChan = liftM2 ExitTestChan newChan (newMVar ())
-
--- | Schedule an exit test through a router.
-addExitTest :: ExitTestChan -> Maybe Port -> RouterID -> IO ()
-addExitTest (ExitTestChan chan _) port rid = writeChan chan (rid, port)
-
--- | Is any thread reading from an exit test channel?
-isReadingExitTestChan :: ExitTestChan -> IO Bool
-isReadingExitTestChan (ExitTestChan _ reading) = isEmptyMVar reading
-
 -- | Bind a listening socket we're going to use for incoming exit tests. This
 -- action exists so we can listen on privileged ports prior to dropping
 -- privileges. The address and port should be in host order.
@@ -539,20 +460,9 @@ bindListeningSocket listenAddr listenPort = do
   listen sock sOMAXCONN
   return sock
 
--- | Configuration for exit tests.
-data ExitTestConfig = ExitTestConfig
-  { etChan        :: ExitTestChan
-  , etNetwork     :: Network
-  , etConcTests   :: Integer
-  , etSocksServer :: SockAddr
-  , etListenSocks :: [Socket]
-  , etTestAddr    :: HostAddress
-  , etTestPorts   :: [Port]
-  , etRandom      :: Handle }
-
 -- | Fork all our exit test listeners.
-startTestListeners :: Network -> [Socket] -> Integer -> IO ()
-startTestListeners net listenSockets concTests = do
+startExitTestListeners :: Network -> [Socket] -> Integer -> IO ()
+startExitTestListeners net listenSockets concTests = do
   -- We need to keep the number of open FDs below FD_SETSIZE as long as GHC uses
   -- select instead of epoll or kqueue. Client sockets waiting in this channel
   -- count against that limit. We use a bounded channel so incoming connections
@@ -561,12 +471,14 @@ startTestListeners net listenSockets concTests = do
 
   forM_ listenSockets $ \sock -> forkIO . forever $ do
     (client,SockAddrInet _ addr) <- accept sock
-    atomically $ writeBoundedTChan clients (client, ntohl addr)
+    let addr' = ntohl addr
+    log Debug "Accepted exit test client from " (inet_htoa addr') '.'
+    atomically $ writeBoundedTChan clients (client, addr')
 
   replicateM_ (fromInteger concTests) . forkIO . forever $ do
     (client,addr) <- atomically $ readBoundedTChan clients
     handle <- socketToHandle client ReadWriteMode
-    timeout (30 * 10^6) . ignoreJust E.ioErrors $ do
+    r <- timeout (30 * 10^6) . E.tryJust E.ioErrors $ do
       r <- runMaybeT $ getRequest handle
       case r of
         Just cookie -> do
@@ -574,85 +486,18 @@ startTestListeners net listenSockets concTests = do
           updateExitAddress net now cookie addr
           B.hPut handle $ b 46 "HTTP/1.0 204 No Content\r\n\
                                \Connection: close\r\n\r\n"#
-        _ ->
+        _ -> do
+          log Info "Received invalid HTTP request from " (inet_htoa addr)
+                   "; discarding."
           B.hPut handle $ b 47 "HTTP/1.0 400 Bad Request\r\n\
                                \Connection: close\r\n\r\n"#
+    case r of
+      Just (Left e) -> log Info "Error reading HTTP request from "
+                                (inet_htoa addr) ": " e
+      Nothing -> log Info "Reading HTTP request from " (inet_htoa addr)
+                          " timed out."
+      _ -> return ()
     ignoreJust E.ioErrors $ hClose handle
-
--- | Fork all our exit test listeners and initiators.
-startExitTests :: ExitTestConfig -> IO ()
-startExitTests conf@ExitTestConfig { etChan = ExitTestChan chan reading } = do
-  startTestListeners (etNetwork conf) (etListenSocks conf) (etConcTests conf)
-
-  replicateM_ (fromInteger $ etConcTests conf) . forkIO . forever $ do
-    (rid,mbPort) <- withMVar reading (const $ readChan chan)
-    s <- readNetworkState . etNetwork $ conf
-    let mbTest = do
-          rtr <- rid `M.lookup` nsRouters s
-          d <- rtrDescriptor rtr
-          ports@(_:_) <- return $ allowedPorts d
-          return (rtr, posixSecondsToUTCTime (descPublished d), ports)
-
-    -- Skip the test if this router isn't marked running, we don't have its
-    -- descriptor yet, or its exit policy doesn't allow connections to any of
-    -- our listening ports.
-    whenJust mbTest $ \(rtr, published, ports) ->
-      case mbPort of
-        Nothing
-          | rtrIsRunning rtr ->
-              -- perform one test for each port
-              mapM_ (writeChan chan . (,) rid . Just) ports
-          | otherwise ->
-              -- Tests through non-running routers will almost always time out.
-              -- Only test one port so we don't tie up all the testing threads.
-              writeChan chan (rid, Just $ head ports)
-        Just port | port `elem` ports ->
-          withCookie (etNetwork conf) (etRandom conf) rid published port $
-            \cookie -> do
-              -- try to connect twice before giving up
-              attempt . replicate 2 $ testConnection cookie rid port
-              -- XXX log failure
-              return ()
-        _ -> return ()
-
-  where
-    testConnection cookie rid port =
-      E.handleJust connExceptions (const $ return False) .
-        fmap (maybe False (const True)) .
-          timeout (2 * 60 * 10^6) $ do
-            handle <- repeatConnectSocks
-            withSocksConnection handle (Addr exitHost) port $ do
-              B.hPut handle $ createRequest testHost port cookie
-              B.hGet handle 1024 -- ignore response
-              return ()
-      where
-        exitHost = B.concat [ testHost, b 2 ".$"#, encodeBase16RouterID rid
-                            , b 5 ".exit"# ]
-        testHost = B.pack . inet_htoa . etTestAddr $ conf
-
-    allowedPorts desc =
-      [ p | p <- etTestPorts conf
-          , exitPolicyAccepts (etTestAddr conf) p (descExitPolicy desc) ]
-
-    repeatConnectSocks = do
-      r <- E.tryJust E.ioErrors $
-        E.bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock ->
-          connect sock (etSocksServer conf) >> socketToHandle sock ReadWriteMode
-      -- When connecting to Tor's socks port fails, wait five seconds
-      -- and try again.
-      -- XXX this should be logged
-      either (const $ threadDelay (5 * 10^6) >> repeatConnectSocks) return r
-
-    attempt (io:ios) = do
-      p <- io
-      if p then return True
-           else attempt ios
-    attempt [] = return False
-
-    connExceptions e@(E.IOException _)           = Just e
-    connExceptions e@(E.DynException e')
-      | Just (_ :: SocksError) <- fromDynamic e' = Just e
-    connExceptions _                             = Nothing
 
 --------------------------------------------------------------------------------
 -- Aliases

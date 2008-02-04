@@ -40,6 +40,7 @@ import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.DNS
 import TorDNSEL.NetworkState
+import TorDNSEL.NetworkState.Types
 import TorDNSEL.Util
 
 -- | The DNS handler configuration data.

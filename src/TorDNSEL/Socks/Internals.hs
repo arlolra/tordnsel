@@ -37,12 +37,14 @@ module TorDNSEL.Socks.Internals (
 
   -- * Errors
   , SocksError(..)
+  , showSocksError
   ) where
 
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString (ByteString)
+import Data.Dynamic (Dynamic, fromDynamic)
 import Data.Typeable (Typeable)
 import Network.Socket (HostAddress)
 import System.IO (Handle, BufferMode(NoBuffering), hClose, hSetBuffering)
@@ -172,5 +174,9 @@ data SocksError
   deriving Typeable
 
 instance Show SocksError where
-  showsPrec _ (SocksError result) = shows "Socks error: " . shows result
-  showsPrec _ SocksProtocolError  = shows "Socks protocol error"
+  showsPrec _ (SocksError result) = cat "Socks error: " result
+  showsPrec _ SocksProtocolError  = cat "Socks protocol error"
+
+-- | Boilerplate conversion of a dynamically typed 'SocksError' to a string.
+showSocksError :: Dynamic -> Maybe String
+showSocksError = fmap (show :: SocksError -> String) . fromDynamic
