@@ -42,11 +42,6 @@ module TorDNSEL.NetworkState.Internals (
   , insertAddress
   , deleteAddress
 
-  -- * Exit list queries
-  , ExitListQuery(..)
-  , isExitNode
-  , isRunning
-
   -- * Exit test server
   , bindListeningSocket
   , startExitTestListeners
@@ -72,7 +67,6 @@ import Data.Map (Map)
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
-import Data.Time.Clock.POSIX (POSIXTime)
 import Network.Socket
   ( Socket, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
   , SocketOption(ReuseAddr), SocketType(Stream), socket, bindSocket, listen
@@ -406,45 +400,6 @@ deleteAddress addr rid = M.update deleteRouterID addr
       | S.null set' = Nothing
       | otherwise   = Just set'
       where set' = S.delete rid set
-
---------------------------------------------------------------------------------
--- Exit list queries
-
--- | Queries asking whether there's a Tor exit node at a specific IP address.
-data ExitListQuery
-  -- |  Query type 1 from
-  -- <https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt>.
-  = IPPort
-  { -- | The address of the candidate exit node.
-    queryAddr :: {-# UNPACK #-} !HostAddress,
-    -- | The destination address.
-    destAddr  :: {-# UNPACK #-} !HostAddress,
-    -- | The destination port.
-    destPort  :: {-# UNPACK #-} !Port
-  } deriving Eq
-
-instance Show ExitListQuery where
-  showsPrec _ (IPPort a c d) = ("query ip: " ++) . (inet_htoa a ++) .
-    (" dest ip: " ++) . (inet_htoa c ++) . (" dest port: " ++) . shows d
-
--- | Does a query represent a Tor exit node cabable of exiting to a particular
--- network service in our current view of the Tor network?
-isExitNode :: POSIXTime -> NetworkState -> ExitListQuery -> Bool
-{-# INLINE isExitNode #-}
-isExitNode now s q = maybe False (any isExit . mapMaybe lookupDesc . S.elems) ns
-  where
-    ns = queryAddr q `M.lookup` nsAddrs s
-    lookupDesc rid = rtrDescriptor =<< rid `M.lookup` nsRouters s
-    isExit d = isRunning now d &&
-               exitPolicyAccepts (destAddr q) (destPort q) (descExitPolicy d)
-
--- | We consider a router to be running if it last published a descriptor less
--- than 48 hours ago. Descriptors hold an unboxed 'POSIXTime' instead of a
--- 'UTCTime' to prevent this function from showing up in profiles.
-isRunning :: POSIXTime -> Descriptor -> Bool
-{-# INLINE isRunning #-}
-isRunning now d = now - descPublished d < maxRouterAge
-  where maxRouterAge = 60 * 60 * 48
 
 --------------------------------------------------------------------------------
 -- Exit tests

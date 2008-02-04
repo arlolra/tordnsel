@@ -23,10 +23,6 @@ module TorDNSEL.NetworkState (
   , updateDescriptors
   , updateNetworkStatus
 
-  -- * Exit list queries
-  , ExitListQuery(..)
-  , isExitNode
-
   -- * Exit tests
   , bindListeningSocket
   , startExitTestListeners

@@ -27,23 +27,26 @@ import qualified Data.ByteString.Char8 as B
 import Data.Dynamic (Typeable)
 import Data.Char (toLower)
 import Data.List (foldl')
-import Data.Maybe (isNothing, maybeToList)
+import qualified Data.Map as M
+import Data.Maybe (isNothing, maybeToList, mapMaybe)
+import qualified Data.Set as S
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Data.Word (Word8, Word32)
 import Network.Socket
-  ( socket, sClose, bindSocket, setSocketOption, Socket, SockAddr
+  ( socket, sClose, bindSocket, setSocketOption, Socket, SockAddr, HostAddress
   , Family(AF_INET), SocketType(Datagram), SocketOption(ReuseAddr) )
 
 import GHC.Prim (Addr#)
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
+import TorDNSEL.Directory
 import TorDNSEL.DNS
 import TorDNSEL.NetworkState
 import TorDNSEL.NetworkState.Types
 import TorDNSEL.Util
 
--- | The DNS handler configuration data.
+-- | The DNS server configuration.
 data DNSConfig
   = DNSConfig
   { dnsSocket   :: !Socket         -- ^ The server's bound UDP socket.
@@ -197,6 +200,27 @@ dropAuthZone (DomainName authZone) (DomainName name) =
     dropAuthZone' [] ys      = Just ys
     dropAuthZone' _  _       = Nothing
 
+--------------------------------------------------------------------------------
+-- Exit list queries
+
+-- | Queries asking whether there's a Tor exit node at a specific IP address.
+data ExitListQuery
+  -- |  Query type 1 from
+  -- <https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt>.
+  = IPPort
+  { -- | The address of the candidate exit node.
+    queryAddr :: {-# UNPACK #-} !HostAddress,
+    -- | The destination address.
+    destAddr  :: {-# UNPACK #-} !HostAddress,
+    -- | The destination port.
+    destPort  :: {-# UNPACK #-} !Port
+  } deriving Eq
+
+instance Show ExitListQuery where
+  showsPrec _ (IPPort qAddr dAddr dPort) =
+    cat "query ip: " (inet_htoa qAddr) " dest ip: " (inet_htoa dAddr)
+        " dest port: " dPort
+
 -- | Parse an exit list query from a sequence of labels ordered from top to
 -- bottom representing the query portion of a domain name, e.g.
 -- @\"ip-port.{IP2}.{port}.{IP1}\"@.
@@ -211,6 +235,25 @@ parseExitListQuery labels = do
       os <- mapM (fmap fromIntegral . readInt) xs
       guard $ all (`inBoundsOf` (undefined :: Word8)) os
       return $! foldl' (.|.) 0 . zipWith shiftL os $ [24,16..]
+
+-- | Does a query represent a Tor exit node cabable of exiting to a particular
+-- network service in our current view of the Tor network?
+isExitNode :: POSIXTime -> NetworkState -> ExitListQuery -> Bool
+{-# INLINE isExitNode #-}
+isExitNode now s q = maybe False (any isExit . mapMaybe lookupDesc . S.elems) ns
+  where
+    ns = queryAddr q `M.lookup` nsAddrs s
+    lookupDesc rid = rtrDescriptor =<< rid `M.lookup` nsRouters s
+    isExit d = isRunning now d &&
+               exitPolicyAccepts (destAddr q) (destPort q) (descExitPolicy d)
+
+-- | We consider a router to be running if it last published a descriptor less
+-- than 48 hours ago. Descriptors hold an unboxed 'POSIXTime' instead of a
+-- 'UTCTime' to prevent this function from showing up in profiles.
+isRunning :: POSIXTime -> Descriptor -> Bool
+{-# INLINE isRunning #-}
+isRunning now d = now - descPublished d < maxRouterAge
+  where maxRouterAge = 60 * 60 * 48
 
 -- | The time-to-live set for caching.
 ttl :: Word32
