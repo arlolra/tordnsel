@@ -54,7 +54,7 @@ import Prelude hiding (log)
 import Control.Arrow ((&&&))
 import Control.Monad (liftM2, forM_, replicateM_, when)
 import Control.Monad.Fix (fix)
-import Control.Concurrent (forkIO, threadDelay)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
 import Control.Concurrent.STM (atomically)
@@ -75,6 +75,7 @@ import System.IO (Handle, hClose, IOMode(ReadWriteMode))
 
 import GHC.Prim (Addr#)
 
+import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Directory
 import TorDNSEL.ExitTest.Initiator
 import TorDNSEL.ExitTest.Request

@@ -1,4 +1,5 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE PatternGuards #-}
+{-# OPTIONS_GHC -fno-ignore-asserts #-}
 
 -----------------------------------------------------------------------------
 -- |
