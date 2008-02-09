@@ -31,6 +31,9 @@ module TorDNSEL.Util (
   , handleError
   , filterRight
 
+  -- * Strict functions
+  , adjust'
+
   -- * Miscellaneous functions
   , on
   , unfoldAccumR
@@ -119,6 +122,7 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString as W
 import qualified Data.ByteString.Base as B
 import Data.ByteString (ByteString)
+import qualified Data.Map as M
 import Data.Ratio (numerator, denominator, (%))
 import Data.Time
   ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
@@ -247,6 +251,13 @@ filterRight :: [Either ShowS a] -> [a]
 filterRight []           = []
 filterRight (Left x:xs)  = cat x '\n' `trace` filterRight xs
 filterRight (Right x:xs) = x : filterRight xs
+
+--------------------------------------------------------------------------------
+-- Strict functions
+
+-- | Same as 'M.adjust', but the adjusting function is applied strictly.
+adjust' :: Ord k => (a -> a) -> k -> M.Map k a -> M.Map k a
+adjust' = M.update . ((Just $!) .)
 
 --------------------------------------------------------------------------------
 -- Miscellaneous functions

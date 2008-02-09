@@ -55,7 +55,7 @@ myThreadId = do
   withMVar threadMap $ \tm -> return $! ident (state tm M.! me)
 
 type StateModifier =
-  M.Map C.ThreadId ThreadState ->  M.Map C.ThreadId ThreadState
+  M.Map C.ThreadId ThreadState -> M.Map C.ThreadId ThreadState
 
 -- | Holds the 'ThreadId' to 'C.ThreadId' mappings and 'ThreadState' for every
 -- running thread.
@@ -140,11 +140,12 @@ withLinksDo showE io = E.block $ do
         , links     = S.empty
         , monitors  = M.empty
         , ownedMons = S.empty }
-  modifyMVar_ threadMap $ \tm -> return $!
+  modifyMVar_ threadMap $ \tm ->
     E.assert (M.size (ids tm) == 0) $
     E.assert (M.size (state tm) == 0) $
-    tm { ids   = M.insert mainId main (ids tm)
-       , state = M.insert main initialState (state tm) }
+    return $! initialState `seq`
+      tm { ids   = M.insert mainId main (ids tm)
+         , state = M.insert main initialState (state tm) }
   -- Don't bother propagating signals from the main thread
   -- since it's about to exit.
   (E.unblock io >> return ()) `E.catch` \e ->
@@ -179,20 +180,21 @@ forkLinkIO' shouldLink io = E.block $ do
       -- avoid this race since nobody can throwTo it.
       forkHandler $ do
         withMVar threadMap assertThreadMap
-        (signalAll,notifyAll) <- modifyMVar threadMap $ \tm1 -> return $!
+        (signalAll,notifyAll) <- modifyMVar threadMap $ \tm1 ->
           let s = state tm1 M.! child
               unlinkAll = flip (F.foldl' (flip (child `unlinkFrom`))) (links s)
               deleteMonitors =
                 flip (F.foldl' (\a (_,cleanup) -> cleanup a)) (monitors s) .
                 flip (F.foldl' (\a (tid,monId) ->
-                  M.adjust (\ts -> ts {monitors = M.delete monId (monitors ts)})
-                           tid a)) (ownedMons s)
+                  adjust' (\ts -> ts {monitors = M.delete monId (monitors ts)})
+                          tid a)) (ownedMons s)
               newIds = M.delete childId (ids tm1)
               newState = M.delete child . deleteMonitors . unlinkAll $ state tm1
               signalThread ex tid = signal (state tm1 M.! tid) childId ex
               signalAll ex = F.mapM_ (forkHandler . signalThread ex) (links s)
               notifyAll ex = F.mapM_ (forkHandler . ($ ex) . fst) (monitors s)
-          in (tm1 { ids = newIds, state = newState }, (signalAll, notifyAll))
+              tm1' = tm1 { ids = newIds, state = newState }
+          in tm1' `seq` return (tm1', (signalAll, notifyAll))
         withMVar threadMap assertThreadMap
         notifyAll e
         signalAll e
@@ -207,7 +209,7 @@ forkLinkIO' shouldLink io = E.block $ do
           , monitors  = M.empty
           , ownedMons = S.empty }
 
-    return $!
+    return $! initialState `seq`
       tm { ids   = M.insert childId child $ ids tm
          , state = M.insert child initialState . linkToParent $ state tm }
 
@@ -225,15 +227,16 @@ forkLinkIO' shouldLink io = E.block $ do
 linkThread :: ThreadId -> IO ()
 linkThread tid = do
   me <- C.myThreadId
-  mbSignalSelf <- modifyMVar threadMap $ \tm -> return $!
+  mbSignalSelf <- modifyMVar threadMap $ \tm ->
     case M.lookup tid (ids tm) of
       Just tid'
-        | tid' == me -> (tm, Nothing)
-        | otherwise -> (tm { state = linkTogether me tid' $ state tm }, Nothing)
+        | tid' == me -> return (tm, Nothing)
+        | otherwise -> let tm' = tm { state = linkTogether me tid' $ state tm }
+                       in tm' `seq` return (tm', Nothing)
       Nothing ->
         let s = state tm M.! me
-        in (tm, Just . signal s (ident s) . Just . E.DynException . toDyn $
-                NonexistentThread)
+        in return (tm, Just . signal s (ident s) . Just . E.DynException .
+                         toDyn $ NonexistentThread)
   whenJust mbSignalSelf id
   where linkTogether x y = (x `linkTo` y) . (y `linkTo` x)
 
@@ -250,7 +253,7 @@ unlinkThread tid = do
 
 linkTo, unlinkFrom :: C.ThreadId -> C.ThreadId -> StateModifier
 (linkTo, unlinkFrom) = (adjustLinks S.insert, adjustLinks S.delete)
-  where adjustLinks f tid = M.adjust $ \ts -> ts { links = tid `f` links ts }
+  where adjustLinks f tid = adjust' $ \ts -> ts { links = tid `f` links ts }
 
 -- | An abstract type representing a handle to a particular monitoring of one
 -- thread by another.
@@ -270,16 +273,18 @@ monitorThread :: ThreadId -> (ExitReason -> IO ()) -> IO Monitor
 monitorThread tid notify = do
   me <- C.myThreadId
   mon@(Monitor _ monId) <- Monitor tid `fmap` newUnique
-  let cleanup tid' = M.adjust (\ts ->
+  let cleanup tid' = adjust' (\ts ->
         ts { ownedMons = S.delete (tid', monId) (ownedMons ts) }) me
       addMon tid' ts = ts { monitors = M.insert monId (notify, cleanup tid')
                                                 (monitors ts) }
       addOwned tid' ts = ts {ownedMons = S.insert (tid', monId) (ownedMons ts)}
-  exists <- modifyMVar threadMap $ \tm -> return $!
+  exists <- modifyMVar threadMap $ \tm ->
     case M.lookup tid (ids tm) of
-      Nothing   -> (tm, False)
-      Just tid' -> (tm { state = M.adjust (addMon tid') tid' .
-                                 M.adjust (addOwned tid') me $ state tm }, True)
+      Nothing   -> return (tm, False)
+      Just tid' ->
+        let tm' = tm { state = adjust' (addMon tid') tid' .
+                                 adjust' (addOwned tid') me $ state tm }
+        in tm' `seq` return (tm', True)
   unless exists $
     notify . Just . E.DynException . toDyn $ NonexistentThread
   return mon
@@ -291,8 +296,8 @@ demonitorThread (Monitor tid monId) = do
   modifyMVar_ threadMap $ \tm -> return $!
     case M.lookup tid (ids tm) of
       Nothing   -> tm
-      Just tid' -> tm { state = M.adjust deleteMon tid' .
-                                M.adjust (deleteOwned tm) me $ state tm }
+      Just tid' -> tm { state = adjust' deleteMon tid' .
+                                adjust' (deleteOwned tm) me $ state tm }
   where
     deleteMon      ts = ts { monitors = M.delete monId (monitors ts) }
     deleteOwned tm ts = ts { ownedMons = S.delete (ids tm M.! tid, monId)
@@ -349,7 +354,7 @@ setTrapExit :: (ThreadId -> ExitReason -> IO ()) -> IO ()
 setTrapExit notify = do
   me <- C.myThreadId
   modifyMVar_ threadMap $ \tm -> return $!
-    tm { state = M.adjust (\ts -> ts { signal = notify }) me (state tm) }
+    tm { state = adjust' (\ts -> ts { signal = notify }) me (state tm) }
 
 -- | Deliver exit signals destined for the calling thread normally, that is,
 -- exit signals will terminate the calling thread and propagate to any threads
