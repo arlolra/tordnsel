@@ -57,6 +57,10 @@ module TorDNSEL.Util (
   , showException
   , showUTCTime
 
+  -- * Network functions
+  , bindUDPSocket
+  , bindListeningTCPSocket
+
   -- * Monads
   , MaybeT(..)
 
@@ -129,7 +133,10 @@ import Data.Time
   , timeOfDayToTime, timeToTimeOfDay )
 import Data.Word (Word16, Word32)
 import Debug.Trace (trace)
-import Network.Socket (HostAddress, ProtocolNumber)
+import Network.Socket
+  ( HostAddress, ProtocolNumber, Socket, SockAddr(..), SocketOption(ReuseAddr)
+  , SocketType(Datagram, Stream), Family(AF_INET), socket, bindSocket, listen
+  , setSocketOption, sClose, sOMAXCONN )
 import Text.Printf (printf)
 import System.Environment (getProgName)
 import System.Exit (exitFailure)
@@ -493,6 +500,36 @@ showUTCTime time = printf "%s %02d:%02d:%s" date hours mins secStr'
     secs = fromRational (frac % d) + fromIntegral sec
     secStr = printf "%02.4f" (secs :: Double)
     secStr' = (if length secStr < 7 then ('0':) else id) secStr
+
+--------------------------------------------------------------------------------
+-- Network functions
+
+-- | Open a new UDP socket and bind it to the given 'SockAddr'.
+bindUDPSocket :: SockAddr -> IO Socket
+bindUDPSocket sockAddr =
+  E.bracketOnError (socket AF_INET Datagram udpProtoNum) sClose $ \sock -> do
+    setSocketOption sock ReuseAddr 1
+    bindSocket sock sockAddr
+    return sock
+
+-- | Open a new TCP socket, bind it to the given 'SockAddr', then pass it to
+-- 'listen'.
+bindListeningTCPSocket :: SockAddr -> IO Socket
+bindListeningTCPSocket sockAddr = do
+  E.bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do
+    setSocketOption sock ReuseAddr 1
+    bindSocket sock sockAddr
+    listen sock sOMAXCONN
+    return sock
+
+instance Ord SockAddr where
+  SockAddrInet port1 addr1 `compare` SockAddrInet port2 addr2 =
+    case addr1 `compare` addr2 of
+      EQ    -> port1 `compare` port2
+      other -> other
+  SockAddrUnix path1 `compare` SockAddrUnix path2 = path1 `compare` path2
+  SockAddrInet _ _ `compare` SockAddrUnix _ = LT
+  SockAddrUnix _ `compare` SockAddrInet _ _ = GT
 
 --------------------------------------------------------------------------------
 -- Monads

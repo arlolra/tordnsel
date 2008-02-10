@@ -32,9 +32,7 @@ import Data.Maybe (isNothing, maybeToList, mapMaybe)
 import qualified Data.Set as S
 import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Data.Word (Word8, Word32)
-import Network.Socket
-  ( socket, sClose, bindSocket, setSocketOption, Socket, SockAddr, HostAddress
-  , Family(AF_INET), SocketType(Datagram), SocketOption(ReuseAddr) )
+import Network.Socket (Socket, HostAddress, sClose)
 
 import GHC.Prim (Addr#)
 
@@ -64,14 +62,6 @@ data DNSConfig
 -- | The response type reported in statistics. 'Positive' and 'Negative' are for
 -- valid DNSEL queries.
 data ResponseType = Positive | Negative | Other
-
--- | Open a new UDP socket and bind it to the given 'SockAddr'.
-bindUDPSocket :: SockAddr -> IO Socket
-bindUDPSocket sockAddr =
-  E.bracketOnError (socket AF_INET Datagram udpProtoNum) sClose $ \sock -> do
-    setSocketOption sock ReuseAddr 1
-    bindSocket sock sockAddr
-    return sock
 
 -- | A handle to the DNS server.
 newtype DNSServer = DNSServer ThreadId

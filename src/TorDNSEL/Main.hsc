@@ -56,8 +56,8 @@ import System.IO
   ( openFile, hPutStr, hPutStrLn, hFlush, hClose, stderr
   , IOMode(WriteMode, ReadWriteMode, AppendMode) )
 import Network.Socket
-  ( socket, sClose, connect, socketToHandle, SockAddr, Family(AF_INET)
-  , SocketType(Stream) )
+  ( socket, sClose, connect, socketToHandle, SockAddr(SockAddrInet)
+  , Family(AF_INET), SocketType(Stream) )
 
 import System.Exit (ExitCode(ExitSuccess))
 import System.Directory (setCurrentDirectory, createDirectoryIfMissing)
@@ -140,11 +140,14 @@ main = do
   checkStateDirectory (fst ids) (cfChangeRootDirectory conf)
                       (cfStateDirectory conf)
 
-  testConf <- flip liftMb (cfTestConfig conf) $ \testConf -> do
-    testSocks <- forM (snd $ tcfTestListenAddress testConf) $ \port ->
-      E.catchJust E.ioErrors
-        (bindListeningSocket (fst $ tcfTestListenAddress testConf) port)
+  mbTestConf <- flip liftMb (cfTestConfig conf) $ \testConf -> do
+    testSocks <- forM (snd $ tcfTestListenAddress testConf) $ \port -> do
+      let sockAddr = SockAddrInet (fromIntegral port)
+                                  (htonl . fst $ tcfTestListenAddress testConf)
+      sock <- E.catchJust E.ioErrors
+        (bindListeningTCPSocket sockAddr)
         (exitWith . cat "Binding listening socket to port " port " failed: ")
+      return (sockAddr, sock)
 
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
@@ -186,14 +189,7 @@ main = do
       flip (installHandler signal) Nothing . Catch $
         E.throwTo mainThread (E.ExitException ExitSuccess)
 
-    net <- case testConf of
-      Just (testSocks, random, concLimit, socksAddr, testAddr, testPorts) -> do
-        net <- newNetwork $ Just ( random, concLimit, socksAddr, testAddr
-                                 , testPorts, cfStateDirectory conf )
-        startExitTestListeners net testSocks concLimit
-        return net
-      _ ->
-        newNetwork Nothing
+    net <- newNetwork $ ((,) (cfStateDirectory conf)) `fmap` mbTestConf
 
     let controller = torController net (cfTorControlAddress conf)
                                    (cfTorControlPassword conf)

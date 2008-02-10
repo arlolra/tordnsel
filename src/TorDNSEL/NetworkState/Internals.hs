@@ -42,22 +42,17 @@ module TorDNSEL.NetworkState.Internals (
   , insertAddress
   , deleteAddress
 
-  -- * Exit test server
-  , bindListeningSocket
-  , startExitTestListeners
-
   -- * Aliases
   , b
   ) where
 
 import Prelude hiding (log)
-import Control.Arrow ((&&&))
-import Control.Monad (liftM2, forM_, replicateM_, when)
+import Control.Arrow ((&&&), second)
+import Control.Monad (liftM2, when)
 import Control.Monad.Fix (fix)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
-import Control.Concurrent.STM (atomically)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import Data.List (foldl')
@@ -67,11 +62,8 @@ import Data.Map (Map)
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
-import Network.Socket
-  ( Socket, HostAddress, SockAddr(SockAddrInet), Family(AF_INET)
-  , SocketOption(ReuseAddr), SocketType(Stream), socket, bindSocket, listen
-  , accept, setSocketOption, sOMAXCONN, socketToHandle )
-import System.IO (Handle, hClose, IOMode(ReadWriteMode))
+import Network.Socket (HostAddress, SockAddr, Socket)
+import System.IO (Handle)
 
 import GHC.Prim (Addr#)
 
@@ -79,10 +71,10 @@ import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Directory
 import TorDNSEL.ExitTest.Initiator
 import TorDNSEL.ExitTest.Request
+import TorDNSEL.ExitTest.Server
 import TorDNSEL.Log
 import TorDNSEL.NetworkState.Storage
 import TorDNSEL.NetworkState.Types
-import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
 --------------------------------------------------------------------------------
@@ -98,10 +90,12 @@ data Network = Network
     -- problem with pure message passing.
     nState :: {-# UNPACK #-} !(MVar NetworkState) }
 
--- | Create a new network event handler given the exit initiator config and the
--- path to our state directory. This should only be called once.
-newNetwork :: Maybe (Handle, Integer, SockAddr, HostAddress, [Port], FilePath)
-           -> IO Network
+type ExitTestConfig =
+  ([(SockAddr, Socket)], Handle, Integer, SockAddr, HostAddress, [Port])
+
+-- | Create a new network event handler given the exit test config and the path
+-- to our state directory. This should only be called once.
+newNetwork :: Maybe (FilePath, ExitTestConfig) -> IO Network
 newNetwork testConf = do
   net <- liftM2 Network newChan (newMVar emptyNetworkState)
   forkIO $ stateEventHandler net testConf
@@ -164,9 +158,7 @@ data StateEvent
   | ReplaceExitAddresses
 
 -- | Receive and carry out state update events.
-stateEventHandler
-  :: Network -> Maybe (Handle, Integer, SockAddr, HostAddress, [Port], FilePath)
-  -> IO ()
+stateEventHandler :: Network -> Maybe (FilePath, ExitTestConfig) -> IO ()
 stateEventHandler net testConf = do
   forkIO . forever $ do
     -- check for and discard old routers every 30 minutes
@@ -196,11 +188,9 @@ eventHandler net = loop emptyNetworkState
                       \Unexpected message"
 
 -- | Handle testing events.
+testingEventHandler :: Network -> (FilePath, ExitTestConfig) -> IO ()
 testingEventHandler
-  :: Network -> (Handle, Integer, SockAddr, HostAddress, [Port], FilePath)
-  -> IO ()
-testingEventHandler net
-                   (random,concLimit,socksAddr,testAddr,testPorts,stateDir) = do
+  net (stateDir,(testSocks,random,concLimit,socksAddr,testAddr,testPorts)) = do
   storage <- startStorageManager StorageConfig { stcfStateDir = stateDir }
 
   -- initialize network state with test results from state directory
@@ -210,6 +200,11 @@ testingEventHandler net
 
   -- remove old info and merge journal into exit-addresses
   rebuildExitAddressStorage (nsRouters initNS) storage
+
+  startExitTestServer (map (second Just) testSocks) ExitTestServerConfig
+    { etscfNotifyNewExitAddress = updateExitAddress net
+    , etscfConcClientLimit = concLimit
+    , etscfListenAddrs = S.fromList $ map fst testSocks }
 
   testInitiator <- startExitTestInitiator ExitTestInitiatorConfig
     { eticfGetNetworkState = readNetworkState net
@@ -401,59 +396,6 @@ deleteAddress addr rid = M.update deleteRouterID addr
       | S.null set' = Nothing
       | otherwise   = Just set'
       where set' = S.delete rid set
-
---------------------------------------------------------------------------------
--- Exit tests
-
--- | Bind a listening socket we're going to use for incoming exit tests. This
--- action exists so we can listen on privileged ports prior to dropping
--- privileges. The address and port should be in host order.
-bindListeningSocket :: HostAddress -> Port -> IO Socket
-bindListeningSocket listenAddr listenPort = do
-  sock <- socket AF_INET Stream tcpProtoNum
-  setSocketOption sock ReuseAddr 1
-  bindSocket sock (SockAddrInet (fromIntegral listenPort) (htonl listenAddr))
-  listen sock sOMAXCONN
-  return sock
-
--- | Fork all our exit test listeners.
-startExitTestListeners :: Network -> [Socket] -> Integer -> IO ()
-startExitTestListeners net listenSockets concTests = do
-  -- We need to keep the number of open FDs below FD_SETSIZE as long as GHC uses
-  -- select instead of epoll or kqueue. Client sockets waiting in this channel
-  -- count against that limit. We use a bounded channel so incoming connections
-  -- can't crash the runtime by exceeding the limit.
-  clients <- atomically $ newBoundedTChan 64
-
-  forM_ listenSockets $ \sock -> forkIO . forever $ do
-    (client,SockAddrInet _ addr) <- accept sock
-    let addr' = ntohl addr
-    log Debug "Accepted exit test client from " (inet_htoa addr') '.'
-    atomically $ writeBoundedTChan clients (client, addr')
-
-  replicateM_ (fromInteger concTests) . forkIO . forever $ do
-    (client,addr) <- atomically $ readBoundedTChan clients
-    handle <- socketToHandle client ReadWriteMode
-    r <- timeout (30 * 10^6) . E.tryJust E.ioErrors $ do
-      r <- runMaybeT $ getRequest handle
-      case r of
-        Just cookie -> do
-          now <- getCurrentTime
-          updateExitAddress net now cookie addr
-          B.hPut handle $ b 46 "HTTP/1.0 204 No Content\r\n\
-                               \Connection: close\r\n\r\n"#
-        _ -> do
-          log Info "Received invalid HTTP request from " (inet_htoa addr)
-                   "; discarding."
-          B.hPut handle $ b 47 "HTTP/1.0 400 Bad Request\r\n\
-                               \Connection: close\r\n\r\n"#
-    case r of
-      Just (Left e) -> log Info "Error reading HTTP request from "
-                                (inet_htoa addr) ": " e
-      Nothing -> log Info "Reading HTTP request from " (inet_htoa addr)
-                          " timed out."
-      _ -> return ()
-    ignoreJust E.ioErrors $ hClose handle
 
 --------------------------------------------------------------------------------
 -- Aliases

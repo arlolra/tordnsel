@@ -22,10 +22,6 @@ module TorDNSEL.NetworkState (
   -- * State events
   , updateDescriptors
   , updateNetworkStatus
-
-  -- * Exit tests
-  , bindListeningSocket
-  , startExitTestListeners
   ) where
 
 import TorDNSEL.NetworkState.Internals
