@@ -33,6 +33,9 @@ module TorDNSEL.Util (
 
   -- * Strict functions
   , adjust'
+  , alter'
+  , update'
+  , mapInsert'
 
   -- * Miscellaneous functions
   , on
@@ -265,6 +268,18 @@ filterRight (Right x:xs) = x : filterRight xs
 -- | Same as 'M.adjust', but the adjusting function is applied strictly.
 adjust' :: Ord k => (a -> a) -> k -> M.Map k a -> M.Map k a
 adjust' = M.update . ((Just $!) .)
+
+-- | Same as 'M.alter', but the new value is evaluated before being inserted.
+alter' :: Ord k => (Maybe a -> Maybe a) -> k -> M.Map k a -> M.Map k a
+alter' = M.alter . (maybe Nothing (Just $!) .)
+
+-- | Same as 'M.update', but the new value is evaluated before being inserted.
+update' :: Ord k => (a -> Maybe a) -> k -> M.Map k a -> M.Map k a
+update' = M.update . (maybe Nothing (Just $!) .)
+
+-- | Same as 'M.insert', but the new value is evaluated before being inserted.
+mapInsert' :: Ord k => k -> a -> M.Map k a -> M.Map k a
+mapInsert' k !x = M.insert k x
 
 --------------------------------------------------------------------------------
 -- Miscellaneous functions

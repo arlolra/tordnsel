@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternGuards, BangPatterns #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------
@@ -8,7 +8,7 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (concurrency, STM, pattern guards)
+-- Portability : non-portable (concurrency, STM, pattern guards, bang patterns)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
@@ -84,11 +84,11 @@ import TorDNSEL.Util
 -- network state.
 data Network = Network
   { -- | A channel over which state changes are sent.
-    nChan  :: {-# UNPACK #-} !(Chan StateEvent),
+    nChan  :: !(Chan StateEvent),
     -- | The network state shared with an 'MVar'. This 'MVar' is read-only from
     -- the point of view of other threads. It exists to overcome a performance
     -- problem with pure message passing.
-    nState :: {-# UNPACK #-} !(MVar NetworkState) }
+    nState :: !(MVar NetworkState) }
 
 type ExitTestConfig =
   ([(SockAddr, Socket)], Handle, Integer, SockAddr, HostAddress, [Port])
@@ -140,20 +140,18 @@ readNetworkState = readMVar . nState
 -- | A message sent to update the network state.
 data StateEvent
   -- | New descriptors are available.
-  = NewDesc {-# UNPACK #-} ![Descriptor]
+  = NewDesc ![Descriptor]
   -- | New router status entries are available.
-  | NewNS {-# UNPACK #-} ![RouterStatus]
+  | NewNS ![RouterStatus]
   -- | Discard inactive routers and old exit test results.
   | ExpireOldInfo
   -- | Map a new cookie to an exit node identity, descriptor published time,
   -- and port.
-  | AddCookie {-# UNPACK #-} !Cookie  {-# UNPACK #-} !RouterID
-              {-# UNPACK #-} !UTCTime {-# UNPACK #-} !Port
+  | AddCookie !Cookie !RouterID !UTCTime !Port
   -- | Remove a cookie to exit node identity mapping.
-  | DeleteCookie {-# UNPACK #-} !Cookie
+  | DeleteCookie !Cookie
   -- | We've received a cookie from an incoming test connection.
-  | NewExitAddress {-# UNPACK #-} !UTCTime {-# UNPACK #-} !Cookie
-                   {-# UNPACK #-} !HostAddress
+  | NewExitAddress !UTCTime !Cookie !HostAddress
   -- | Rebuild the exit addresses storage.
   | ReplaceExitAddresses
 
@@ -286,7 +284,7 @@ testingEventHandler
           foldl' (\addrs' addr -> insertAddress addr rid addrs') addrs
                  (M.keys exits)
         initialRouter (ExitAddress rid pub status exits) =
-          (rid, Router Nothing (Just (TestResults pub exits)) False status)
+          (,) rid $! Router Nothing (Just $! TestResults pub exits) False status
 
 -- | Update the network state with the results of an exit test. Return the
 -- updated router information.
@@ -299,13 +297,13 @@ newExitAddress tested published r rid addr s
                           (M.insert addr tested $ tstAddresses test)
   | otherwise = results $ TestResults published (M.singleton addr tested)
   where
-    results test = (id &&& s') r { rtrTestResults = Just test }
-    s' r' = s { nsAddrs   = insertAddress addr rid (nsAddrs s)
-              , nsRouters = M.insert rid r' (nsRouters s) }
+    results test = (id &&& s') r { rtrTestResults = Just $! test }
+    s' !r' = s { nsAddrs   = insertAddress addr rid (nsAddrs s)
+               , nsRouters = M.insert rid r' (nsRouters s) }
 
 -- | Update the network state with a new router descriptor.
 newDescriptor :: UTCTime -> NetworkState -> Descriptor -> NetworkState
-newDescriptor now s newD
+newDescriptor now s !newD
   -- we know about this router already, but we might not have its descriptor
   | Just router <- M.lookup rid (nsRouters s)
   = case rtrDescriptor router of
@@ -327,17 +325,17 @@ newDescriptor now s newD
                   , nsRouters = insertRouters }
   where
     updateRouters =
-      M.adjust (\r -> r { rtrDescriptor = Just newD }) rid (nsRouters s)
+      adjust' (\r -> r { rtrDescriptor = Just newD }) rid (nsRouters s)
     updateRoutersTests oldAddr =
-      M.adjust (\r -> r { rtrDescriptor = Just newD
-                        , rtrTestResults = updateTests oldAddr r })
-               rid (nsRouters s)
+      adjust' (\r -> r { rtrDescriptor = Just newD
+                       , rtrTestResults = updateTests oldAddr r })
+              rid (nsRouters s)
     updateTests oldAddr (Router _ (Just test) _ _)
-      | not (M.null addrs') = Just test { tstAddresses = addrs' }
+      | not (M.null addrs') = Just $! test { tstAddresses = addrs' }
       where addrs' = M.delete oldAddr (tstAddresses test)
     updateTests _ _ = Nothing
     insertRouters =
-      M.insert rid (Router (Just newD) Nothing False now) (nsRouters s)
+      mapInsert' rid (Router (Just newD) Nothing False now) (nsRouters s)
     insertAddr d = insertAddress (descListenAddr d) rid
     deleteAddr d = deleteAddress (descListenAddr d) rid
     rid = descRouterID newD
@@ -345,8 +343,8 @@ newDescriptor now s newD
 -- | Update the network state with a new router status entry.
 newRouterStatus :: UTCTime -> NetworkState -> RouterStatus -> NetworkState
 newRouterStatus now s rs =
-  s { nsRouters = M.alter (Just . maybe newRouter updateRouter)
-                          (rsRouterID rs) (nsRouters s) }
+  s { nsRouters = alter' (Just . maybe newRouter updateRouter)
+                         (rsRouterID rs) (nsRouters s) }
   where
     newRouter = Router Nothing Nothing (rsIsRunning rs) now
     updateRouter r = r { rtrIsRunning = rsIsRunning rs, rtrLastStatus = now }
@@ -360,7 +358,7 @@ expireOldInfo now s = s { nsAddrs = addrs'', nsRouters = routers'' }
     updateTests addrs rid r@(Router d (Just test) _ _)
       | M.null oldExits    = (addrs, r)
       | M.null recentExits = update Nothing
-      | otherwise          = update $ Just test { tstAddresses = recentExits }
+      | otherwise          = update (Just $! test {tstAddresses = recentExits})
       where
         update test' = (recentAddrs, r { rtrTestResults = test' })
         recentAddrs =
@@ -384,13 +382,13 @@ expireOldInfo now s = s { nsAddrs = addrs'', nsRouters = routers'' }
 -- | Add a new router associated with an address to the address map.
 insertAddress :: HostAddress -> RouterID -> Map HostAddress (Set RouterID)
               -> Map HostAddress (Set RouterID)
-insertAddress addr rid =
-  M.alter (Just . maybe (S.singleton rid) (S.insert rid)) addr
+insertAddress addr !rid =
+  alter' (Just . maybe (S.singleton rid) (S.insert rid)) addr
 
 -- | Remove a router associated with an address from the address map.
 deleteAddress :: HostAddress -> RouterID -> Map HostAddress (Set RouterID)
               -> Map HostAddress (Set RouterID)
-deleteAddress addr rid = M.update deleteRouterID addr
+deleteAddress addr rid = update' deleteRouterID addr
   where
     deleteRouterID set
       | S.null set' = Nothing
