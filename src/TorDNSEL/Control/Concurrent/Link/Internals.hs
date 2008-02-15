@@ -235,7 +235,7 @@ linkThread tid = do
                        in tm' `seq` return (tm', Nothing)
       Nothing ->
         let s = state tm M.! me
-        in return (tm, Just . signal s (ident s) . Just . E.DynException .
+        in return (tm, Just . signal s tid . Just . E.DynException .
                          toDyn $ NonexistentThread)
   whenJust mbSignalSelf id
   where linkTogether x y = (x `linkTo` y) . (y `linkTo` x)
