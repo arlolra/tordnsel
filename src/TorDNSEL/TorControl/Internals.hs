@@ -215,7 +215,9 @@ openConnection handle mbPasswd = do
   conn@(tellIOManager,ioManagerTid) <- startIOManager handle
   confSettings <- newMVar []
 
-  E.handle (\e -> closeConnection' conn confSettings >> E.throwIO e) $ do
+  E.handle
+    (\e -> do ignoreJust syncExceptions (closeConnection' conn confSettings)
+              E.throwIO e) $ do
     let protInfoCommand = Command (b 12 "protocolinfo"#) [b 1 "1"#] []
     rs@(r:_) <- sendCommand' protInfoCommand False Nothing conn
     throwIfNotPositive protInfoCommand r
@@ -287,7 +289,7 @@ authenticate mbPasswd conn = do
     | otherwise                                   -> return Nothing
   let authCommand = Command (b 12 "authenticate"#) (maybeToList secret) []
   sendCommand authCommand False Nothing conn
-    >>= throwIfNotPositive authCommand . head
+    >>= throwIfNotPositive authCommand { comArgs = [b 10 "[scrubbed]"#] } . head
 
 -- | Control protocol extensions
 data Feature = ExtendedEvents -- ^ Extended event syntax
