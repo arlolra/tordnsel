@@ -11,7 +11,7 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (pattern guards, bang patterns, concurrency,
---                             STM, FFI, type synonym instances, overlapping
+--                             FFI, type synonym instances, overlapping
 --                             instances, undecidable instances)
 --
 -- Common utility functions.
@@ -76,18 +76,6 @@ module TorDNSEL.Util (
   , Port(..)
   , parsePort
 
-  -- * Bounded transactional FIFO channels
-  , BoundedTChan
-  , newBoundedTChan
-  , readBoundedTChan
-  , writeBoundedTChan
-
-  -- * Transactional quantity semaphores
-  , TQSemN
-  , newTQSemN
-  , waitTQSemN
-  , signalTQSemN
-
   -- * Escaped strings
   , EscapedString
   , escaped
@@ -109,9 +97,6 @@ module TorDNSEL.Util (
   ) where
 
 import Control.Arrow ((&&&), first, second)
-import Control.Concurrent.STM
-  ( STM, check, TVar, newTVar, readTVar, writeTVar
-  , TChan, newTChan, readTChan, writeTChan )
 import qualified Control.Exception as E
 import Control.Monad
   (liftM, liftM2, zipWithM_, when, unless, guard, MonadPlus(..))
@@ -623,59 +608,6 @@ parsePort bs = do
     throwError $ cat "Port " int " is out of range."
   return port
   where maxPortLen = 5
-
---------------------------------------------------------------------------------
--- Bounded transactional FIFO channels
-
--- | An abstract type representing a transactional FIFO channel of bounded size.
-data BoundedTChan a = BTChan (TChan a) (TVar Int) Int
-
--- | Create a new bounded channel of a given size.
-newBoundedTChan :: Int -> STM (BoundedTChan a)
-newBoundedTChan maxSize = do
-  currentSize <- newTVar 0
-  chan <- newTChan
-  return (BTChan chan currentSize maxSize)
-
--- | Read from a bounded channel, blocking until an item is available.
-readBoundedTChan :: BoundedTChan a -> STM a
-readBoundedTChan (BTChan chan currentSize _) = do
-  size <- readTVar currentSize
-  writeTVar currentSize (size - 1)
-  readTChan chan
-
--- | Write to a bounded channel, blocking until the channel is smaller than its
--- maximum size.
-writeBoundedTChan :: BoundedTChan a -> a -> STM ()
-writeBoundedTChan (BTChan chan currentSize maxSize) x = do
-  size <- readTVar currentSize
-  check (size < maxSize)
-  writeTVar currentSize (size + 1)
-  writeTChan chan x
-
---------------------------------------------------------------------------------
--- Transactional quantity semaphores
-
--- | A quantity semaphore in which the available quantity may be signalled or
--- waited for in arbitrary amounts. An STM analogue of 'QSemN'.
-newtype TQSemN = TQSemN (TVar Integer)
-
--- | Create a new semaphore with the given intial quantity.
-newTQSemN :: Integer -> STM TQSemN
-newTQSemN = fmap TQSemN . newTVar
-
--- | Wait for the specified quantity to become available.
-waitTQSemN :: TQSemN -> Integer -> STM ()
-waitTQSemN (TQSemN sem) quantity = do
-  available <- readTVar sem
-  check (quantity <= available)
-  writeTVar sem (available - quantity)
-
--- | Signal that a given quantity is now available.
-signalTQSemN :: TQSemN -> Integer -> STM ()
-signalTQSemN (TQSemN sem) quantity = do
-  available <- readTVar sem
-  writeTVar sem (available + quantity)
 
 --------------------------------------------------------------------------------
 -- Escaped strings
