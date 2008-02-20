@@ -8,33 +8,45 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (concurrency, STM, pattern guards, bang patterns)
+-- Portability : non-portable (concurrency, pattern guards, bang patterns)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
--- Managing our current view of the Tor network. The network state constantly
--- changes as we receive new router information from Tor and new exit test
--- results.
+-- Manages our current view of the Tor network, initiating test connections
+-- through exit nodes when necessary and storing results of those tests in
+-- the file system.
 --
 -----------------------------------------------------------------------------
 
 -- #not-home
 module TorDNSEL.NetworkState.Internals (
-  -- * Network state
-    Network(..)
-  , newNetwork
-  , emptyNetworkState
-
-  -- * State events
-  , updateDescriptors
-  , updateNetworkStatus
+    NetworkStateManager(..)
+  , networkStateMV
+  , NetworkStateManagerConfig(..)
+  , ExitTestConfig(..)
+  , ManagerState(..)
+  , ExitTestState(..)
+  , startNetworkStateManager
+  , reconfigureNetworkStateManager
+  , terminateNetworkStateManager
+  , handleMessage
   , withCookie
-  , updateExitAddress
+  , lookupRouters
+  , modifyNetworkState
   , readNetworkState
-  , StateEvent(..)
-  , stateEventHandler
-  , eventHandler
-  , testingEventHandler
+  , modify'
+
+  -- * Tor controller
+  , startTorController
+
+  -- * Exit tests
+  , initExitTestServerConfig
+  , initExitTestInitiatorConfig
+  , initializeExitTests
+  , terminateExitTests
+
+  -- * Pure network state updates
+  , mergeExitAddrsWithNetState
   , newExitAddress
   , newDescriptor
   , newRouterStatus
@@ -47,27 +59,36 @@ module TorDNSEL.NetworkState.Internals (
   ) where
 
 import Prelude hiding (log)
-import Control.Arrow ((&&&), second)
+import Control.Arrow ((&&&))
 import Control.Monad (liftM2, when)
 import Control.Monad.Fix (fix)
+import Control.Monad.State
+  (MonadState, StateT, runStateT, execStateT, get, gets, put, MonadIO, liftIO)
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
-import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
+import Control.Concurrent.Chan (newChan, readChan, writeChan)
+import Control.Concurrent.MVar
+  ( MVar, newEmptyMVar, newMVar, readMVar, swapMVar, takeMVar, putMVar
+  , tryPutMVar )
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
+import Data.ByteString.Char8 (ByteString)
 import Data.List (foldl')
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, isJust, fromMaybe)
 import qualified Data.Map as M
 import Data.Map (Map)
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime, diffUTCTime)
-import Network.Socket (HostAddress, SockAddr, Socket)
-import System.IO (Handle)
+import Network.Socket
+  ( HostAddress, SockAddr, Socket, Family(AF_INET), SocketType(Stream)
+  , socket, connect, sClose, socketToHandle )
+import System.IO (IOMode(ReadWriteMode))
+import System.IO.Unsafe (unsafePerformIO)
 
 import GHC.Prim (Addr#)
 
 import TorDNSEL.Control.Concurrent.Link
+import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
 import TorDNSEL.ExitTest.Initiator
 import TorDNSEL.ExitTest.Request
@@ -75,216 +96,490 @@ import TorDNSEL.ExitTest.Server
 import TorDNSEL.Log
 import TorDNSEL.NetworkState.Storage
 import TorDNSEL.NetworkState.Types
+import TorDNSEL.TorControl
 import TorDNSEL.Util
 
---------------------------------------------------------------------------------
--- Network state
+-- | A handle to the network state manager thread.
+data NetworkStateManager
+  = NetworkStateManager (ManagerMessage -> IO ()) ThreadId
 
--- | An abstract type supporting the interface to reading and updating the
--- network state.
-data Network = Network
-  { -- | A channel over which state changes are sent.
-    nChan  :: !(Chan StateEvent),
-    -- | The network state shared with an 'MVar'. This 'MVar' is read-only from
-    -- the point of view of other threads. It exists to overcome a performance
-    -- problem with pure message passing.
-    nState :: !(MVar NetworkState) }
+instance Thread NetworkStateManager where
+  threadId (NetworkStateManager _ tid) = tid
 
-type ExitTestConfig =
-  ([(SockAddr, Socket)], Handle, Integer, SockAddr, HostAddress, [Port])
+-- | A mutable variable containing the current network state.
+networkStateMV :: MVar NetworkState
+{-# NOINLINE networkStateMV #-}
+networkStateMV = unsafePerformIO $ newMVar emptyNetworkState
 
--- | Create a new network event handler given the exit test config and the path
--- to our state directory. This should only be called once.
-newNetwork :: Maybe (FilePath, ExitTestConfig) -> IO Network
-newNetwork testConf = do
-  net <- liftM2 Network newChan (newMVar emptyNetworkState)
-  forkIO $ stateEventHandler net testConf
-  return net
+-- | The network state manager configuration.
+data NetworkStateManagerConfig = NetworkStateManagerConfig
+  { -- | Address to connect to the Tor controller interface.
+    nsmcfTorControlAddr   :: !SockAddr,
+    -- | The password used for Tor controller auth.
+    nsmcfTorControlPasswd :: !(Maybe ByteString),
+    -- | Where to store exit test results.
+    nsmcfStateDir         :: !FilePath,
+    -- | The exit test configuration, if exit tests are enabled.
+    nsmcfExitTestConfig   :: !(Maybe ExitTestConfig) }
 
--- | The empty network state.
-emptyNetworkState :: NetworkState
-emptyNetworkState = NetworkState M.empty M.empty
+-- | The exit test configuration.
+data ExitTestConfig = ExitTestConfig
+  { -- | Addresses on which to listen for exit test connection and the
+    -- associated listening sockets, when they are open.
+    etcfListeners       :: !(Map SockAddr (Maybe Socket)),
+    -- | The maximum number of exit tests to run concurrently.
+    etcfConcClientLimit :: !Integer,
+    -- | Get an arbitrary number of bytes from OpenSSL's PRNG.
+    etcfGetRandBytes    :: !(Int -> IO ByteString),
+    -- | Where Tor is listening for SOCKS connections.
+    etcfTorSocksAddr    :: !SockAddr,
+    -- | The IP address to which we make exit test connections through Tor.
+    etcfTestAddress     :: !HostAddress,
+    -- | The ports to which we make exit test connections through Tor.
+    etcfTestPorts       :: ![Port] }
 
---------------------------------------------------------------------------------
--- State events
+-- | An internal type representing the current exit test manager state.
+data ManagerState = ManagerState
+  { networkState   :: !NetworkState
+  , torControlConn :: !(Either (ThreadId, Int) Connection)
+  , deadThreads    :: !(Set ThreadId)
+  , exitTestState  :: !(Maybe ExitTestState) }
 
--- | Update the network state with new router descriptors.
-updateDescriptors :: Network -> [Descriptor] -> IO ()
-updateDescriptors net = writeChan (nChan net) . NewDesc
+-- | An internal type representing the current exit test state.
+data ExitTestState = ExitTestState
+  { storageManager    :: !StorageManager
+  , exitTestServer    :: !ExitTestServer
+  , exitTestInitiator :: !ExitTestInitiator
+  , cookies           :: !(Map Cookie (RouterID, UTCTime, Port)) }
 
--- | Update the network state with new router status entries.
-updateNetworkStatus :: Network -> [RouterStatus] -> IO ()
-updateNetworkStatus net = writeChan (nChan net) . NewNS
-
--- | Register a mapping from cookie to fingerprint and descriptor published
--- time, passing the cookie to the given 'IO' action. The cookie is guaranteed
--- to be released when the action terminates.
-withCookie :: Network -> Handle -> RouterID -> UTCTime -> Port
-           -> (Cookie -> IO a) -> IO a
-withCookie net random rid published port =
-  E.bracket addNewCookie (writeChan (nChan net) . DeleteCookie)
-  where
-    addNewCookie = do
-      cookie <- newCookie random
-      writeChan (nChan net) (AddCookie cookie rid published port)
-      return cookie
-
--- | Update our known exit address from an incoming test connection.
-updateExitAddress :: Network -> UTCTime -> Cookie -> HostAddress -> IO ()
-updateExitAddress net tested c = writeChan (nChan net) . NewExitAddress tested c
-
--- | Read the current network state.
-readNetworkState :: Network -> IO NetworkState
-readNetworkState = readMVar . nState
-
--- | A message sent to update the network state.
-data StateEvent
-  -- | New descriptors are available.
-  = NewDesc ![Descriptor]
-  -- | New router status entries are available.
-  | NewNS ![RouterStatus]
-  -- | Discard inactive routers and old exit test results.
-  | ExpireOldInfo
-  -- | Map a new cookie to an exit node identity, descriptor published time,
+-- | An internal type for messages sent to the network state manager.
+data ManagerMessage
+  = NewDescriptors [Descriptor] -- ^ New descriptors are available.
+  | NewNetworkStatus [RouterStatus] -- ^ New router status entries are available
+  -- | Map a new cookie to an exit node identifier, descriptor published time,
   -- and port.
-  | AddCookie !Cookie !RouterID !UTCTime !Port
-  -- | Remove a cookie to exit node identity mapping.
-  | DeleteCookie !Cookie
-  -- | We've received a cookie from an incoming test connection.
-  | NewExitAddress !UTCTime !Cookie !HostAddress
-  -- | Rebuild the exit addresses storage.
-  | ReplaceExitAddresses
+  | MapCookie Cookie RouterID UTCTime Port
+  | UnmapCookie Cookie -- ^ Remove a cookie to exit node identity mapping.
+  -- | We've received a cookie from an incoming exit test connection.
+  | NewExitAddress UTCTime Cookie HostAddress
+  -- | Reconfigure the network state manager.
+  | Reconfigure (NetworkStateManagerConfig -> NetworkStateManagerConfig) (IO ())
+  | Terminate ExitReason -- ^ Terminate the network state manager gracefully.
+  -- | An exit signal sent to the network state manager.
+  | Exit ThreadId ExitReason
 
--- | Receive and carry out state update events.
-stateEventHandler :: Network -> Maybe (FilePath, ExitTestConfig) -> IO ()
-stateEventHandler net testConf = do
-  forkIO . forever $ do
-    -- check for and discard old routers every 30 minutes
-    threadDelay (30 * 60 * 10^6)
-    writeChan (nChan net) ExpireOldInfo
+-- | Start the network state manager given an initial config, returning a handle
+-- to it. Link the network state manager to the calling thread. If the network
+-- state manager exits before completely starting, throw its exit signal in the
+-- calling thread.
+startNetworkStateManager :: NetworkStateManagerConfig -> IO NetworkStateManager
+startNetworkStateManager initConf = do
+  log Notice "Starting network state manager."
+  chan <- newChan
+  sync <- newEmptyMVar
+  err <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar err
+  tid <- forkLinkIO $ do
+    takeMVar sync
+    setTrapExit $ (writeChan chan .) . Exit
+    net <- NetworkStateManager (writeChan chan) `fmap` myThreadId
+    (controller,deadTid) <- startTorController net initConf Nothing
+    let emptyState = ManagerState emptyNetworkState controller
+                                  (S.singleton deadTid) Nothing
+    initState <- case nsmcfExitTestConfig initConf of
+      -- Only fork exit test threads when the controller is running.
+      Just testConf | Right _ <- controller ->
+        execStateT (initializeExitTests net (nsmcfStateDir initConf) testConf)
+                   emptyState
+      _ -> return emptyState
+    swapMVar networkStateMV $! networkState initState
+    putResponse Nothing
+    flip fix (initConf, initState) $ \loop (!conf,!s) -> do
+      msg <- readChan chan
+      -- XXX This should be the strict StateT rather than the lazy one.
+      runStateT (handleMessage net conf msg) s >>= loop
 
-  maybe (eventHandler net) (testingEventHandler net) testConf
+  withMonitor tid putResponse $ do
+    putMVar sync ()
+    takeMVar err >>= flip whenJust E.throwIO
+  return $ NetworkStateManager (writeChan chan) tid
 
--- | Handle non-testing events.
-eventHandler :: Network -> IO ()
-eventHandler net = loop emptyNetworkState
-  where
-    loop s = do
-      event <- readChan $ nChan net
-      now <- getCurrentTime
-      case event of
-        NewDesc ds ->
-          let s' = foldl' (newDescriptor now) s ds
-          in s' `seq` swapMVar (nState net) s' >> loop s'
-        NewNS rss ->
-          let s' =  foldl' (newRouterStatus now) s rss
-          in s' `seq` swapMVar (nState net) s' >> loop s'
-        ExpireOldInfo ->
-          let s' = expireOldInfo now s
-          in s' `seq` swapMVar (nState net) s' >> loop s'
-        _ -> log Warn "Bug: TorDNSEL.NetworkState.Internals.eventHandler: \
-                      \Unexpected message"
+-- | Reconfigure the network state mananger synchronously with the given
+-- function. If the thread exits abnormally before reconfiguring itself, throw
+-- its exit signal in the calling thread.
+reconfigureNetworkStateManager
+  :: (NetworkStateManagerConfig -> NetworkStateManagerConfig)
+  -> NetworkStateManager -> IO ()
+reconfigureNetworkStateManager reconf (NetworkStateManager send tid) =
+  sendSyncMessage (send . Reconfigure reconf) tid
 
--- | Handle testing events.
-testingEventHandler :: Network -> (FilePath, ExitTestConfig) -> IO ()
-testingEventHandler
-  net (stateDir,(testSocks,random,concLimit,socksAddr,testAddr,testPorts)) = do
-  storage <- startStorageManager StorageConfig { stcfStateDir = stateDir }
+-- | Terminate the network state manager gracefully. The optional parameter
+-- specifies the amount of time in microseconds to wait for the thread to
+-- terminate. If the thread hasn't terminated by the timeout, an uncatchable
+-- exit signal will be sent.
+terminateNetworkStateManager :: Maybe Int -> NetworkStateManager -> IO ()
+terminateNetworkStateManager mbWait (NetworkStateManager send tid) =
+  terminateThread mbWait tid (send $ Terminate Nothing)
 
-  -- initialize network state with test results from state directory
-  exitAddrs <- readExitAddressesFromStorage storage
-  initNS <- flip expireOldInfo (initialNetState exitAddrs) `fmap` getCurrentTime
-  swapMVar (nState net) initNS
+-- | Process a 'ManagerMessage' and return the new config and state, given the
+-- current config and state.
+handleMessage
+  :: NetworkStateManager -> NetworkStateManagerConfig -> ManagerMessage
+  -> StateT ManagerState IO NetworkStateManagerConfig
+handleMessage _net conf (NewDescriptors ds) = do
+  now <- liftIO getCurrentTime
+  networkState' <- gets $ \s -> foldl' (newDescriptor now) (networkState s) ds
+  modifyNetworkState networkState'
+  mbTestState <- gets exitTestState
+  whenJust mbTestState $ \testState ->
+    liftIO $ notifyNewDirInfo (lookupRouters networkState' descRouterID ds)
+                              (exitTestInitiator testState)
+  return conf
 
-  -- remove old info and merge journal into exit-addresses
-  rebuildExitAddressStorage (nsRouters initNS) storage
+handleMessage _net conf (NewNetworkStatus rss) = do
+  now <- liftIO getCurrentTime
+  networkState' <- gets $ \s -> expireOldInfo now $ foldl' (newRouterStatus now)
+                                                           (networkState s) rss
+  modifyNetworkState networkState'
+  mbTestState <- gets exitTestState
+  whenJust mbTestState $ \testState -> liftIO $ do
+    notifyNewDirInfo (lookupRouters networkState' rsRouterID rss)
+                     (exitTestInitiator testState)
+    rebuildExitAddressStorage (nsRouters networkState')
+                              (storageManager testState)
+  return conf
 
-  startExitTestServer (map (second Just) testSocks) ExitTestServerConfig
-    { etscfNotifyNewExitAddress = updateExitAddress net
-    , etscfConcClientLimit = concLimit
-    , etscfListenAddrs = S.fromList $ map fst testSocks }
+handleMessage _net conf (MapCookie cookie rid published port) = do
+  mbTestState <- gets exitTestState
+  case mbTestState of
+    Just testState -> modify' $ \s ->
+      s { exitTestState = Just $! testState { cookies =
+            M.insert cookie (rid, published, port) (cookies testState) } }
+    Nothing -> log Debug "Ignoring request to map a cookie for router " rid
+                         " since exit tests are disabled."
+  return conf
 
-  testInitiator <- startExitTestInitiator ExitTestInitiatorConfig
-    { eticfGetNetworkState = readNetworkState net
-    , eticfWithCookie = withCookie net random
-    , eticfConcClientLimit = concLimit
-    , eticfSocksServer = socksAddr
-    , eticfTestAddr = testAddr
-    , eticfTestPorts = testPorts }
+handleMessage _net conf (UnmapCookie cookie) = do
+  mbTestState <- gets exitTestState
+  case mbTestState of
+    Just testState -> modify' $ \s ->
+      s { exitTestState = Just $! testState { cookies =
+            M.delete cookie (cookies testState) } }
+    Nothing -> log Debug "Ignoring request to unmap a cookie since exit tests \
+                         \are disabled."
+  return conf
 
-  forkIO . forever $ do
-    -- rebuild exit-addresses every 15 minutes so LastStatus entries
-    -- stay up to date
-    threadDelay (15 * 60 * 10^6)
-    writeChan (nChan net) ReplaceExitAddresses
-
-  flip fix (initNS, M.empty) $ \loop s@(ns, cookies) -> do
-    event <- readChan $ nChan net
-    now <- getCurrentTime
-    case event of
-      NewDesc ds -> do
-        let ns' = foldl' (newDescriptor now) ns ds
-        ns' `seq` swapMVar (nState net) ns'
-        notifyNewDirInfo (lookupRouters ns' descRouterID ds) testInitiator
-        loop (ns', cookies)
-
-      NewNS rss -> do
-        let ns' = foldl' (newRouterStatus now) ns rss
-        ns' `seq` swapMVar (nState net) ns'
-        notifyNewDirInfo (lookupRouters ns' rsRouterID rss) testInitiator
-        loop (ns', cookies)
-
-      ExpireOldInfo ->
-        let ns' = expireOldInfo now ns
-        in ns' `seq` swapMVar (nState net) ns' >> loop (ns', cookies)
-
-      AddCookie c rid published port ->
-        loop (ns, M.insert c (rid, published, port) cookies)
-
-      DeleteCookie c -> loop (ns, M.delete c cookies)
-
-      NewExitAddress tested c addr
-        | Just (rid,published,port) <- c  `M.lookup` cookies ->
-          case rid `M.lookup` nsRouters ns of
-            Nothing -> do
-              log Info "Received cookie for unrecognized router " rid
-                       "; discarding."
-              loop s
-            Just r -> do
+handleMessage _net conf (NewExitAddress tested cookie address) = do
+  mbTestState <- gets exitTestState
+  case mbTestState of
+    Nothing -> log Info "Ignoring exit test request from " (inet_htoa address)
+                        " since exit tests are disabled."
+    Just testState ->
+      case cookie `M.lookup` cookies testState of
+        Nothing -> log Info "Received unrecognized cookie from "
+                            (inet_htoa address) "; discarding."
+        Just (rid,published,port) -> do
+          mbRouter <- gets (M.lookup rid . nsRouters . networkState)
+          case mbRouter of
+            Nothing -> log Info "Received cookie for unrecognized router " rid
+                                "; discarding."
+            Just router -> do
               log Info "Exit test through router " rid " port " port
-                       " accepted from " (inet_htoa addr) '.'
-              let (r',ns') = newExitAddress tested published r rid addr ns
-              ns' `seq` swapMVar (nState net) ns'
+                      " accepted from " (inet_htoa address) '.'
+              (router',networkState') <- gets $ newExitAddress tested published
+                                               router rid address . networkState
+              modifyNetworkState networkState'
 
-              when ((M.member addr . tstAddresses) `fmap` rtrTestResults r ==
-                    Just False) $
+              when ((M.member address . tstAddresses) `fmap`
+                    rtrTestResults router == Just False) $
                 -- If we haven't seen this address before, test through this
                 -- router again in case the router is rotating exit addresses.
-                scheduleNextExitTest rid testInitiator
+                liftIO $ scheduleNextExitTest rid (exitTestInitiator testState)
 
-              storeNewExitAddress rid r' (nsRouters ns') storage
-              loop (ns', cookies)
-      NewExitAddress _tested _c addr -> do
-        log Info "Received unrecognized cookie from " (inet_htoa addr)
-                 "; discarding."
-        loop s
+              liftIO $ storeNewExitAddress rid router' (nsRouters networkState')
+                                           (storageManager testState)
+  return conf
 
-      ReplaceExitAddresses ->
-        rebuildExitAddressStorage (nsRouters ns) storage >> loop s
+handleMessage net conf (Reconfigure reconf signal) = do
+  when (nsmcfTorControlAddr conf /= nsmcfTorControlAddr newConf) $ do
+    controlConn <- gets torControlConn
+    deadTid1 <- case controlConn of
+      Left (tid,_) -> return tid
+      Right conn -> do
+        liftIO $ closeConnection conn
+        return $ threadId conn
+    (controller,deadTid2) <- startTorController net newConf Nothing
+    modify' $ \s -> s { torControlConn = controller
+                      , deadThreads = S.insert deadTid2 . S.insert deadTid1 $
+                                        deadThreads s }
+  s <- get
+  case exitTestState s of
+    Nothing
+      | Just testConf <- nsmcfExitTestConfig newConf
+      , Right _ <- torControlConn s ->
+          initializeExitTests net (nsmcfStateDir newConf) testConf
+      | otherwise -> return ()
+    Just testState
+      | Just testConf <- nsmcfExitTestConfig newConf
+      , Right _ <- torControlConn s -> liftIO $ do
+          flip reconfigureExitTestInitiator (exitTestInitiator testState) $
+            \c -> c { eticfConcClientLimit = etcfConcClientLimit testConf
+                    , eticfSocksServer = etcfTorSocksAddr testConf
+                    , eticfTestAddress = etcfTestAddress testConf
+                    , eticfTestPorts = etcfTestPorts testConf }
+          flip reconfigureExitTestServer (exitTestServer testState) $ \c ->
+            c { etscfConcClientLimit = etcfConcClientLimit testConf
+              , etscfListenAddrs = M.keysSet $ etcfListeners testConf }
+          reconfigureStorageManager
+            (\c -> c { stcfStateDir = nsmcfStateDir newConf })
+            (nsRouters $ networkState s) (storageManager testState)
+      | otherwise -> terminateExitTests testState
+  liftIO signal
+  return newConf
+  where newConf = reconf conf
+
+handleMessage _net _conf (Terminate reason) = do
+  s <- get
+  either (const $ return ()) (liftIO . closeConnection) (torControlConn s)
+  whenJust (exitTestState s) $ \testState -> do
+    terminateExitTests testState
+    return ()
+  liftIO $ exit reason
+
+handleMessage net conf (Exit tid reason) = get >>= handleExit where
+  handleExit s
+    | Left (timer,delay) <- torControlConn s, tid == timer = do
+        (controller,deadTid) <- startTorController net conf (Just delay)
+        put $! s { torControlConn = controller
+                 , deadThreads = S.insert deadTid (deadThreads s) }
+        case controller of
+          Right _ | Just testConf <- nsmcfExitTestConfig conf ->
+            initializeExitTests net (nsmcfStateDir conf) testConf
+          _ -> return ()
+        return conf
+    | Right conn <- torControlConn s, tid == threadId conn = do
+        log Warn "The Tor controller thread exited unexpectedly: "
+                 (showExitReason [showTorControlError] reason) "; restarting."
+        (controller,deadTid) <- startTorController net conf Nothing
+        put $! s { torControlConn = controller
+                 , deadThreads = S.insert deadTid (deadThreads s) }
+        case controller of
+          Left _ | Just testState <- exitTestState s ->
+            terminateExitTests testState
+          _ -> return ()
+        return conf
+    | tid `S.member` deadThreads s = do
+        put $! s { deadThreads = S.delete tid (deadThreads s) }
+        return conf
+    | otherwise
+    = case liftM2 (,) (nsmcfExitTestConfig conf) (exitTestState s) of
+        Just (testConf,testState)
+          | tid == toTid storageManager -> do
+              log Warn "The storage manager thread exited unexpectedly: "
+                      (showExitReason [] reason) "; restarting."
+              storage <- liftIO . startStorageManager . StorageConfig $
+                           nsmcfStateDir conf
+              liftIO $ rebuildExitAddressStorage (nsRouters $ networkState s)
+                                                 storage
+              putTestState testState { storageManager = storage }
+              return conf
+          | tid == toTid exitTestServer -> do
+              log Warn "The exit test server thread exited unexpectedly: "
+                       (showExitReason [] reason) "; restarting."
+              server <- liftIO $ startExitTestServer
+                                   (M.assocs $ etcfListeners testConf)
+                                   (initExitTestServerConfig net testConf)
+              putTestState testState { exitTestServer = server }
+              return conf
+          | tid == toTid exitTestInitiator -> do
+              log Warn "The exit test initiator thread exited unexpectedly: "
+                       (showExitReason [] reason) "; restarting."
+              initiator <- liftIO $ startExitTestInitiator
+                                      (initExitTestInitiatorConfig net testConf)
+              putTestState testState { exitTestInitiator = initiator }
+              return conf
+          where
+            toTid f = threadId $ f testState
+            putTestState x = put $! s { exitTestState = Just $! x}
+        _ | isJust reason -> liftIO $ exit reason
+          | otherwise -> return conf
+
+-- | Register a mapping from cookie to router identifier, descriptor published
+-- time and port, passing the cookie to the given 'IO' action. The cookie is
+-- guaranteed to be released when the action terminates.
+withCookie :: NetworkStateManager -> (Int -> IO ByteString) -> RouterID
+           -> UTCTime -> Port -> (Cookie -> IO a) -> IO a
+withCookie (NetworkStateManager send _) getRandBytes rid published port =
+  E.bracket addNewCookie (send . UnmapCookie) where
+    addNewCookie = do
+      cookie <- newCookie getRandBytes
+      send $ MapCookie cookie rid published port
+      return cookie
+
+-- | Lookup a list of routers in the network state.
+lookupRouters :: NetworkState -> (a -> RouterID) -> [a] -> [(RouterID, Router)]
+lookupRouters ns f =
+  mapMaybe $ \x -> let rid = f x in (,) rid `fmap` M.lookup rid (nsRouters ns)
+
+-- | Replace the current network state with a new network state.
+modifyNetworkState :: NetworkState -> StateT ManagerState IO ()
+modifyNetworkState ns = do
+  liftIO $ swapMVar networkStateMV $! ns
+  modify' $ \s -> s { networkState = ns }
+
+-- | Read the current network state.
+readNetworkState :: IO NetworkState
+readNetworkState = readMVar networkStateMV
+
+-- | A strict version of 'modify'.
+modify' :: MonadState s m => (s -> s) -> m ()
+modify' f = get >>= (put $!) . f
+
+--------------------------------------------------------------------------------
+-- Tor controller
+
+-- | Attempt to start the Tor controller, given a delay in seconds to wait
+-- before trying again if starting it fails. If starting the controller fails,
+-- return the 'ThreadId' of a timer thread counting down until the next attempt
+-- to start the controller. Also return the next delay period, subject to an
+-- exponential backoff. If starting the controller succeeds, return its
+-- 'ThreadId'.
+startTorController
+  :: MonadIO m => NetworkStateManager -> NetworkStateManagerConfig -> Maybe Int
+  -> m (Either (ThreadId, Int) Connection, ThreadId)
+startTorController net@(NetworkStateManager _ netTid) conf mbDelay = liftIO $ do
+  log Notice "Starting Tor controller."
+  sync <- newEmptyMVar
+  response <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar response
+  tid <- forkLinkIO $ do
+    takeMVar sync
+    E.bracketOnError (socket AF_INET Stream tcpProtoNum)
+                     (ignoreJust syncExceptions . sClose) $ \sock -> do
+      connect sock $ nsmcfTorControlAddr conf
+      E.bracketOnError
+        (do handle <- socketToHandle sock ReadWriteMode
+            openConnection handle $ nsmcfTorControlPasswd conf)
+        (ignoreJust syncExceptions . closeConnection) $ \conn -> do
+          setConfWithRollback fetchUselessDescriptors (Just True) conn
+          when (torVersion (protocolInfo conn) >= TorVersion 0 2 0 13 B.empty) $
+            setConfWithRollback fetchDirInfoEarly (Just True) conn
+
+          let newNS = networkStatusEvent (const $ updateNetworkStatus net)
+              newDesc = newDescriptorsEvent (const $ updateDescriptors net) conn
+          registerEventHandlers [newNS, newDesc] conn
+
+          getNetworkStatus conn >>= updateNetworkStatus net . fst
+          getAllDescriptors conn >>= updateDescriptors net . fst
+
+          putResponse $ Right conn
+          linkThread netTid
+  r <- withMonitor tid (putResponse . Left) $ do
+    putMVar sync ()
+    takeMVar response
+  case r of
+    Left reason -> do
+      log Warn "Initializing Tor controller connection failed: "
+                (showExitReason [showTorControlError] reason)
+                "; I'll try again in " delay " seconds."
+      timerTid <- forkLinkIO $ threadDelay (delay * 10^6)
+      return (Left (timerTid, nextDelay), tid)
+    Right conn -> do
+      linkThread $ threadId conn
+      log Notice "Successfully initialized Tor controller connection."
+      return (Right conn, tid)
   where
-    lookupRouters ns f =
-      mapMaybe $ \x -> let rid = f x
-                       in (,) rid `fmap` M.lookup rid (nsRouters ns)
+    updateDescriptors (NetworkStateManager send _) = send . NewDescriptors
+    updateNetworkStatus (NetworkStateManager send _) = send . NewNetworkStatus
+    nextDelay | delay' < maxDelay = delay'
+             | otherwise          = maxDelay
+    delay' = delay * backoffFactor
+    delay = fromMaybe minDelay mbDelay
+    backoffFactor = 2
+    minDelay = 3
+    maxDelay = 300
 
-    initialNetState exitAddrs =
-      NetworkState (foldl' insertExits M.empty exitAddrs)
-                   (M.fromDistinctAscList $ map initialRouter exitAddrs)
-      where
-        insertExits addrs (ExitAddress rid _ _ exits) =
-          foldl' (\addrs' addr -> insertAddress addr rid addrs') addrs
-                 (M.keys exits)
-        initialRouter (ExitAddress rid pub status exits) =
-          (,) rid $! Router Nothing (Just $! TestResults pub exits) False status
+--------------------------------------------------------------------------------
+-- Exit tests
+
+-- | The initial exit test server config.
+initExitTestServerConfig
+  :: NetworkStateManager -> ExitTestConfig -> ExitTestServerConfig
+initExitTestServerConfig net conf = ExitTestServerConfig
+  { etscfNotifyNewExitAddress = updateExitAddress net
+  , etscfConcClientLimit = etcfConcClientLimit conf
+  , etscfListenAddrs = M.keysSet $ etcfListeners conf }
+  where
+    updateExitAddress (NetworkStateManager send _) tested cookie address =
+      send $ NewExitAddress tested cookie address
+
+-- | The initial exit test initiator config.
+initExitTestInitiatorConfig
+  :: NetworkStateManager -> ExitTestConfig -> ExitTestInitiatorConfig
+initExitTestInitiatorConfig net conf = ExitTestInitiatorConfig
+  { eticfGetNetworkState = readNetworkState
+  , eticfWithCookie = withCookie net (etcfGetRandBytes conf)
+  , eticfConcClientLimit = etcfConcClientLimit conf
+  , eticfSocksServer = etcfTorSocksAddr conf
+  , eticfTestAddress = etcfTestAddress conf
+  , eticfTestPorts = etcfTestPorts conf }
+
+-- | Enable exit testing by starting the storage manager, merging exit addresses
+-- from the store into the current network state, starting the exit test server,
+-- and starting the exit test initiator.
+initializeExitTests :: NetworkStateManager -> FilePath -> ExitTestConfig
+                    -> StateT ManagerState IO ()
+initializeExitTests net stateDir conf = do
+  log Notice "Initializing exit tests."
+  storage <- liftIO . startStorageManager $ StorageConfig stateDir
+  exitAddrs <- liftIO $ readExitAddressesFromStorage storage
+  now <- liftIO getCurrentTime
+  modify' $ \s -> s { networkState = expireOldInfo now .
+                       mergeExitAddrsWithNetState exitAddrs . networkState $ s }
+  routers <- gets (nsRouters . networkState)
+  liftIO $ rebuildExitAddressStorage routers storage
+  testServer <- liftIO $ startExitTestServer (M.assocs $ etcfListeners conf)
+                                             (initExitTestServerConfig net conf)
+  testInitiator <- liftIO . startExitTestInitiator $
+                     initExitTestInitiatorConfig net conf
+  let newTestState = ExitTestState storage testServer testInitiator M.empty
+  modify' $ \s -> s { exitTestState = Just $! newTestState }
+
+-- | Terminate all the threads enabling and supporting exit tests.
+terminateExitTests :: ExitTestState -> StateT ManagerState IO ()
+terminateExitTests testState = do
+  log Notice "Halting exit tests."
+  liftIO $ do
+    terminateExitTestInitiator Nothing $ exitTestInitiator testState
+    terminateExitTestServer Nothing $ exitTestServer testState
+    terminateStorageManager Nothing $ storageManager testState
+  modify' $ \s ->
+    s { exitTestState = Nothing
+      , deadThreads = foldl' (flip S.insert) (deadThreads s)
+                             [ threadId $ exitTestInitiator testState
+                             , threadId $ exitTestServer testState
+                             , threadId $ storageManager testState ] }
+
+--------------------------------------------------------------------------------
+-- Pure network state updates
+
+-- | Merge a list of exit addresses from the store with the network state.
+mergeExitAddrsWithNetState :: [ExitAddress] -> NetworkState -> NetworkState
+mergeExitAddrsWithNetState = flip $ foldl' mergeAddr where
+  mergeAddr (NetworkState addrs rtrs) (ExitAddress rid pub status exits) =
+    NetworkState (foldl' insertAddr addrs $ M.keys exits)
+                 (alter' updateRouter rid rtrs)
+    where
+      insertAddr addrs' addr = insertAddress addr rid addrs'
+      updateRouter Nothing  = Just initialRouter
+      updateRouter (Just r) =
+        Just r { rtrTestResults = mergeTestResults (rtrTestResults r) }
+      mergeTestResults Nothing    = Just $! initialTestResults
+      mergeTestResults (Just old) =
+        Just $! TestResults (pub `max` tstPublished old)
+                            (M.unionWith max (tstAddresses old) exits)
+      initialRouter = Router Nothing (Just $! initialTestResults) False status
+      initialTestResults = TestResults pub exits
 
 -- | Update the network state with the results of an exit test. Return the
 -- updated router information.
@@ -399,5 +694,5 @@ deleteAddress addr rid = update' deleteRouterID addr
 -- Aliases
 
 -- | An alias for unsafePackAddress.
-b :: Int -> Addr# -> B.ByteString
+b :: Int -> Addr# -> ByteString
 b = B.unsafePackAddress

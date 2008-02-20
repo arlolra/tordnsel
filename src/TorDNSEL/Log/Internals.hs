@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE TypeSynonymInstances, OverlappingInstances #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -8,7 +8,7 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (concurrency, extended exceptions,
---                             type synonym instances)
+--                             type synonym instances, overlapping instances)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
@@ -27,6 +27,7 @@ import Control.Concurrent.MVar
 import qualified Control.Exception as E
 import Control.Monad (when, liftM2)
 import Control.Monad.Fix (fix)
+import Control.Monad.Trans (MonadIO, liftIO)
 import Data.Time (UTCTime, getCurrentTime)
 import System.IO
   (Handle, stdout, stderr, openFile, IOMode(AppendMode), hFlush, hClose)
@@ -104,8 +105,9 @@ startLogger config = do
             msg <- readChan logChan
             case msg of
               Log time severity text -> do
-                when (logEnabled conf && severity >= minSeverity conf) $
+                when (logEnabled conf && severity >= minSeverity conf) $ do
                   hCat handle (showUTCTime time) " [" severity "] " text '\n'
+                  hFlush handle
                 nextMsg
               Reconfigure reconf newSignal -> return (reconf conf, newSignal)
               Terminate reason -> exit reason
@@ -117,8 +119,8 @@ startLogger config = do
 class LogType r where
   log' :: CatArg a => ShowS -> Severity -> a -> r
 
-instance LogType (IO a) where
-  log' str sev arg = do
+instance MonadIO m => LogType (m a) where
+  log' str sev arg = liftIO $ do
     now <- getCurrentTime
     withLogger $ \_ logChan -> do
       writeChan logChan (Log now sev (cat' str arg))

@@ -19,6 +19,7 @@
 -- #not-home
 module TorDNSEL.NetworkState.Storage.Internals where
 
+import Prelude hiding (log)
 import Control.Arrow (second, (&&&))
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar (newEmptyMVar, tryPutMVar, takeMVar)
@@ -46,6 +47,7 @@ import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
 import TorDNSEL.Document
+import TorDNSEL.Log
 import TorDNSEL.NetworkState.Types
 import TorDNSEL.Util
 
@@ -85,6 +87,7 @@ data StorageManagerState = StorageManagerState
 -- calling thread.
 startStorageManager :: StorageConfig -> IO StorageManager
 startStorageManager initConf = do
+  log Notice "Starting storage manager."
   initState <- liftM2 (StorageManagerState initConf)
     (getFileSize (stcfStateDir initConf ++ storePath))
     (getFileSize (stcfStateDir initConf ++ journalPath))
@@ -126,7 +129,9 @@ startStorageManager initConf = do
             | otherwise -> newSignal >> loop s { storageConf = newConf }
             where newConf = reconf (storageConf s)
 
-          Terminate reason -> exit reason
+          Terminate reason -> do
+            log Notice "Terminating storage manager."
+            exit reason
 
   withMonitor storageTid putResponse $
     takeMVar err >>= flip whenJust E.throwIO

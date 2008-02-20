@@ -121,7 +121,7 @@ data ExitTestInitiatorConfig = ExitTestInitiatorConfig
     -- | Where Tor is listening for SOCKS connections.
     eticfSocksServer     :: !SockAddr,
     -- | The IP address to which we make exit test connections through Tor.
-    eticfTestAddr        :: !HostAddress,
+    eticfTestAddress     :: !HostAddress,
     -- | The ports to which we make exit test connections through Tor.
     eticfTestPorts       :: ![Port] }
 
@@ -142,9 +142,11 @@ data TestStatus
   deriving Eq
 
 -- | Start the exit test initiator thread, given an initial config. Return a
--- handle to the thread.
+-- handle to the thread. Link the exit test initiator thread to the calling
+-- thread.
 startExitTestInitiator :: ExitTestInitiatorConfig -> IO ExitTestInitiator
 startExitTestInitiator initConf = do
+  log Notice "Starting exit test initiator."
   chan <- newChan
   initiatorTid <- forkLinkIO $ do
     setTrapExit ((writeChan chan .) . Exit)
@@ -224,6 +226,7 @@ handleMessage conf s (Reconfigure reconf signal) =
   signal >> return (reconf conf, s)
 
 handleMessage _ s (Terminate reason) = do
+  log Notice "Terminating exit test initiator."
   F.forM_ (runningClients s) $ \client ->
     terminateThread Nothing client (killThread client)
   exit reason
@@ -267,7 +270,7 @@ scheduleNextExitTest rid (ExitTestInitiator send _) =
   send $ ScheduleNextExitTest rid
 
 -- | Reconfigure the exit test initiator synchronously with the given function.
--- If the server exits abnormally before reconfiguring itself, throw its exit
+-- If the initiator exits abnormally before reconfiguring itself, throw its exit
 -- signal in the calling thread.
 reconfigureExitTestInitiator
   :: (ExitTestInitiatorConfig -> ExitTestInitiatorConfig) -> ExitTestInitiator
@@ -305,7 +308,7 @@ testsToSchedule conf routers =
             | otherwise -> anyAllowedPorts (descExitPolicy d)
 
     anyAllowedPorts policy =
-      any (\port -> exitPolicyAccepts (eticfTestAddr conf) port policy)
+      any (\port -> exitPolicyAccepts (eticfTestAddress conf) port policy)
           (eticfTestPorts conf)
 
 -- | Given the current network state and the queue of pending exit tests, return
@@ -332,7 +335,7 @@ testsToExecute conf routers q
       return (rid, ports', posixSecondsToUTCTime $ descPublished d, q')
 
     allowedPorts policy =
-      filter (\port -> exitPolicyAccepts (eticfTestAddr conf) port policy)
+      filter (\port -> exitPolicyAccepts (eticfTestAddress conf) port policy)
              (eticfTestPorts conf)
 
     queueTails = unfoldr (maybe Nothing (\r@(_,q') -> Just (r,q')) . Q.dequeue)
@@ -361,8 +364,8 @@ forkTestClient conf rid published port =
         log Info "Exit test for router " rid " port " port " failed: " e'
         E.throwIO e
       Left e -> do
-        log Warn "Exit test for router " rid " port " port " failed (" e
-                 "). This might indicate a problem with making application \
+        log Warn "Exit test for router " rid " port " port " failed : " e
+                 ". This might indicate a problem with making application \
                  \connections through Tor. Is Tor running? Is its SocksPort \
                  \listening on " (eticfSocksServer conf) '?'
         E.throwIO e
@@ -373,7 +376,7 @@ forkTestClient conf rid published port =
   where
     exitHost = B.concat [ testHost, b 1 "."#, encodeBase16RouterID rid
                         , b 5 ".exit"# ]
-    testHost = B.pack . inet_htoa . eticfTestAddr $ conf
+    testHost = B.pack . inet_htoa . eticfTestAddress $ conf
 
     connectToSocksServer =
       E.bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do

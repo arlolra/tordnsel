@@ -90,18 +90,22 @@ data SocketOwner
 
 -- | An internal type for messages sent to the exit test server.
 data ServerMessage
-  = NewClient Socket HostAddress
+  = NewClient Socket HostAddress -- ^ A new client accepted by a listener.
+  -- | Reconfigure the exit test server.
   | Reconfigure (ExitTestServerConfig -> ExitTestServerConfig) (IO ())
-  | Terminate ExitReason
-  | Exit ThreadId ExitReason
+  | Terminate ExitReason -- ^ Terminate the exit test server gracefully.
+  | Exit ThreadId ExitReason -- ^ An exit signal sent to the exit test server.
 
 -- | Start the exit test server thread, given an initial config and a list of
 -- listeners, returning a handle to the thread. If the exit test server exits
 -- abnormally before initializing itself, throw its exit signal in the calling
--- thread. Link the exit test server thread to the calling thread.
+-- thread. Link the exit test server thread to the calling thread. If the exit
+-- test server exits before completely starting, throw its exit signal in the
+-- calling thread.
 startExitTestServer
   :: [(SockAddr, Maybe Socket)] -> ExitTestServerConfig -> IO ExitTestServer
 startExitTestServer socks initConf = do
+  log Notice "Starting exit test server."
   chan <- newChan
   err <- newEmptyMVar
   let putResponse = (>> return ()) . tryPutMVar err
@@ -156,7 +160,7 @@ reopenSocketIfClosed addr mbSock = MaybeT $ do
       r <- E.tryJust E.ioErrors $ bindListeningTCPSocket addr
       case r of
         Left e -> do
-          log Warn "Opening exit test listener on " addr " failed (" e "); \
+          log Warn "Opening exit test listener on " addr " failed: " e "; \
                    \skipping listener."
           return Nothing
         Right sock -> do
@@ -235,6 +239,7 @@ handleMessage conf s (Reconfigure reconf signal) = do
     newConf = reconf conf
 
 handleMessage _conf s (Terminate reason) = do
+  log Notice "Terminating exit test server."
   mapM_ (uncurry closeListener) (M.assocs $ listenerThreads s)
   F.mapM_ (\tid -> terminateThread Nothing tid (killThread tid))
           (handlers s)
@@ -250,8 +255,8 @@ handleMessage conf s (Exit tid reason)
   | tid `S.member` deadListeners s
   = return (conf, s { deadListeners = S.delete tid (deadListeners s) })
   | Just (Listener addr sock owner) <- tid `M.lookup` listenerThreads s = do
-      log Warn "An exit test listener thread for " addr " exited unexpectedly ("
-               (fromJust reason) "); restarting."
+      log Warn "An exit test listener thread for " addr " exited unexpectedly: "
+               (fromJust reason) "; restarting."
       mbSock <- runMaybeT $ reopenSocketIfClosed addr (Just sock)
       case mbSock of
         -- The socket couldn't be reopened, so drop the listener.

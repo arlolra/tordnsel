@@ -79,6 +79,7 @@ module TorDNSEL.TorControl (
   -- * Errors
   , ReplyCode
   , TorControlError(..)
+  , showTorControlError
   ) where
 
 import TorDNSEL.TorControl.Internals

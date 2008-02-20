@@ -23,7 +23,6 @@
 module TorDNSEL.Main (
   -- * Top level functionality
     main
-  , torController
 
   -- * Daemon operations
   , getIDs
@@ -40,24 +39,23 @@ module TorDNSEL.Main (
   , chroot
   ) where
 
+import Prelude hiding (log)
+import Control.Arrow (second)
 import qualified Control.Concurrent as C
-import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
+import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import qualified Control.Exception as E
 import Control.Monad (when, unless, liftM, forM, forM_)
 import Control.Monad.Fix (fix)
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
-import Data.Dynamic (fromDynamic)
 import qualified Data.Map as M
 import Data.Maybe (isJust)
 import System.Environment (getArgs)
 import System.IO
   ( openFile, hPutStr, hPutStrLn, hFlush, hClose, stderr
-  , IOMode(WriteMode, ReadWriteMode, AppendMode) )
-import Network.Socket
-  ( socket, sClose, connect, socketToHandle, SockAddr(SockAddrInet)
-  , Family(AF_INET), SocketType(Stream) )
+  , IOMode(WriteMode, AppendMode) )
+import Network.Socket (SockAddr(SockAddrInet))
 
 import System.Exit (ExitCode(ExitSuccess))
 import System.Directory (setCurrentDirectory, createDirectoryIfMissing)
@@ -92,7 +90,6 @@ import TorDNSEL.Log
 import TorDNSEL.NetworkState
 import TorDNSEL.Random
 import TorDNSEL.Statistics
-import TorDNSEL.TorControl
 import TorDNSEL.Util
 
 #include <sys/types.h>
@@ -148,12 +145,15 @@ main = do
         (bindListeningTCPSocket sockAddr)
         (exitWith . cat "Binding listening socket to port " port " failed: ")
       return (sockAddr, sock)
-
     random <- exitLeft =<< openRandomDevice
     seedPRNG random
-    return ( testSocks, random, (availableFileDesc - extraFileDesc) `div` 2
-           , cfTorSocksAddress conf, fst $ tcfTestDestinationAddress testConf
-           , snd $ tcfTestDestinationAddress testConf)
+    return ExitTestConfig
+      { etcfListeners = M.fromList $ map (second Just) testSocks
+      , etcfConcClientLimit = (availableFileDesc - extraFileDesc) `div` 2
+      , etcfGetRandBytes = randBytes random
+      , etcfTorSocksAddr = cfTorSocksAddress conf
+      , etcfTestAddress = fst $ tcfTestDestinationAddress testConf
+      , etcfTestPorts = snd $ tcfTestDestinationAddress testConf }
 
   pidHandle <- E.catchJust E.ioErrors
                  (flip openFile WriteMode `liftMb` cfPIDFile conf)
@@ -185,23 +185,25 @@ main = do
       else startLogger newLogConfig
 
     mainThread <- C.myThreadId
+    installHandler sigPIPE Ignore Nothing
     forM_ [sigINT, sigTERM] $ \signal ->
       flip (installHandler signal) Nothing . Catch $
         E.throwTo mainThread (E.ExitException ExitSuccess)
 
-    net <- newNetwork $ ((,) (cfStateDirectory conf)) `fmap` mbTestConf
-
-    let controller = torController net (cfTorControlAddress conf)
-                                   (cfTorControlPassword conf)
-    installHandler sigPIPE Ignore Nothing
     forkIO $ do
       exitChan <- newChan
       setTrapExit (curry $ writeChan exitChan)
-      forever . E.catchJust connExceptions (controller exitChan) $ \e -> do
-        -- XXX this should be logged
-        unless (cfRunAsDaemon conf) $
-          hPutStrLn stderr (showConnException e) >> hFlush stderr
-        C.threadDelay (5 * 10^6)
+      forever $ do
+        net <- startNetworkStateManager NetworkStateManagerConfig
+          { nsmcfTorControlAddr = cfTorControlAddress conf
+          , nsmcfTorControlPasswd = cfTorControlPassword conf
+          , nsmcfStateDir = cfStateDirectory conf
+          , nsmcfExitTestConfig = mbTestConf }
+        (tid,reason) <- readChan exitChan
+        if tid == threadId net
+          then log Warn "The network state manager thread exited unexpectedly: "
+                        (showExitReason [] reason) "; restarting."
+          else whenJust reason E.throwIO
 
     startStatsServer StatsConfig { scfStateDir = cfStateDirectory conf }
 
@@ -217,11 +219,10 @@ main = do
           , dnsByteStats = incrementBytes
           , dnsRespStats = incrementResponses }
 
-    -- start the DNS server
     exitChan <- newChan
     setTrapExit (curry $ writeChan exitChan)
     forever $ E.catchJust E.ioErrors
-        (do dnsServer <- startDNSServer net dnsConf
+        (do dnsServer <- startDNSServer dnsConf
             fix $ \loop -> do
               (tid,reason) <- readChan exitChan
               if tid == threadId dnsServer
@@ -232,46 +233,6 @@ main = do
                     -- XXX this should be logged
                     hPutStrLn stderr (show e) >> hFlush stderr
                   C.threadDelay (5 * 10^6))
-  where
-    connExceptions e@(E.IOException _)                = Just e
-    connExceptions e@(E.DynException e')
-      | Just (_ :: TorControlError) <- fromDynamic e' = Just e
-    connExceptions _                                  = Nothing
-
-    showConnException (E.IOException e) = show e
-    showConnException (E.DynException e)
-      | Just (e' :: TorControlError) <- fromDynamic e
-      = "Tor control error: " ++ show e'
-    showConnException _ = "bug: unknown exception type"
-
--- | Connect to Tor using the controller interface. Initialize our network state
--- with all the routers Tor knows about and register asynchronous events to
--- notify us and update the state when updated router info comes in.
-torController :: Network -> SockAddr -> Maybe ByteString
-              -> Chan (ThreadId, ExitReason) -> IO ()
-torController net control mbPasswd exitChan = do
-  handle <- E.bracketOnError (socket AF_INET Stream tcpProtoNum)
-                             sClose $ \sock -> do
-    connect sock control
-    socketToHandle sock ReadWriteMode
-
-  withConnection handle mbPasswd $ \conn -> do
-    setConfWithRollback fetchUselessDescriptors (Just True) conn
-    when (torVersion (protocolInfo conn) >= TorVersion 0 2 0 13 B.empty) $
-      setConfWithRollback fetchDirInfoEarly (Just True) conn
-
-    let newNS = networkStatusEvent (const $ updateNetworkStatus net)
-        newDesc = newDescriptorsEvent (const $ updateDescriptors net) conn
-    registerEventHandlers [newNS, newDesc] conn
-
-    getNetworkStatus conn >>= updateNetworkStatus net . fst
-    getAllDescriptors conn >>= updateDescriptors net . fst
-
-    fix $ \loop -> do
-      (tid,reason) <- readChan exitChan
-      if tid == threadId conn
-        then whenJust reason E.throwIO
-        else maybe loop (const $ exit reason) reason
 
 -- | Check if the log target can be used. If it can, return it. Otherwise,
 -- return 'ToStdOut'.

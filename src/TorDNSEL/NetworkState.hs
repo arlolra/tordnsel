@@ -5,23 +5,22 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (concurrency, STM, pattern guards)
+-- Portability : non-portable (concurrency, pattern guards, bang patterns)
 --
--- Managing our current view of the Tor network. The network state constantly
--- changes as we receive new router information from Tor and new exit test
--- results.
+-- Manages our current view of the Tor network, initiating test connections
+-- through exit nodes when necessary and storing results of those tests in
+-- the file system.
 --
 -----------------------------------------------------------------------------
 
 module TorDNSEL.NetworkState (
-  -- * Network state
-    Network
-  , newNetwork
+    NetworkStateManager
+  , NetworkStateManagerConfig(..)
+  , ExitTestConfig(..)
+  , startNetworkStateManager
   , readNetworkState
-
-  -- * State events
-  , updateDescriptors
-  , updateNetworkStatus
+  , reconfigureNetworkStateManager
+  , terminateNetworkStateManager
   ) where
 
 import TorDNSEL.NetworkState.Internals

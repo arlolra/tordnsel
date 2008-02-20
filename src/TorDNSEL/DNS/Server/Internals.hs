@@ -75,13 +75,13 @@ data DNSMessage
   | Terminate ExitReason -- ^ Terminate the DNS server gracefully
   deriving Typeable
 
--- | Given a 'Network' and an initial 'DNSConfig', start the DNS server and
--- return a handle to it. Link the DNS server to the calling thread.
-startDNSServer :: Network -> DNSConfig -> IO DNSServer
-startDNSServer net = fmap DNSServer . forkLinkIO . E.block . loop where
+-- | Given an initial 'DNSConfig', start the DNS server and return a handle to
+-- it. Link the DNS server to the calling thread.
+startDNSServer :: DNSConfig -> IO DNSServer
+startDNSServer = fmap DNSServer . forkLinkIO . E.block . loop where
   loop conf = do
     r <- E.tryJust fromExitSignal . E.unblock $
-           runServer (dnsSocket conf) (dnsByteStats conf) (dnsHandler conf net)
+           runServer (dnsSocket conf) (dnsByteStats conf) (dnsHandler conf)
     case r of
       Left (_,Reconfigure reconf signal) -> do
         let newConf = reconf conf
@@ -108,14 +108,13 @@ terminateDNSServer mbWait (DNSServer tid) =
   terminateThread mbWait tid (throwDynTo tid $ Terminate Nothing)
 
 -- | A stateful wrapper for 'dnsResponse'.
-dnsHandler :: DNSConfig -> Network -> Message -> IO (Maybe Message)
+dnsHandler :: DNSConfig -> Message -> IO (Maybe Message)
 {-# INLINE dnsHandler #-}
-dnsHandler conf net msg
+dnsHandler conf msg
   -- draft-arends-dnsext-qr-clarification-00
   | msgQR msg = return Nothing
   | otherwise = do
-      (typ,resp) <- liftM2 (dnsResponse conf msg) getPOSIXTime
-                           (readNetworkState net)
+      (typ,resp) <- liftM2 (dnsResponse conf msg) getPOSIXTime readNetworkState
       dnsRespStats conf typ
       return $ Just resp
 

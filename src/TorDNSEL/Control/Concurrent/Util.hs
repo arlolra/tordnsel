@@ -14,6 +14,7 @@ module TorDNSEL.Control.Concurrent.Util where
 
 import qualified Control.Exception as E
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar, tryPutMVar)
+import Data.Dynamic (Dynamic)
 import Data.Maybe (isJust)
 
 import TorDNSEL.Control.Concurrent.Link
@@ -66,3 +67,8 @@ call sendMsg tid = do
       Left Nothing  -> E.throwDyn NonexistentThread
       Left (Just e) -> E.throwIO e
       Right r       -> return r
+
+-- | A wrapper for using 'showException' with 'ExitReason's.
+showExitReason :: [Dynamic -> Maybe String] -> ExitReason -> String
+showExitReason _ Nothing   = "Normal exit"
+showExitReason fs (Just e) = showException (showLinkException:fs) e

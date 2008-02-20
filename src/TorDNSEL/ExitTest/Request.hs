@@ -36,7 +36,6 @@ import System.IO (Handle)
 
 import GHC.Prim (Addr#)
 
-import TorDNSEL.Random
 import TorDNSEL.Util
 
 --------------------------------------------------------------------------------
@@ -106,8 +105,8 @@ newtype Cookie = Cookie { unCookie :: B.ByteString }
   deriving (Eq, Ord)
 
 -- | Create a new cookie from pseudo-random data.
-newCookie :: Handle -> IO Cookie
-newCookie random = Cookie `fmap` randBytes random cookieLen
+newCookie :: (Int -> IO B.ByteString) -> IO Cookie
+newCookie getRandBytes = Cookie `fmap` getRandBytes cookieLen
 
 -- | The cookie length in bytes.
 cookieLen :: Int

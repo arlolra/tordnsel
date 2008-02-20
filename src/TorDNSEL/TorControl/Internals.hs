@@ -126,6 +126,7 @@ module TorDNSEL.TorControl.Internals (
   , protocolError
   , parseError
   , TorControlError(..)
+  , showTorControlError
   , toTCError
   , parseReplyCode
   , throwIfNotPositive
@@ -147,7 +148,7 @@ import Control.Monad.State (StateT(StateT), get, put, lift, evalStateT)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
-import Data.Dynamic (fromDynamic)
+import Data.Dynamic (Dynamic, fromDynamic)
 import Data.List (find)
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, maybeToList, listToMaybe, isNothing, isJust)
@@ -1127,6 +1128,11 @@ instance Show TorControlError where
   showsPrec _ (ParseError msg) = cat "Parsing error: " msg
   showsPrec _ (ProtocolError msg) = cat "Protocol error: " msg
   showsPrec _ ConnectionClosed = ("Connection is already closed" ++)
+
+-- | Boilerplate conversion of a dynamically typed 'TorControlError' to a
+-- string.
+showTorControlError :: Dynamic -> Maybe String
+showTorControlError = fmap (show :: TorControlError -> String) . fromDynamic
 
 -- | Given a command, return a \"command failed\" message.
 commandFailed :: Command -> ShowS

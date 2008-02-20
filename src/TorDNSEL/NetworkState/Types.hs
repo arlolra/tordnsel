@@ -14,6 +14,7 @@
 module TorDNSEL.NetworkState.Types where
 
 import Data.Map (Map)
+import qualified Data.Map as M
 import Data.Time (UTCTime)
 import Data.Set (Set)
 import Network.Socket (HostAddress)
@@ -44,3 +45,7 @@ data NetworkState = NetworkState
     nsAddrs   :: {-# UNPACK #-} !(Map HostAddress (Set RouterID)),
     -- | All the routers we know about.
     nsRouters :: {-# UNPACK #-} !(Map RouterID Router) }
+
+-- | The empty network state.
+emptyNetworkState :: NetworkState
+emptyNetworkState = NetworkState M.empty M.empty
