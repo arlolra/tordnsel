@@ -72,3 +72,20 @@ call sendMsg tid = do
 showExitReason :: [Dynamic -> Maybe String] -> ExitReason -> String
 showExitReason _ Nothing   = "Normal exit"
 showExitReason fs (Just e) = showException (showLinkException:fs) e
+
+-- | Invoke the given 'IO' action in a new thread, passing it an action to
+-- invoke when it has successfully started. Link the new thread to the calling
+-- thread. If the thread exits before signaling that it has successfully
+-- started, throw its exit signal in the calling thread.
+startLink :: (IO () -> IO a) -> IO ThreadId
+startLink io = do
+  sync <- newEmptyMVar
+  err <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar err
+  tid <- forkLinkIO $ do
+    takeMVar sync
+    io (putResponse Nothing)
+  withMonitor tid putResponse $ do
+    putMVar sync ()
+    takeMVar err >>= flip whenJust E.throwIO
+  return tid

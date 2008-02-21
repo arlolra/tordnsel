@@ -22,7 +22,6 @@ module TorDNSEL.NetworkState.Storage.Internals where
 import Prelude hiding (log)
 import Control.Arrow (second, (&&&))
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
-import Control.Concurrent.MVar (newEmptyMVar, tryPutMVar, takeMVar)
 import qualified Control.Exception as E
 import Control.Monad (liftM2)
 import Control.Monad.Error (MonadError(throwError))
@@ -92,10 +91,8 @@ startStorageManager initConf = do
     (getFileSize (stcfStateDir initConf ++ storePath))
     (getFileSize (stcfStateDir initConf ++ journalPath))
 
-  err <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar err
-      runStorageManager = forkLinkIO . flip fix (initState, putResponse Nothing)
   storageChan <- newChan
+  let runStorageManager io = startLink $ \initSig -> fix io (initState, initSig)
   storageTid <- runStorageManager $ \reset (state,signal) -> do
     let openJournal =
           openFile (stcfStateDir (storageConf state) ++ journalPath) AppendMode
@@ -133,8 +130,6 @@ startStorageManager initConf = do
             log Notice "Terminating storage manager."
             exit reason
 
-  withMonitor storageTid putResponse $
-    takeMVar err >>= flip whenJust E.throwIO
   return $ StorageManager (writeChan storageChan) storageTid
   where
     rebuildExitAddresses journalHandle routers s = do

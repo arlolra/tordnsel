@@ -23,7 +23,6 @@ module TorDNSEL.ExitTest.Server.Internals where
 
 import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, isEmptyChan)
-import Control.Concurrent.MVar (newEmptyMVar, tryPutMVar, takeMVar)
 import Control.Concurrent.QSemN (QSemN, newQSemN, waitQSemN, signalQSemN)
 import qualified Control.Exception as E
 import Control.Monad (when, forM, foldM)
@@ -107,9 +106,7 @@ startExitTestServer
 startExitTestServer socks initConf = do
   log Notice "Starting exit test server."
   chan <- newChan
-  err <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar err
-  tid <- forkLinkIO $ do
+  tid <- startLink $ \signal -> do
     setTrapExit $ (writeChan chan .) . Exit
     sem <- newQSemN . fromIntegral . etscfConcClientLimit $ initConf
     listeners <- fmap catMaybes . forM socks $ \(addr,mbSock) -> runMaybeT $ do
@@ -119,8 +116,7 @@ startExitTestServer socks initConf = do
       tid <- lift $ startListenerThread ((writeChan chan .) . NewClient) sem
                                         owner sock
       return (tid, Listener addr sock owner)
-
-    putResponse Nothing
+    signal
 
     let initConf' = initConf { etscfListenAddrs =
                                  S.fromList $ map (listenAddr . snd) listeners }
@@ -128,8 +124,6 @@ startExitTestServer socks initConf = do
     fix (\loop (!conf,!s) -> readChan chan >>= handleMessage conf s >>= loop)
         (initConf', initState)
 
-  withMonitor tid putResponse $
-    takeMVar err >>= flip whenJust E.throwIO
   return $ ExitTestServer (writeChan chan) tid
 
 -- | Start a listener thread, returning its 'ThreadId'.

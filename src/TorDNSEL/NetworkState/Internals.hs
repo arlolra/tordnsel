@@ -176,11 +176,7 @@ startNetworkStateManager :: NetworkStateManagerConfig -> IO NetworkStateManager
 startNetworkStateManager initConf = do
   log Notice "Starting network state manager."
   chan <- newChan
-  sync <- newEmptyMVar
-  err <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar err
-  tid <- forkLinkIO $ do
-    takeMVar sync
+  tid <- startLink $ \signal -> do
     setTrapExit $ (writeChan chan .) . Exit
     net <- NetworkStateManager (writeChan chan) `fmap` myThreadId
     (controller,deadTid) <- startTorController net initConf Nothing
@@ -193,15 +189,12 @@ startNetworkStateManager initConf = do
                    emptyState
       _ -> return emptyState
     swapMVar networkStateMV $! networkState initState
-    putResponse Nothing
+    signal
     flip fix (initConf, initState) $ \loop (!conf,!s) -> do
       msg <- readChan chan
       -- XXX This should be the strict StateT rather than the lazy one.
       runStateT (handleMessage net conf msg) s >>= loop
 
-  withMonitor tid putResponse $ do
-    putMVar sync ()
-    takeMVar err >>= flip whenJust E.throwIO
   return $ NetworkStateManager (writeChan chan) tid
 
 -- | Reconfigure the network state mananger synchronously with the given
