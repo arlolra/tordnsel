@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# OPTIONS_GHC -fglasgow-exts -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------
@@ -7,7 +8,7 @@
 --
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
--- Portability : non-portable (GHC primitives)
+-- Portability : non-portable (bang patterns, GHC primitives)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
@@ -73,11 +74,11 @@ instance Thread StatsServer where
 
 -- | An internal type representing the current stats server state.
 data StatsState = StatsState
-  { statsConf :: StatsConfig
-  , listenerTid :: ThreadId
-  , deadListeners :: S.Set ThreadId
-  , handlers :: S.Set ThreadId
-  , terminateReason :: Maybe ExitReason }
+  { statsConf       :: !StatsConfig
+  , listenerTid     :: !(ThreadId)
+  , deadListeners   :: !(S.Set ThreadId)
+  , handlers        :: !(S.Set ThreadId)
+  , terminateReason :: !(Maybe ExitReason) }
 
 -- | Given an initial 'StatsConfig', start a server offering access to load
 -- statistics through a Unix domain stream socket in our state directory.
@@ -104,7 +105,7 @@ startStatsServer initConf = do
 
     let runStatsServer = flip fix $ StatsState initConf initListenerTid S.empty
                                                S.empty Nothing
-    runStatsServer $ \loop s -> do
+    runStatsServer $ \loop (!s) -> do
       message <- readChan statsChan
 
       case message of

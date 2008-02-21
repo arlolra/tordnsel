@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, Rank2Types #-}
+{-# LANGUAGE PatternGuards, BangPatterns, Rank2Types #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------
@@ -9,7 +9,7 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (concurrency, extended exceptions, pattern guards,
---                             rank-2 types, GHC primitives)
+--                             bang patterns, rank-2 types, GHC primitives)
 --
 -- /Internals/: should only be imported by the public module and tests.
 --
@@ -161,7 +161,7 @@ startExitTestInitiator initConf = do
       toInteger (Set.size (runningClients s) + length ports) <=
         eticfConcClientLimit conf
 
-    loop conf s
+    loop !conf !s
       | TestWaiting rid ports published <- testStatus s
       , canRunExitTest conf s ports = do
           log Info "Forking exit test clients for router " rid
