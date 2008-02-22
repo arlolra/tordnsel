@@ -237,12 +237,13 @@ instance ConfigValue LogConfig where
       target' <- case B.map toLower target of
         lc | lc == b "stdout"# -> return ToStdOut
            | lc == b "stderr"# -> return ToStdErr
+           | lc == b "syslog"# -> return ToSysLog
            | lc == b "file"# ->
                if B.null file then throwError ("Log file name is missing." ++)
                               else return . ToFile . B.unpack $ file
            | otherwise -> throwError $ cat "Invalid log target "
                (esc maxTargetLen target) ". Expecting \"stdout\", \"stderr\", \
-               \or \"file\"."
+               \\"syslog\", or \"file\"."
       return LogConfig { minSeverity = severity'
                        , logTarget   = target'
                        , logEnabled  = True }

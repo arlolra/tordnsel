@@ -6,7 +6,8 @@
 -- Maintainer  : tup.tuple@googlemail.com
 -- Stability   : alpha
 -- Portability : non-portable (concurrency, extended exceptions,
---                             type synonym instances)
+--                             type synonym instances, overlapping instances,
+--                             foreign function interface)
 --
 -- Implements a logger thread and functions to log messages, reconfigure the
 -- logger, and terminate the logger.
@@ -23,6 +24,10 @@ module TorDNSEL.Log (
   , startLogger
   , reconfigureLogger
   , terminateLogger
+  , SysLogOptions(..)
+  , SysLogFacility(..)
+  , openSystemLogger
+  , closeSystemLogger
   ) where
 
 import Prelude hiding (log)

@@ -117,6 +117,8 @@ extraFileDesc = 96
 main :: IO ()
 main = do
   availableFileDesc <- setMaxOpenFiles minFileDesc maxFileDesc
+  openSystemLogger "TorDNSEL" SysLogOptions { noDelay = True, logPid = True }
+                   Daemon
 
   conf <- do
     conf <- exitLeft . parseConfigArgs =<< getArgs
