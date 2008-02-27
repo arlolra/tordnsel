@@ -465,13 +465,16 @@ startTorController net conf mbDelay = liftIO $ do
           when (torVersion (protocolInfo conn) >= TorVersion 0 2 0 13 B.empty) $
             setConfWithRollback fetchDirInfoEarly (Just True) conn
 
-          -- XXX log parsing errors
-          let newNS = networkStatusEvent (const $ updateNetworkStatus net)
-              newDesc = newDescriptorsEvent (const $ updateDescriptors net) conn
+          let newNS = networkStatusEvent $ \errors ns -> do
+                logTorControlErrors "NS" errors
+                updateNetworkStatus net ns
+              newDesc = flip newDescriptorsEvent conn $ \errors ds -> do
+                logTorControlErrors "NewDesc" errors
+                updateDescriptors net ds
           registerEventHandlers [newNS, newDesc] conn
 
-          getNetworkStatus conn >>= updateNetworkStatus net . fst
-          getAllDescriptors conn >>= updateDescriptors net . fst
+          getNetworkStatus conn >>= logParseErrors >>= updateNetworkStatus net
+          getAllDescriptors conn >>= logParseErrors >>= updateDescriptors net
 
           return conn
   case r of
@@ -485,6 +488,8 @@ startTorController net conf mbDelay = liftIO $ do
       log Info "Successfully initialized Tor controller connection."
       return (Right conn, tid)
   where
+    logTorControlErrors event = mapM_ (log Warn "Error in " event " event: ")
+    logParseErrors (xs,errors) = mapM_ (log Warn) errors >> return xs
     updateDescriptors (NetworkStateManager send _) = send . NewDescriptors
     updateNetworkStatus (NetworkStateManager send _) = send . NewNetworkStatus
     nextDelay | delay' < maxDelay = delay'
