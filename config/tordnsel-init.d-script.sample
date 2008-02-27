@@ -1,17 +1,19 @@
 #! /bin/sh
 ### BEGIN INIT INFO
 # Provides:          TorDNSEL
-# Required-Start:    $local_fs $remote_fs
-# Required-Stop:     $local_fs $remote_fs
+# Required-Start:    $local_fs $remote_fs $syslog $network $time
+# Required-Stop:     $local_fs $remote_fs $syslog $network $time
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: TorDNSEL init.d script
-# Description:       TorDNSEL is an implementation of the active testing, DNS-based exit list 
-# for Tor exit nodes described in Tor's SVN repository. 
+# Short-Description: Starts the TorDNSEL daemon process
+# Description:       Starts TorDNSEL, a name server that provides a
+#                    DNSBL-style interface for detecting connections
+#                    exiting the Tor network.
 #
 ### END INIT INFO
 
-# Author: Jacob Appelbaum <jacob@appelbaum.net>>
+# Author: Jacob Appelbaum <jacob@appelbaum.net>
+# Author: tup <tup.tuple@googlemail.com>
 #
 # Please remove the "Author" lines above and replace them
 # with your own name if you copy and modify this script.
@@ -20,25 +22,21 @@
 
 # PATH should only include /usr/* if it runs after the mountnfs.sh script
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
-DESC="TorDNSEL is an implementation of the active testing, DNS-based exit list for Tor exit nodes described in Tor's SVN repository."
+DESC="TorDNSEL daemon"
 NAME=tordnsel
 DAEMON=/usr/local/bin/$NAME
-DAEMON_ARGS="-f /etc/tordnsel.conf "
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
+CONFIGFILE="/etc/tordnsel.conf"
+RUNTIMEDIR="/var/run/tordnsel"
+USER=tordnsel
+ARGS="-f $CONFIGFILE "
 
 # Exit if the package is not installed
 [ -x "$DAEMON" ] || exit 0
 
 # Read configuration variable file if it is present
 [ -r /etc/default/$NAME ] && . /etc/default/$NAME
-
-# Load the VERBOSE setting and other rcS variables
-. /lib/init/vars.sh
-
-# Define LSB log_* functions.
-# Depend on lsb-base (>= 3.0-6) to ensure that this file is present.
-. /lib/lsb/init-functions
 
 #
 # Function that starts the daemon/service
@@ -51,8 +49,7 @@ do_start()
 	#   2 if daemon could not be started
 	start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON --test > /dev/null \
 		|| return 1
-	start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON -- \
-		$DAEMON_ARGS \
+	start-stop-daemon --start --quiet --pidfile $PIDFILE --exec $DAEMON -- $ARGS \
 		|| return 2
 	# Add code here, if necessary, that waits for the process to be ready
 	# to handle requests from services started subsequently which depend
@@ -85,70 +82,86 @@ do_stop()
 	return "$RETVAL"
 }
 
-#
-# Function that sends a SIGHUP to the daemon/service
-#
-do_reload() {
-	#
-	# If the daemon can reload its configuration without
-	# restarting (for example, when it is sent a SIGHUP),
-	# then implement that here.
-	#
-	start-stop-daemon --stop --signal 1 --quiet --pidfile $PIDFILE --name $NAME
-	return 0
-}
-
 case "$1" in
-  start)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
+	start)
+	echo "Starting $DESC: $NAME..."
+
+	if ! su -s /bin/sh -c "$DAEMON --verify-config $ARGS" $USER 2> /dev/null; then
+		echo "ABORTED: TorDNSEL configuration invalid:" >&2
+		su -s /bin/sh -c "$DAEMON --verify-config $ARGS" $USER
+		exit 1
+	fi
+
 	do_start
 	case "$?" in
-		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
-		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+		0|1) echo "done." ;;
+		2)
+		echo "FAILED."
+		exit 1
+		;;
 	esac
 	;;
-  stop)
-	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
+	stop)
+	echo -n "Stopping $DESC: "
 	do_stop
 	case "$?" in
-		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
-		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+		0|1) echo "$NAME." ;;
+		2)
+		echo "FAILED."
+		exit 1
+		;;
 	esac
 	;;
-  #reload|force-reload)
-	#
-	# If do_reload() is not implemented then leave this commented out
-	# and leave 'force-reload' as an alias for 'restart'.
-	#
-	#log_daemon_msg "Reloading $DESC" "$NAME"
-	#do_reload
-	#log_end_msg $?
-	#;;
-  restart|force-reload)
-	#
-	# If the "reload" option is implemented then remove the
-	# 'force-reload' alias
-	#
-	log_daemon_msg "Restarting $DESC" "$NAME"
+	reload|force-reload)
+	echo -n "Reloading $DESC configuration: "
+
+	if ! su -s /bin/sh -c "$DAEMON --verify-config $ARGS" $USER 2> /dev/null; then
+		echo "ABORTED: TorDNSEL configuration invalid:" >&2
+		su -s /bin/sh -c "$DAEMON --verify-config $ARGS" $USER
+		exit 1
+	fi
+
+	# Don't send the process a SIGHUP because it won't be able to read its own
+	# config file when it's chrooted. Instead, use the --reconfigure option to
+	# dump the contents of the config file to a Unix domain socket on which it's
+	# listening for this purpose.
+	ERRMSG=`su -s /bin/sh -c "$DAEMON --reconfigure $RUNTIMEDIR < $CONFIGFILE" $USER 2>&1`
+	case "$?" in
+		0) echo "$NAME." ;;
+		*)
+		echo "FAILED."
+		echo "$ERRMSG" >&2
+		exit 1
+		;;
+	esac
+	;;
+	restart)
+	if ! su -s /bin/sh -c "$DAEMON --verify-config $ARGS" $USER 2> /dev/null; then
+		echo "Restarting TorDNSEL ABORTED: TorDNSEL configuration invalid:" >&2
+		su -s /bin/sh -c "$DAEMON --verify-config $ARGS" $USER
+		exit 1
+	fi
+
+	echo "Restarting $DESC: $NAME..."
 	do_stop
 	case "$?" in
-	  0|1)
+		0|1)
 		do_start
 		case "$?" in
-			0) log_end_msg 0 ;;
-			1) log_end_msg 1 ;; # Old process is still running
-			*) log_end_msg 1 ;; # Failed to start
+			0) echo "done." ;;
+			1) echo "FAILED ($DAEMON is still running)." ;;
+			*) echo "FAILED." ;; # Failed to start
 		esac
 		;;
-	  *)
-	  	# Failed to stop
-		log_end_msg 1
+		*)
+		# Failed to stop
+		echo "FAILED ($DAEMON won't die)."
+		exit 1
 		;;
 	esac
 	;;
   *)
-	#echo "Usage: $SCRIPTNAME {start|stop|restart|reload|force-reload}" >&2
-	echo "Usage: $SCRIPTNAME {start|stop|restart|force-reload}" >&2
+	echo "Usage: $SCRIPTNAME {start|stop|restart|reload|force-reload}" >&2
 	exit 3
 	;;
 esac
