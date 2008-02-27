@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 # A data input script for Cacti's poller to collect TorDNSEL statistics.
-# Example: ./cacti-input.pl /var/lib/tordnsel/state/statistics
+# Example: ./cacti-input.pl /var/run/tordnsel/statistics.socket
 
 use strict;
 use warnings;
