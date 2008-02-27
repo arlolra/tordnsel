@@ -16,7 +16,7 @@
 -- Implements a DNSBL-style interface providing information about whether a
 -- client for a network service is likely connecting through a Tor exit node.
 --
--- See <https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt> for
+-- See <https://www.torproject.org/svn/trunk/doc/contrib/torel-design.txt> for
 -- details.
 --
 -----------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 TorDNSEL: A Tor DNS-based Exit List
 
 TorDNSEL implements the design described at
-<https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt> with some
+<https://www.torproject.org/svn/trunk/doc/contrib/torel-design.txt> with some
 modifications. Instead of parsing the cached-routers file, it establishes a
 persistent controller connection to Tor, receiving updated nodes and exit
 policies as Tor fetches them from directories. When Tor is running as a

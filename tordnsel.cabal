@@ -3,7 +3,7 @@ Version:         0.0.6-dev
 Synopsis:        provides a DNSBL-style interface for detecting Tor exit nodes
 Description:     TorDNSEL implements a design for a DNSBL-style interface for
   detecting connections exiting the Tor network. This design and its rationale
-  is described at <https://tor.eff.org/svn/trunk/doc/contrib/torel-design.txt>.
+  is described at <https://www.torproject.org/svn/trunk/doc/contrib/torel-design.txt>.
 License:         PublicDomain
 License-File:    LICENSE
 Homepage:        http://p56soo2ibjkx23xo.onion/
