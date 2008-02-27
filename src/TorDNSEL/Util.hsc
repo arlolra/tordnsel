@@ -29,7 +29,6 @@ module TorDNSEL.Util (
   , prependError
   , replaceError
   , handleError
-  , filterRight
 
   -- * Strict functions
   , adjust'
@@ -123,7 +122,6 @@ import Data.Time
   ( fromGregorian, UTCTime(..), LocalTime(LocalTime)
   , timeOfDayToTime, timeToTimeOfDay )
 import Data.Word (Word16, Word32)
-import Debug.Trace (trace)
 import Network.Socket
   ( HostAddress, ProtocolNumber, Socket, SockAddr(..), SocketOption(ReuseAddr)
   , SocketType(Datagram, Stream), Family(AF_INET, AF_UNIX), socket, bindSocket
@@ -246,12 +244,6 @@ replaceError e = handleError (const $ throwError e)
 -- | 'catchError' with the argument order reversed.
 handleError :: MonadError e m => (e -> m a) -> m a -> m a
 handleError = flip catchError
-
--- XXX parsing errors should be logged
-filterRight :: [Either ShowS a] -> [a]
-filterRight []           = []
-filterRight (Left x:xs)  = cat x '\n' `trace` filterRight xs
-filterRight (Right x:xs) = x : filterRight xs
 
 --------------------------------------------------------------------------------
 -- Strict functions

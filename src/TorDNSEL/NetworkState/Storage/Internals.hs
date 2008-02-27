@@ -20,10 +20,10 @@
 module TorDNSEL.NetworkState.Storage.Internals where
 
 import Prelude hiding (log)
-import Control.Arrow (second, (&&&))
+import Control.Arrow (second)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import qualified Control.Exception as E
-import Control.Monad (liftM2, when)
+import Control.Monad (liftM2, when, forM)
 import Control.Monad.Error (MonadError(throwError))
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
@@ -32,7 +32,7 @@ import Data.Char (toUpper, isSpace)
 import Data.List (sortBy)
 import Data.Map (Map)
 import qualified Data.Map as M
-import Data.Maybe (mapMaybe)
+import Data.Maybe (mapMaybe, catMaybes)
 import Data.Time (UTCTime)
 import Network.Socket (HostAddress)
 import System.Directory (renameFile)
@@ -247,9 +247,12 @@ readExitAddresses stateDir =
       file <- E.catchJust E.ioErrors
         (B.readFile path)
         (\e -> if isDoesNotExistError e then return B.empty else ioError e)
-      return . map (eaRouterID &&& id) . filterRight .
-        parseSubDocs (b 8 "ExitNode"#) parseExitAddress . parseDocument .
-        B.lines $ file
+      addrs <- forM (parseSubDocs (b 8 "ExitNode"#) parseExitAddress .
+                       parseDocument . B.lines $ file) $ \exitAddr -> do
+        case exitAddr of
+          Left e     -> log Warn e >> return Nothing
+          Right addr -> return $ Just (eaRouterID addr, addr)
+      return $ catMaybes addrs
 
 -- | On startup, and when the journal becomes too large, replace the
 -- exit-addresses file with our most current test results and clear the journal.
