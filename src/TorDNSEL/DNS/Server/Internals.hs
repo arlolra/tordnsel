@@ -20,6 +20,7 @@
 -- #not-home
 module TorDNSEL.DNS.Server.Internals where
 
+import Prelude hiding (log)
 import qualified Control.Exception as E
 import Control.Monad (when, guard, liftM2, liftM3)
 import Data.Bits ((.|.), shiftL)
@@ -40,6 +41,7 @@ import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
 import TorDNSEL.DNS
+import TorDNSEL.Log
 import TorDNSEL.NetworkState
 import TorDNSEL.NetworkState.Types
 import TorDNSEL.Util
@@ -58,6 +60,13 @@ data DNSConfig
   , dnsByteStats :: !(Int -> Int -> IO ())
   -- | A statistics tracking action invoked with each response.
   , dnsRespStats :: !(ResponseType -> IO ()) }
+
+instance Eq DNSConfig where
+  x == y = all (\(===) -> x === y)
+    [eq dnsSocket, eq dnsAuthZone, eq dnsMyName, eq dnsSOA, eq dnsNS, eq dnsA]
+    where
+      eq :: Eq b => (a -> b) -> a -> a -> Bool
+      eq = on (==)
 
 -- | The response type reported in statistics. 'Positive' and 'Negative' are for
 -- valid DNSEL queries.
@@ -78,19 +87,26 @@ data DNSMessage
 -- | Given an initial 'DNSConfig', start the DNS server and return a handle to
 -- it. Link the DNS server to the calling thread.
 startDNSServer :: DNSConfig -> IO DNSServer
-startDNSServer = fmap DNSServer . forkLinkIO . E.block . loop where
-  loop conf = do
-    r <- E.tryJust fromExitSignal . E.unblock $
-           runServer (dnsSocket conf) (dnsByteStats conf) (dnsHandler conf)
-    case r of
-      Left (_,Reconfigure reconf signal) -> do
-        let newConf = reconf conf
-        when (dnsSocket conf /= dnsSocket newConf) $
-          sClose $ dnsSocket conf
-        signal
-        loop newConf
-      Left (_,Terminate reason) -> exit reason
-      Right _ -> loop conf -- impossible
+startDNSServer initConf = do
+  log Info "Starting DNS server."
+  fmap DNSServer . forkLinkIO . E.block . loop $ initConf
+  where
+    loop conf = do
+      r <- E.tryJust fromExitSignal . E.unblock $
+             runServer (dnsSocket conf) (dnsByteStats conf) (dnsHandler conf)
+      case r of
+        Left (_,Reconfigure reconf signal) -> do
+          let newConf = reconf conf
+          when (conf /= newConf) $
+            log Notice "Reconfiguring DNS server."
+          when (dnsSocket conf /= dnsSocket newConf) $
+            sClose $ dnsSocket conf
+          signal
+          loop newConf
+        Left (_,Terminate reason) -> do
+          log Info "Terminating DNS server."
+          exit reason
+        Right _ -> loop conf -- impossible
 
 -- | Reconfigure the DNS server synchronously with the given function. If the
 -- server exits abnormally before reconfiguring itself, throw its exit signal in

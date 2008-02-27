@@ -23,7 +23,7 @@ import Prelude hiding (log)
 import Control.Arrow (second, (&&&))
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import qualified Control.Exception as E
-import Control.Monad (liftM2)
+import Control.Monad (liftM2, when)
 import Control.Monad.Error (MonadError(throwError))
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
@@ -35,7 +35,7 @@ import qualified Data.Map as M
 import Data.Maybe (mapMaybe)
 import Data.Time (UTCTime)
 import Network.Socket (HostAddress)
-import System.Directory (removeFile, renameFile)
+import System.Directory (renameFile)
 import System.IO (Handle, openFile, hFlush, hClose, IOMode(AppendMode))
 import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files (getFileStatus, fileSize)
@@ -66,7 +66,7 @@ data StorageMessage
   = ReadExitAddresses ([ExitAddress] -> IO ())
   | RebuildExitAddressStorage (Map RouterID Router)
   | StoreNewExitAddress ExitAddress (Map RouterID Router)
-  | Reconfigure (StorageConfig -> StorageConfig) (Map RouterID Router) (IO ())
+  | Reconfigure (StorageConfig -> StorageConfig) (IO ())
   | Terminate ExitReason
 
 -- | A handle to the storage manager thread.
@@ -86,10 +86,12 @@ data StorageManagerState = StorageManagerState
 -- calling thread.
 startStorageManager :: StorageConfig -> IO StorageManager
 startStorageManager initConf = do
-  log Notice "Starting storage manager."
+  log Info "Starting storage manager."
   initState <- liftM2 (StorageManagerState initConf)
     (getFileSize (stcfStateDir initConf ++ storePath))
     (getFileSize (stcfStateDir initConf ++ journalPath))
+  when (exitAddrLen initState == 0) $
+    writeFile (stcfStateDir initConf ++ storePath) ""
 
   storageChan <- newChan
   let runStorageManager io = startLink $ \initSig -> fix io (initState, initSig)
@@ -115,19 +117,19 @@ startStorageManager initConf = do
               then rebuildExitAddresses journalHandle routers s
               else loop s { journalLen = journalLen s + len }
 
-          Reconfigure reconf routers newSignal
+          Reconfigure reconf newSignal
             | stcfStateDir newConf /= stcfStateDir (storageConf s) -> do
-                hClose journalHandle
-                addrLen <- replaceExitAddresses (stcfStateDir newConf) routers
-                mapM_ (removeFile . (stcfStateDir (storageConf s) ++))
+                log Notice "Reconfiguring storage manager."
+                mapM_ (\fp -> renameFile (stcfStateDir (storageConf s) ++ fp)
+                                         (stcfStateDir newConf ++ fp))
                       [storePath, journalPath]
-                return (s { storageConf = newConf
-                          , exitAddrLen = addrLen, journalLen = 0 }, newSignal)
+                newSignal
+                loop s { storageConf = newConf }
             | otherwise -> newSignal >> loop s { storageConf = newConf }
             where newConf = reconf (storageConf s)
 
           Terminate reason -> do
-            log Notice "Terminating storage manager."
+            log Info "Terminating storage manager."
             exit reason
 
   return $ StorageManager (writeChan storageChan) storageTid
@@ -166,14 +168,13 @@ storeNewExitAddress rid rtr routers (StorageManager tellStorageManager _) =
   whenJust (mkExitAddress (rid, rtr)) $ \addr ->
     tellStorageManager $ StoreNewExitAddress addr routers
 
--- | Reconfigure the storage manager synchronously with the given function and
--- current network information. If the server exits abnormally before
--- reconfiguring itself, throw its exit signal in the calling thread.
+-- | Reconfigure the storage manager synchronously with the given function. If
+-- the server exits abnormally before reconfiguring itself, throw its exit
+-- signal in the calling thread.
 reconfigureStorageManager
-  :: (StorageConfig -> StorageConfig) -> Map RouterID Router -> StorageManager
-  -> IO ()
-reconfigureStorageManager reconf routers (StorageManager tellStorageManager tid)
-  = sendSyncMessage (tellStorageManager . Reconfigure reconf routers) tid
+  :: (StorageConfig -> StorageConfig) -> StorageManager -> IO ()
+reconfigureStorageManager reconf (StorageManager tellStorageManager tid)
+  = sendSyncMessage (tellStorageManager . Reconfigure reconf) tid
 
 -- | Terminate the storage manager gracefully. The optional parameter specifies
 -- the amount of time in microseconds to wait for the thread to terminate. If

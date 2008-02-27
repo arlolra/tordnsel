@@ -18,6 +18,13 @@ module TorDNSEL.Config (
   , parseConfigFile
   , parseConfigArgs
   , makeConfig
+  , staticConfigOptionsChanged
+  , copyStaticConfigOptions
+  , ReconfigServer
+  , bindReconfigSocket
+  , startReconfigServer
+  , terminateReconfigServer
+  , connectToReconfigSocket
   ) where
 
 import TorDNSEL.Config.Internals

@@ -19,7 +19,7 @@ import Test.HUnit (runTestTT, Test(..))
 import qualified TorDNSEL.Config.Tests as Config
 import qualified TorDNSEL.Directory.Tests as Directory
 import qualified TorDNSEL.DNS.Tests as DNS
-import qualified TorDNSEL.DNS.Handler.Tests as DNS.Handler
+import qualified TorDNSEL.DNS.Server.Tests as DNS.Server
 
 main = runTestTT . TestList $
-  [Config.tests, Directory.tests, DNS.tests, DNS.Handler.tests]
+  [Config.tests, Directory.tests, DNS.tests, DNS.Server.tests]

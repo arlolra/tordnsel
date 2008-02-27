@@ -36,7 +36,6 @@ import qualified Data.Set as S
 import Data.Dynamic (Dynamic, fromDynamic, toDyn, Typeable)
 import Data.List (nub)
 import Data.Unique (Unique, newUnique)
-import System.Exit (ExitCode(ExitSuccess))
 import System.IO (hPutStrLn, hFlush, stderr)
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -150,8 +149,8 @@ withLinksDo showE io = E.block $ do
   -- since it's about to exit.
   (E.unblock io >> return ()) `E.catch` \e ->
     case extractReason e of
-      Nothing                            -> return ()
-      Just (E.ExitException ExitSuccess) -> return ()
+      Nothing                     -> return ()
+      Just e'@(E.ExitException _) -> E.throwIO e'
       Just e' -> do
         hPutStrLn stderr ("*** Exception: " ++ showE e')
         hFlush stderr

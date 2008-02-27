@@ -19,26 +19,23 @@
 -- #not-home
 module TorDNSEL.Statistics.Internals where
 
-import Control.Concurrent.Chan (newChan, readChan, writeChan)
+import Prelude hiding (log)
+import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_, readMVar)
-import Control.Concurrent.QSem (newQSem, waitQSem, signalQSem)
+import Control.Concurrent.QSem (QSem, newQSem, waitQSem, signalQSem)
 import qualified Control.Exception as E
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
 import Data.Maybe (isJust, isNothing)
 import qualified Data.Set as S
-import Network.Socket
-  ( socket, bindSocket, listen, accept, sClose, setSocketOption, socketToHandle
-  , Socket, SockAddr(SockAddrUnix), Family(AF_UNIX), SocketType(Stream)
-  , SocketOption(ReuseAddr), sOMAXCONN )
-import System.Directory (removeFile)
+import Network.Socket (accept, socketToHandle, Socket)
 import System.IO (hClose, IOMode(ReadWriteMode))
 import System.IO.Unsafe (unsafePerformIO)
-import System.Posix.Files (setFileMode)
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.DNS.Server
+import TorDNSEL.Log
 import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
@@ -53,16 +50,9 @@ statsState :: MVar Stats
 {-# NOINLINE statsState #-}
 statsState = unsafePerformIO . newMVar $ Stats 0 0 0 0 0 0
 
--- | The stats server configuration.
-newtype StatsConfig = StatsConfig
-  { scfStateDir :: FilePath -- ^ The path to our state directory.
-  }
-
 -- | An internal type for messages sent to the stats server thread.
 data StatsMessage
   = NewClient Socket -- ^ A new client has connected.
-  -- | Reconfigure the stats server.
-  | Reconfigure (StatsConfig -> StatsConfig) (IO ())
   | Terminate ExitReason -- ^ Terminate the stats server gracefully.
   | Exit ThreadId ExitReason -- ^ An exit signal sent to the stats server.
 
@@ -74,40 +64,30 @@ instance Thread StatsServer where
 
 -- | An internal type representing the current stats server state.
 data StatsState = StatsState
-  { statsConf       :: !StatsConfig
-  , listenerTid     :: !(ThreadId)
-  , deadListeners   :: !(S.Set ThreadId)
+  { listenerTid     :: !(ThreadId)
   , handlers        :: !(S.Set ThreadId)
   , terminateReason :: !(Maybe ExitReason) }
 
--- | Given an initial 'StatsConfig', start a server offering access to load
--- statistics through a Unix domain stream socket in our state directory.
--- Link the server thread to the calling thread.
-startStatsServer :: StatsConfig -> IO StatsServer
-startStatsServer initConf = do
-  initListenSock <- bindStatsSocket $ scfStateDir initConf
+-- | Given the runtime directory, bind and return the listening statistics
+-- socket.
+bindStatsSocket :: FilePath -> IO Socket
+bindStatsSocket runtimeDir =
+  bindListeningUnixDomainStreamSocket (statsSocketPath runtimeDir) 0o666
+
+-- | Given a listening socket, start a server offering access to load statistics
+-- through a Unix domain stream socket in our runtime directory. Link the server
+-- thread to the calling thread.
+startStatsServer :: Socket -> IO StatsServer
+startStatsServer listenSock = do
+  log Info "Starting statistics server."
   statsChan <- newChan
   statsServerTid <- forkLinkIO $ do
-    setTrapExit ((writeChan statsChan .) . Exit)
+    setTrapExit $ (writeChan statsChan .) . Exit
     handlerQSem <- newQSem maxStatsHandlers
+    initListenerTid <- forkListener statsChan listenSock handlerQSem
 
-    let startListenerThread listenSock stateDir  =
-          forkLinkIO . E.block $
-            (forever $ do
-              waitQSem handlerQSem
-              (client,_) <- E.unblock (accept listenSock)
-                `E.catch` \e -> signalQSem handlerQSem >> E.throwIO e
-              writeChan statsChan $ NewClient client)
-            `E.finally` sClose listenSock
-            `E.finally` removeFile (statsSocket stateDir)
-
-    initListenerTid <- startListenerThread initListenSock (scfStateDir initConf)
-
-    let runStatsServer = flip fix $ StatsState initConf initListenerTid S.empty
-                                               S.empty Nothing
-    runStatsServer $ \loop (!s) -> do
+    flip fix (StatsState initListenerTid S.empty Nothing) $ \loop (!s) -> do
       message <- readChan statsChan
-
       case message of
         NewClient client -> do
           handlerTid <- forkLinkIO . (`E.finally` signalQSem handlerQSem) .
@@ -116,49 +96,30 @@ startStatsServer initConf = do
                 B.hPut handle . renderStats =<< readMVar statsState
           loop s { handlers = S.insert handlerTid (handlers s) }
 
-        Reconfigure reconf signal | isNothing $ terminateReason s -> do
-          let newConf = reconf (statsConf s)
-          if scfStateDir newConf /= scfStateDir (statsConf s)
-            then do
-              terminateThread Nothing (listenerTid s)
-                              (killThread $ listenerTid s)
-              listenSock <- bindStatsSocket $ scfStateDir newConf
-              newListenerTid <- startListenerThread listenSock
-                                                    (scfStateDir newConf)
-              signal
-              loop s { statsConf = newConf
-                     , listenerTid = newListenerTid
-                     , deadListeners = S.insert (listenerTid s)
-                                                (deadListeners s) }
-            else signal >> loop s { statsConf = newConf }
-        -- do nothing if we're in the process of terminating
-        Reconfigure _ signal -> signal >> loop s
-
         Terminate reason -> do
+          log Info "Terminating statistics server."
           terminateThread Nothing (listenerTid s) (killThread $ listenerTid s)
-          loop s { terminateReason = Just reason }
+          if S.null (handlers s)
+            then exit reason
+            else loop s { terminateReason = Just reason }
 
         Exit tid reason
           | tid == listenerTid s ->
               if isNothing $ terminateReason s
                 then do
-                  -- XXX this should be logged
-                  let stateDir = scfStateDir $ statsConf s
-                  listenSock <- bindStatsSocket stateDir
-                  newListenerTid <- startListenerThread listenSock stateDir
+                  log Warn "The statistics listener thread exited unexpectedly:\
+                           \ " (showExitReason [] reason) "; restarting."
+                  newListenerTid <- forkListener statsChan listenSock handlerQSem
                   loop s { listenerTid = newListenerTid }
                 else loop s
           | tid `S.member` handlers s -> do
-              whenJust reason $ \_ -> do
-                -- XXX this should be logged
-                return ()
+              whenJust reason $
+                log Warn "Bug: A statistics client handler exited abnormally: "
               let newHandlers = S.delete tid (handlers s)
               case terminateReason s of
                 -- all the handlers have finished, so let's exit
                 Just exitReason | S.null newHandlers -> exit exitReason
                 _ -> loop s { handlers = newHandlers }
-          | tid `S.member` deadListeners s ->
-              loop s { deadListeners = S.delete tid (deadListeners s) }
           | isJust reason -> exit reason
           | otherwise -> loop s
 
@@ -167,21 +128,14 @@ startStatsServer initConf = do
     maxStatsHandlers = 32
     handlerTimeout = 10 * 10^6
 
-    bindStatsSocket stateDir =
-      E.bracketOnError (socket AF_UNIX Stream 0) sClose $ \sock -> do
-        setSocketOption sock ReuseAddr 1
-        ignoreJust E.ioErrors . removeFile . statsSocket $ stateDir
-        bindSocket sock . SockAddrUnix . statsSocket $ stateDir
-        setFileMode (statsSocket stateDir) 0o777
-        listen sock sOMAXCONN
-        return sock
-
--- | Reconfigure the stats server synchronously with the given function. If the
--- server exits abnormally before reconfiguring itself, throw its exit signal in
--- the calling thread.
-reconfigureStatsServer :: (StatsConfig -> StatsConfig) -> StatsServer -> IO ()
-reconfigureStatsServer reconf (StatsServer tellStatsServer statsServerTid) =
-  sendSyncMessage (tellStatsServer . Reconfigure reconf) statsServerTid
+-- | Fork the listener thread.
+forkListener :: Chan StatsMessage -> Socket -> QSem -> IO ThreadId
+forkListener statsChan listenSock sem =
+  forkLinkIO . E.block . forever $ do
+    waitQSem sem
+    (client,_) <- E.unblock $ accept listenSock
+      `E.catch` \e -> signalQSem sem >> E.throwIO e
+    writeChan statsChan $ NewClient client
 
 -- | Terminate the stats server gracefully. The optional parameter specifies the
 -- amount of time in microseconds to wait for the thread to terminate. If the
@@ -205,9 +159,9 @@ renderStats s = B.concat . map line $
     b = B.unsafePackAddress
     (~>) = (,)
 
--- | Generate the statistics socket path from the state directory path.
-statsSocket :: FilePath -> FilePath
-statsSocket = (++ "/statistics")
+-- | Generate the statistics socket path from the runtime directory path.
+statsSocketPath :: FilePath -> FilePath
+statsSocketPath = (++ "/statistics.socket")
 
 -- | Increment the count of bytes transferred.
 incrementBytes :: Int -> Int -> IO ()

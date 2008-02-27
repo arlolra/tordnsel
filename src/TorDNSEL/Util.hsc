@@ -36,6 +36,7 @@ module TorDNSEL.Util (
   , alter'
   , update'
   , mapInsert'
+  , modify'
 
   -- * Miscellaneous functions
   , on
@@ -51,7 +52,7 @@ module TorDNSEL.Util (
   , split
   , ignoreJust
   , syncExceptions
-  , exitLeft
+  , exitUsage
   , inBoundsOf
   , htonl
   , ntohl
@@ -63,6 +64,7 @@ module TorDNSEL.Util (
   -- * Network functions
   , bindUDPSocket
   , bindListeningTCPSocket
+  , bindListeningUnixDomainStreamSocket
 
   -- * Monads
   , MaybeT(..)
@@ -98,10 +100,11 @@ module TorDNSEL.Util (
 
 import Control.Arrow ((&&&), first, second)
 import qualified Control.Exception as E
-import Control.Monad
-  (liftM, liftM2, zipWithM_, when, unless, guard, MonadPlus(..))
 import Control.Monad.Error
   (Error(..), MonadError(..), MonadTrans(..), MonadIO(..))
+import qualified Control.Monad.State as State
+import Control.Monad.State
+  (MonadState, liftM, liftM2, zipWithM_, when, unless, guard, MonadPlus(..))
 import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
 import Data.Array.Unboxed ((!))
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
@@ -123,13 +126,16 @@ import Data.Word (Word16, Word32)
 import Debug.Trace (trace)
 import Network.Socket
   ( HostAddress, ProtocolNumber, Socket, SockAddr(..), SocketOption(ReuseAddr)
-  , SocketType(Datagram, Stream), Family(AF_INET), socket, bindSocket, listen
-  , setSocketOption, sClose, sOMAXCONN )
-import Text.Printf (printf)
+  , SocketType(Datagram, Stream), Family(AF_INET, AF_UNIX), socket, bindSocket
+  , listen, setSocketOption, sClose, sOMAXCONN )
+import System.Directory (doesFileExist, removeFile)
 import System.Environment (getProgName)
-import System.Exit (exitFailure)
-import System.IO (hPutStr, stderr)
+import System.Exit (exitWith, ExitCode)
+import System.IO (hPutStr)
 import System.IO.Error (isEOFError)
+import System.Posix.Files (setFileMode)
+import System.Posix.Types (FileMode)
+import Text.Printf (printf)
 
 import GHC.Handle
   (wantReadableHandle, fillReadBuffer, readCharFromBuffer, ioe_EOF)
@@ -266,6 +272,11 @@ update' = M.update . (maybe Nothing (Just $!) .)
 mapInsert' :: Ord k => k -> a -> M.Map k a -> M.Map k a
 mapInsert' k !x = M.insert k x
 
+-- | Same as 'modify', but the new state is evaluated before replacing the
+-- current state.
+modify' :: MonadState s m => (s -> s) -> m ()
+modify' f = State.get >>= (State.put $!) . f
+
 --------------------------------------------------------------------------------
 -- Miscellaneous functions
 
@@ -334,13 +345,12 @@ syncExceptions :: E.Exception -> Maybe E.Exception
 syncExceptions (E.AsyncException _) = Nothing
 syncExceptions e                    = Just e
 
--- | Lift an @Either ShowS@ computation into the 'IO' monad by printing
--- @Left e@ as an error message and exiting.
-exitLeft :: Either ShowS a -> IO a
-exitLeft = either (\e -> err e >> exitFailure) return
-  where
-    err e = hPutStr stderr . unlines . (\u -> [e "", u]) . usage =<< getProgName
-    usage progName = "Usage: " ++ progName ++ " [-f <config file>] [options...]"
+-- | Print a usage message to the given handle and exit with the given code.
+exitUsage :: Handle -> ExitCode -> IO a
+exitUsage handle exitCode = do
+  progName <- getProgName
+  hCat handle "Usage: " progName " [-f <config file>] [options...]\n"
+  exitWith exitCode
 
 -- | Is an integral value inside the bounds of another integral type?
 -- Unchecked precondition: @b@ is a subset of @a@.
@@ -519,6 +529,20 @@ bindListeningTCPSocket sockAddr = do
   E.bracketOnError (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do
     setSocketOption sock ReuseAddr 1
     bindSocket sock sockAddr
+    listen sock sOMAXCONN
+    return sock
+
+-- | Open a listening Unix domain stream socket at @sockPath@, unlinking it
+-- first if it exists, then setting it to the given mode.
+bindListeningUnixDomainStreamSocket :: FilePath -> FileMode -> IO Socket
+bindListeningUnixDomainStreamSocket sockPath mode = do
+  sockExists <- doesFileExist sockPath
+  when sockExists $
+    removeFile sockPath
+  E.bracketOnError (socket AF_UNIX Stream 0) sClose $ \sock -> do
+    setSocketOption sock ReuseAddr 1
+    bindSocket sock $ SockAddrUnix sockPath
+    setFileMode sockPath mode
     listen sock sOMAXCONN
     return sock
 

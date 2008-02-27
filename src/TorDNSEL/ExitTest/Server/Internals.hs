@@ -64,6 +64,10 @@ data ExitTestServerConfig = ExitTestServerConfig
     -- | The addresses on which the server should listen for connections.
     etscfListenAddrs          :: !(Set SockAddr) }
 
+instance Eq ExitTestServerConfig where
+  x == y = etscfConcClientLimit x == etscfConcClientLimit y &&
+           etscfListenAddrs x     == etscfListenAddrs y
+
 -- | An internal type representing the current exit test server state.
 data ServerState = ServerState
   { serverChan      :: !(Chan ServerMessage)
@@ -104,7 +108,7 @@ data ServerMessage
 startExitTestServer
   :: [(SockAddr, Maybe Socket)] -> ExitTestServerConfig -> IO ExitTestServer
 startExitTestServer socks initConf = do
-  log Notice "Starting exit test server."
+  log Info "Starting exit test server."
   chan <- newChan
   tid <- startLink $ \signal -> do
     setTrapExit $ (writeChan chan .) . Exit
@@ -114,7 +118,7 @@ startExitTestServer socks initConf = do
       let owner | mbSock == Just sock = SupervisorOwned
                 | otherwise           = ExitTestServerOwned
       tid <- lift $ startListenerThread ((writeChan chan .) . NewClient) sem
-                                        owner sock
+                                        owner sock addr
       return (tid, Listener addr sock owner)
     signal
 
@@ -128,18 +132,20 @@ startExitTestServer socks initConf = do
 
 -- | Start a listener thread, returning its 'ThreadId'.
 startListenerThread :: (Socket -> HostAddress -> IO ()) -> QSemN -> SocketOwner
-                    -> Socket -> IO ThreadId
-startListenerThread notifyServerNewClient sem owner listener =
+                    -> Socket -> SockAddr -> IO ThreadId
+startListenerThread notifyServerNewClient sem owner listener addr =
   forkLinkIO . E.block . finallyCloseSocket . forever $ do
     waitQSemN sem 1
-    (client,SockAddrInet _ addr) <- E.unblock (accept listener)
+    (client,SockAddrInet _ clientAddr) <- E.unblock (accept listener)
       `E.catch` \e -> signalQSemN sem 1 >> E.throwIO e
-    let addr' = ntohl addr
-    log Debug "Accepted exit test client from " (inet_htoa addr') '.'
-    notifyServerNewClient client addr'
+    let clientAddr' = ntohl clientAddr
+    log Debug "Accepted exit test client from " (inet_htoa clientAddr') '.'
+    notifyServerNewClient client clientAddr'
   where
     finallyCloseSocket = case owner of
-      ExitTestServerOwned -> (`E.finally` sClose listener)
+      ExitTestServerOwned -> flip E.finally $ do
+        log Notice "Closing exit test listener on " addr '.'
+        sClose listener
       SupervisorOwned -> id
 
 -- | Given an optional listening socket, return it if it's open. Otherwise,
@@ -151,6 +157,7 @@ reopenSocketIfClosed addr mbSock = MaybeT $ do
     then return mbSock
     else do
       whenJust mbSock sClose
+      log Notice "Opening exit test listener on " addr '.'
       r <- E.tryJust E.ioErrors $ bindListeningTCPSocket addr
       case r of
         Left e -> do
@@ -199,13 +206,15 @@ handleMessage conf s (NewClient sock addr) = do
     b = B.unsafePackAddress
 
 handleMessage conf s (Reconfigure reconf signal) = do
+  when (conf /= newConf) $
+    log Notice "Reconfiguring exit test server."
   when (limitDiff /= 0) $
     signalQSemN (handlerSem s) (fromIntegral limitDiff)
   if etscfListenAddrs conf == etscfListenAddrs newConf
     then signal >> return (newConf, s)
     else do
       deadListeners' <- foldM killListener (deadListeners s)
-                              (M.assocs closeListeners)
+                              (M.keys closeListeners)
       listeners' <- (M.union unchangedListeners . M.fromList . catMaybes)
                       `fmap` mapM openListener (S.elems open)
       signal
@@ -214,14 +223,14 @@ handleMessage conf s (Reconfigure reconf signal) = do
              , s { listenerThreads = listeners'
                  , deadListeners = deadListeners' } )
   where
-    killListener dead (tid,listener) = do
-      closeListener tid listener
+    killListener dead tid = do
+      terminateThread Nothing tid (killThread tid)
       return $! S.insert tid dead
     openListener addr = runMaybeT $ do
       sock <- reopenSocketIfClosed addr Nothing
       tid <- lift $ startListenerThread
                       ((writeChan (serverChan s) .) . NewClient) (handlerSem s)
-                      ExitTestServerOwned sock
+                      ExitTestServerOwned sock addr
       return (tid, Listener addr sock ExitTestServerOwned)
     (closeListeners,unchangedListeners) =
       M.partition ((`S.member` close) . listenAddr) (listenerThreads s)
@@ -233,8 +242,9 @@ handleMessage conf s (Reconfigure reconf signal) = do
     newConf = reconf conf
 
 handleMessage _conf s (Terminate reason) = do
-  log Notice "Terminating exit test server."
-  mapM_ (uncurry closeListener) (M.assocs $ listenerThreads s)
+  log Info "Terminating exit test server."
+  mapM_ (\tid -> terminateThread Nothing tid (killThread tid))
+        (M.keys $ listenerThreads s)
   F.mapM_ (\tid -> terminateThread Nothing tid (killThread tid))
           (handlers s)
   msgs <- untilM (isEmptyChan $ serverChan s) (readChan $ serverChan s)
@@ -243,8 +253,8 @@ handleMessage _conf s (Terminate reason) = do
 
 handleMessage conf s (Exit tid reason)
   | tid `S.member` handlers s = do
-      whenJust reason $ \e ->
-        log Warn "Bug: An exit test client handler exited abnormally: " e
+      whenJust reason $
+        log Warn "Bug: An exit test client handler exited abnormally: "
       return (conf, s { handlers = S.delete tid (handlers s) })
   | tid `S.member` deadListeners s
   = return (conf, s { deadListeners = S.delete tid (deadListeners s) })
@@ -264,19 +274,12 @@ handleMessage conf s (Exit tid reason)
                      | otherwise     = owner
               listener' = Listener addr sock' owner'
           tid' <- startListenerThread ((writeChan (serverChan s) .) . NewClient)
-                                      (handlerSem s) owner sock
+                                      (handlerSem s) owner sock addr
           listener' `seq` return
             (conf, s { listenerThreads = M.insert tid' listener' .
                                            M.delete tid $ listenerThreads s })
   | isJust reason = exit reason
   | otherwise = return (conf, s)
-
--- | Close an exit test listener.
-closeListener :: ThreadId -> Listener -> IO ()
-closeListener tid listener = do
-  terminateThread Nothing tid (killThread tid)
-  when (socketOwner listener == ExitTestServerOwned) $
-    log Info "Closed exit test listener on " (listenAddr listener) '.'
 
 -- | Reconfigure the exit test server synchronously with the given function. If
 -- the server exits abnormally before reconfiguring itself, throw its exit

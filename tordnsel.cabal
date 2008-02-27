@@ -1,5 +1,5 @@
 Name:            TorDNSEL
-Version:         0.0.6
+Version:         0.0.6-dev
 Synopsis:        provides a DNSBL-style interface for detecting Tor exit nodes
 Description:     TorDNSEL implements a design for a DNSBL-style interface for
   detecting connections exiting the Tor network. This design and its rationale
@@ -55,9 +55,9 @@ Other-Modules:   TorDNSEL.Config,
                  TorDNSEL.TorControl.Internals,
                  TorDNSEL.Util
 HS-Source-Dirs:  src
-Includes:        openssl/rand.h, netinet/in.h, sys/types.h
+Includes:        sys/types.h, unistd.h, sysexits.h, netinet/in.h, openssl/rand.h
 Extra-Libraries: crypto
-GHC-Options:     -O2 -Wall -Werror
+GHC-Options:     -O2 -Wall -Werror -DVERSION="0.0.6-dev"
 
 Executable:      runtests
 Buildable:       False
@@ -67,6 +67,6 @@ Other-Modules:   TorDNSEL.Config.Tests,
                  TorDNSEL.DNS.Tests,
                  TorDNSEL.DNS.Server.Tests
 HS-Source-Dirs:  src
-Includes:        openssl/rand.h, netinet/in.h
+Includes:        netinet/in.h, openssl/rand.h
 Extra-Libraries: crypto
 GHC-Options:     -fasm -Wall -Werror -fno-warn-missing-signatures

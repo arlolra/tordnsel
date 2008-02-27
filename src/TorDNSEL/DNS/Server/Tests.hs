@@ -7,7 +7,7 @@
 -- Stability   : alpha
 -- Portability : portable
 --
--- DNS handler tests.
+-- DNS server tests.
 --
 -----------------------------------------------------------------------------
 
@@ -19,7 +19,6 @@ import Test.HUnit (Test(..), (@=?))
 
 import TorDNSEL.DNS
 import TorDNSEL.DNS.Server.Internals
-import TorDNSEL.NetworkState
 import TorDNSEL.Util
 
 tests = TestList . map TestCase $
@@ -28,7 +27,7 @@ tests = TestList . map TestCase $
   where
     query = toLabels ["ip-port","1","2","3","4","80","10","0","0","1"]
     queryName = toName [ "1","0","0","10","80","4","3","2","1"
-                       ,"ip-port","torhosts","example","com" ]
+                       , "ip-port","torhosts","example","com" ]
     authZone = DomainName $ map (Label . B.pack) ["com","example","torhosts"]
     toLabels = map $ Label . B.pack
     toName = DomainName . toLabels

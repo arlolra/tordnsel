@@ -12,8 +12,7 @@ through every exit node with a suitable exit policy. This allows it to detect
 exit nodes configured to send outbound connections through a different IP
 address from the one they advertise in their descriptors. When configured to
 run exit tests, it tests through a particular exit node each time the node
-publishes a new descriptor. All running nodes are tested periodically between
-descriptor uploads.
+publishes a new descriptor.
 
 Currently, only query type 1 from torel-design.txt is supported:
 
@@ -31,7 +30,9 @@ Presumably, users of software with built-in support for DNSBLs would configure
 
 Dependencies
 
-  TorDNSEL requires GHC 6.6. If you're running Debian etch:
+  TorDNSEL requires GHC 6.6. It doesn't yet build with GHC 6.8.x.
+
+  If you're running Debian etch:
 
     apt-get install ghc6 libghc6-mtl-dev libghc6-network-dev libghc6-time-dev \
       libghc6-hunit-dev
@@ -45,7 +46,7 @@ Dependencies
 
     http://haskell.org/ghc/download.html
 
-  binary, a new serialization library, also required, is available here:
+  binary, a serialization library, also required, is available here:
 
     http://hackage.haskell.org/packages/archive/binary/0.3/binary-0.3.tar.gz
 
@@ -68,14 +69,11 @@ Building TorDNSEL
 Configuring TorDNSEL
 
   Copy config/tordnsel.conf.sample. At the very least, you'll need to uncomment
-  and modify AuthoritativeZone, DomainName, SOARName, StateDirectory, and
-  probably DNSListenAddress.
+  and modify AuthoritativeZone, DomainName, SOARName, StateDirectory,
+  RuntimeDirectory, and probably DNSListenAddress.
 
-  To run exit tests, you need to specify at least ConcurrentExitTests,
-  StateDirectory, TestListenAddress, and TestDestinationAddress.
-
-  Make sure everything is working before changing RunAsDaemon to True so you
-  won't miss any error messages (currently there's no support for logging).
+  To run exit tests, you'll need to specify at least EnableActiveTesting,
+  TestListenAddress, and TestDestinationAddress.
 
   Load a config file with the -f option.
 

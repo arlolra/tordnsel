@@ -57,7 +57,7 @@ import Control.Arrow (first, second)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import qualified Control.Exception as E
-import Control.Monad (replicateM_, guard)
+import Control.Monad (replicateM_, guard, when)
 import qualified Data.ByteString.Char8 as B
 import Data.Dynamic (fromDynamic)
 import qualified Data.Foldable as F
@@ -125,6 +125,14 @@ data ExitTestInitiatorConfig = ExitTestInitiatorConfig
     -- | The ports to which we make exit test connections through Tor.
     eticfTestPorts       :: ![Port] }
 
+instance Eq ExitTestInitiatorConfig where
+  x == y = all (\(===) -> x === y)
+    [ eq eticfConcClientLimit, eq eticfSocksServer, eq eticfTestAddress
+    , eq eticfTestPorts ]
+    where
+      eq :: Eq b => (a -> b) -> a -> a -> Bool
+      eq = on (==)
+
 -- | An internal type representing the current exit test initiator state.
 data InitiatorState = InitiatorState
   { initiatorChan     :: !(Chan InitiatorMessage)
@@ -146,7 +154,7 @@ data TestStatus
 -- thread.
 startExitTestInitiator :: ExitTestInitiatorConfig -> IO ExitTestInitiator
 startExitTestInitiator initConf = do
-  log Notice "Starting exit test initiator."
+  log Info "Starting exit test initiator."
   chan <- newChan
   initiatorTid <- forkLinkIO $ do
     setTrapExit ((writeChan chan .) . Exit)
@@ -222,11 +230,15 @@ handleMessage conf s (ScheduleNextExitTest rid)
         else return (conf, newS)
   where (testAdded,newPendingTests) = Q.unGetQueue rid (pendingTests s)
 
-handleMessage conf s (Reconfigure reconf signal) =
-  signal >> return (reconf conf, s)
+handleMessage conf s (Reconfigure reconf signal) = do
+  let newConf = reconf conf
+  when (conf /= newConf) $
+    log Notice "Reconfiguring exit test initiator."
+  signal
+  return (newConf, s)
 
 handleMessage _ s (Terminate reason) = do
-  log Notice "Terminating exit test initiator."
+  log Info "Terminating exit test initiator."
   F.forM_ (runningClients s) $ \client ->
     terminateThread Nothing client (killThread client)
   exit reason

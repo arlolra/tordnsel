@@ -66,9 +66,7 @@ import Control.Monad.State
   (MonadState, StateT, runStateT, execStateT, get, gets, put, MonadIO, liftIO)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
-import Control.Concurrent.MVar
-  ( MVar, newEmptyMVar, newMVar, readMVar, swapMVar, takeMVar, putMVar
-  , tryPutMVar )
+import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
 import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString.Char8 (ByteString)
@@ -120,7 +118,7 @@ data NetworkStateManagerConfig = NetworkStateManagerConfig
     -- | Where to store exit test results.
     nsmcfStateDir         :: !FilePath,
     -- | The exit test configuration, if exit tests are enabled.
-    nsmcfExitTestConfig   :: !(Maybe ExitTestConfig) }
+    nsmcfExitTestConfig   :: !(Maybe ExitTestConfig) } deriving Eq
 
 -- | The exit test configuration.
 data ExitTestConfig = ExitTestConfig
@@ -137,6 +135,14 @@ data ExitTestConfig = ExitTestConfig
     etcfTestAddress     :: !HostAddress,
     -- | The ports to which we make exit test connections through Tor.
     etcfTestPorts       :: ![Port] }
+
+instance Eq ExitTestConfig where
+  x == y = all (\(===) -> x === y)
+    [ eq etcfListeners, eq etcfConcClientLimit, eq etcfTorSocksAddr
+    , eq etcfTestAddress, eq etcfTestPorts ]
+    where
+      eq :: Eq b => (a -> b) -> a -> a -> Bool
+      eq = on (==)
 
 -- | An internal type representing the current exit test manager state.
 data ManagerState = ManagerState
@@ -174,7 +180,7 @@ data ManagerMessage
 -- calling thread.
 startNetworkStateManager :: NetworkStateManagerConfig -> IO NetworkStateManager
 startNetworkStateManager initConf = do
-  log Notice "Starting network state manager."
+  log Info "Starting network state manager."
   chan <- newChan
   tid <- startLink $ \signal -> do
     setTrapExit $ (writeChan chan .) . Exit
@@ -184,9 +190,10 @@ startNetworkStateManager initConf = do
                                   (S.singleton deadTid) Nothing
     initState <- case nsmcfExitTestConfig initConf of
       -- Only fork exit test threads when the controller is running.
-      Just testConf | Right _ <- controller ->
+      Just testConf | Right conn <- controller ->
         execStateT (initializeExitTests net (nsmcfStateDir initConf) testConf)
                    emptyState
+          `E.catch` \e -> closeConnection conn >> E.throwIO e
       _ -> return emptyState
     swapMVar networkStateMV $! networkState initState
     signal
@@ -293,45 +300,52 @@ handleMessage _net conf (NewExitAddress tested cookie address) = do
                                            (storageManager testState)
   return conf
 
-handleMessage net conf (Reconfigure reconf signal) = do
-  when (nsmcfTorControlAddr conf /= nsmcfTorControlAddr newConf) $ do
-    controlConn <- gets torControlConn
-    deadTid1 <- case controlConn of
-      Left (tid,_) -> return tid
-      Right conn -> do
-        liftIO $ closeConnection conn
-        return $ threadId conn
-    (controller,deadTid2) <- startTorController net newConf Nothing
-    modify' $ \s -> s { torControlConn = controller
-                      , deadThreads = S.insert deadTid2 . S.insert deadTid1 $
-                                        deadThreads s }
-  s <- get
-  case exitTestState s of
-    Nothing
-      | Just testConf <- nsmcfExitTestConfig newConf
-      , Right _ <- torControlConn s ->
-          initializeExitTests net (nsmcfStateDir newConf) testConf
-      | otherwise -> return ()
-    Just testState
-      | Just testConf <- nsmcfExitTestConfig newConf
-      , Right _ <- torControlConn s -> liftIO $ do
-          flip reconfigureExitTestInitiator (exitTestInitiator testState) $
-            \c -> c { eticfConcClientLimit = etcfConcClientLimit testConf
-                    , eticfSocksServer = etcfTorSocksAddr testConf
-                    , eticfTestAddress = etcfTestAddress testConf
-                    , eticfTestPorts = etcfTestPorts testConf }
-          flip reconfigureExitTestServer (exitTestServer testState) $ \c ->
-            c { etscfConcClientLimit = etcfConcClientLimit testConf
-              , etscfListenAddrs = M.keysSet $ etcfListeners testConf }
-          reconfigureStorageManager
-            (\c -> c { stcfStateDir = nsmcfStateDir newConf })
-            (nsRouters $ networkState s) (storageManager testState)
-      | otherwise -> terminateExitTests testState
-  liftIO signal
-  return newConf
+handleMessage net conf (Reconfigure reconf signal)
+  | conf == newConf = liftIO signal >> return newConf
+  | otherwise = do
+      log Notice "Reconfiguring network state manager."
+      when (nsmcfTorControlAddr conf /= nsmcfTorControlAddr newConf) $ do
+        controlConn <- gets torControlConn
+        deadTid1 <- case controlConn of
+          Left (tid,_) -> return tid
+          Right conn -> do
+            log Notice "Closing Tor controller connection."
+            liftIO $ closeConnection conn
+            return $ threadId conn
+        (controller,deadTid2) <- startTorController net newConf Nothing
+        modify' $ \s ->
+          s { torControlConn = controller
+            , deadThreads = S.insert deadTid2 . S.insert deadTid1 $
+                              deadThreads s }
+      s <- get
+      case exitTestState s of
+        Nothing
+          | Just testConf <- nsmcfExitTestConfig newConf
+          , Right _ <- torControlConn s ->
+              initializeExitTests net (nsmcfStateDir newConf) testConf >>=
+               liftIO . notifyNewDirInfo (M.assocs . nsRouters $ networkState s)
+          | otherwise -> return ()
+        Just testState
+          | Just testConf <- nsmcfExitTestConfig newConf
+          , Right _ <- torControlConn s -> liftIO $ do
+              flip reconfigureExitTestInitiator (exitTestInitiator testState) $
+                \c -> c { eticfConcClientLimit = etcfConcClientLimit testConf
+                        , eticfSocksServer = etcfTorSocksAddr testConf
+                        , eticfTestAddress = etcfTestAddress testConf
+                        , eticfTestPorts = etcfTestPorts testConf }
+              flip reconfigureExitTestServer (exitTestServer testState) $ \c ->
+                c { etscfConcClientLimit = etcfConcClientLimit testConf
+                  , etscfListenAddrs = M.keysSet $ etcfListeners testConf }
+              reconfigureStorageManager
+                (\c -> c { stcfStateDir = nsmcfStateDir newConf })
+                (storageManager testState)
+          | otherwise -> terminateExitTests testState
+      liftIO signal
+      return newConf
   where newConf = reconf conf
 
 handleMessage _net _conf (Terminate reason) = do
+  log Info "Terminating network state manager."
   s <- get
   either (const $ return ()) (liftIO . closeConnection) (torControlConn s)
   whenJust (exitTestState s) $ \testState -> do
@@ -347,7 +361,8 @@ handleMessage net conf (Exit tid reason) = get >>= handleExit where
                  , deadThreads = S.insert deadTid (deadThreads s) }
         case controller of
           Right _ | Just testConf <- nsmcfExitTestConfig conf ->
-            initializeExitTests net (nsmcfStateDir conf) testConf
+            initializeExitTests net (nsmcfStateDir conf) testConf >>=
+             liftIO . notifyNewDirInfo (M.assocs . nsRouters . networkState $ s)
           _ -> return ()
         return conf
     | Right conn <- torControlConn s, tid == threadId conn = do
@@ -424,10 +439,6 @@ modifyNetworkState ns = do
 readNetworkState :: IO NetworkState
 readNetworkState = readMVar networkStateMV
 
--- | A strict version of 'modify'.
-modify' :: MonadState s m => (s -> s) -> m ()
-modify' f = get >>= (put $!) . f
-
 --------------------------------------------------------------------------------
 -- Tor controller
 
@@ -440,13 +451,9 @@ modify' f = get >>= (put $!) . f
 startTorController
   :: MonadIO m => NetworkStateManager -> NetworkStateManagerConfig -> Maybe Int
   -> m (Either (ThreadId, Int) Connection, ThreadId)
-startTorController net@(NetworkStateManager _ netTid) conf mbDelay = liftIO $ do
-  log Notice "Starting Tor controller."
-  sync <- newEmptyMVar
-  response <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar response
-  tid <- forkLinkIO $ do
-    takeMVar sync
+startTorController net conf mbDelay = liftIO $ do
+  log Info "Starting Tor controller."
+  (r,tid) <- tryForkLinkIO $ do
     E.bracketOnError (socket AF_INET Stream tcpProtoNum)
                      (ignoreJust syncExceptions . sClose) $ \sock -> do
       connect sock $ nsmcfTorControlAddr conf
@@ -458,6 +465,7 @@ startTorController net@(NetworkStateManager _ netTid) conf mbDelay = liftIO $ do
           when (torVersion (protocolInfo conn) >= TorVersion 0 2 0 13 B.empty) $
             setConfWithRollback fetchDirInfoEarly (Just True) conn
 
+          -- XXX log parsing errors
           let newNS = networkStatusEvent (const $ updateNetworkStatus net)
               newDesc = newDescriptorsEvent (const $ updateDescriptors net) conn
           registerEventHandlers [newNS, newDesc] conn
@@ -465,11 +473,7 @@ startTorController net@(NetworkStateManager _ netTid) conf mbDelay = liftIO $ do
           getNetworkStatus conn >>= updateNetworkStatus net . fst
           getAllDescriptors conn >>= updateDescriptors net . fst
 
-          putResponse $ Right conn
-          linkThread netTid
-  r <- withMonitor tid (putResponse . Left) $ do
-    putMVar sync ()
-    takeMVar response
+          return conn
   case r of
     Left reason -> do
       log Warn "Initializing Tor controller connection failed: "
@@ -478,14 +482,13 @@ startTorController net@(NetworkStateManager _ netTid) conf mbDelay = liftIO $ do
       timerTid <- forkLinkIO $ threadDelay (delay * 10^6)
       return (Left (timerTid, nextDelay), tid)
     Right conn -> do
-      linkThread $ threadId conn
-      log Notice "Successfully initialized Tor controller connection."
+      log Info "Successfully initialized Tor controller connection."
       return (Right conn, tid)
   where
     updateDescriptors (NetworkStateManager send _) = send . NewDescriptors
     updateNetworkStatus (NetworkStateManager send _) = send . NewNetworkStatus
     nextDelay | delay' < maxDelay = delay'
-             | otherwise          = maxDelay
+              | otherwise          = maxDelay
     delay' = delay * backoffFactor
     delay = fromMaybe minDelay mbDelay
     backoffFactor = 2
@@ -521,9 +524,9 @@ initExitTestInitiatorConfig net conf = ExitTestInitiatorConfig
 -- from the store into the current network state, starting the exit test server,
 -- and starting the exit test initiator.
 initializeExitTests :: NetworkStateManager -> FilePath -> ExitTestConfig
-                    -> StateT ManagerState IO ()
+                    -> StateT ManagerState IO ExitTestInitiator
 initializeExitTests net stateDir conf = do
-  log Notice "Initializing exit tests."
+  log Info "Initializing exit tests."
   storage <- liftIO . startStorageManager $ StorageConfig stateDir
   exitAddrs <- liftIO $ readExitAddressesFromStorage storage
   now <- liftIO getCurrentTime
@@ -537,11 +540,12 @@ initializeExitTests net stateDir conf = do
                      initExitTestInitiatorConfig net conf
   let newTestState = ExitTestState storage testServer testInitiator M.empty
   modify' $ \s -> s { exitTestState = Just $! newTestState }
+  return testInitiator
 
 -- | Terminate all the threads enabling and supporting exit tests.
 terminateExitTests :: ExitTestState -> StateT ManagerState IO ()
 terminateExitTests testState = do
-  log Notice "Halting exit tests."
+  log Info "Halting exit tests."
   liftIO $ do
     terminateExitTestInitiator Nothing $ exitTestInitiator testState
     terminateExitTestServer Nothing $ exitTestServer testState

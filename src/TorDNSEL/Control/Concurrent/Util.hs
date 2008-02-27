@@ -25,6 +25,9 @@ import TorDNSEL.Util
 class Thread a where
   threadId :: a -> ThreadId -- ^ The 'ThreadId' contained within a handle.
 
+instance Thread ThreadId where
+  threadId = id
+
 -- | Terminate the thread @tid@ by calling @terminate@. @mbWait@ specifies the
 -- amount of time in microseconds to wait for the thread to terminate. If the
 -- thread hasn't terminated by the timeout, an uncatchable exit signal will be
@@ -89,3 +92,23 @@ startLink io = do
     putMVar sync ()
     takeMVar err >>= flip whenJust E.throwIO
   return tid
+
+-- | Invoke the given 'IO' action in a temporary thread (linked to the calling
+-- thread), returning either its exit signal or the thread returned by it. If
+-- the 'IO' action successfully returns a thread, link it to the calling thread.
+-- Also return the 'ThreadId' of the temporary thread.
+tryForkLinkIO :: Thread a => IO a -> IO (Either ExitReason a, ThreadId)
+tryForkLinkIO io = do
+  sync <- newEmptyMVar
+  response <- newEmptyMVar
+  let putResponse = (>> return ()) . tryPutMVar response
+  intermediate <- forkLinkIO $ do
+    takeMVar sync
+    io >>= putResponse . Right
+  r <- withMonitor intermediate (putResponse . Left) $ do
+    putMVar sync ()
+    E.block $ do
+      r <- takeMVar response
+      either (const $ return ()) (linkThread . threadId) r
+      return r
+  return (r, intermediate)

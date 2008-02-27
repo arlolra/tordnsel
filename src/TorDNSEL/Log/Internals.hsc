@@ -30,6 +30,7 @@ import Control.Monad (when, liftM2)
 import Control.Monad.Fix (fix)
 import Control.Monad.Trans (MonadIO, liftIO)
 import Data.Bits ((.|.))
+import qualified Data.ByteString.Char8 as B
 import Data.List (foldl')
 import Data.Time (UTCTime, getCurrentTime)
 import Foreign.C (CString, CInt, withCString)
@@ -48,7 +49,7 @@ data LogConfig = LogConfig
   { minSeverity :: !Severity  -- ^ Minimum severity level to log
   , logTarget   :: !LogTarget -- ^ Where to send log messages
   , logEnabled  :: !Bool      -- ^ Is logging enabled?
-  } deriving Show
+  } deriving (Eq, Show)
 
 -- | Where log messages should be sent.
 data LogTarget = ToStdOut | ToStdErr | ToSysLog | ToFile FilePath
@@ -58,7 +59,8 @@ instance Show LogTarget where
   show ToStdOut    = "stdout"
   show ToStdErr    = "stderr"
   show ToSysLog    = "syslog"
-  show (ToFile fp) = show fp
+  show (ToFile fp) = esc maxPathLen (B.pack fp) ""
+    where maxPathLen = 256
 
 -- | Open a handle associated with a given 'LogTarget' and pass it to an 'IO'
 -- action, ensuring that the handle is closed or flushed as appropriate when the
@@ -107,6 +109,7 @@ startLogger initConf =
     E.bracket_ (swapMVar logger $ Just curLogger) (swapMVar logger Nothing) $
       flip fix (initConf, initSignal) $ \resetLogger (conf, signal) ->
         (resetLogger =<<) . withLogTarget (logTarget conf) $ \mbHandle -> do
+          log Notice "Opened log to " (logTarget conf) '.'
           signal
           fix $ \nextMsg -> do
             msg <- readChan logChan
@@ -120,7 +123,11 @@ startLogger initConf =
                     Nothing ->
                       sysLog severity (logMsg "")
                 nextMsg
-              Reconfigure reconf newSignal -> return (reconf conf, newSignal)
+              Reconfigure reconf newSignal -> do
+                let newConf = reconf conf
+                when (conf /= newConf) $
+                  log Info "Reconfigured logger."
+                return (reconf conf, newSignal)
               Terminate reason -> exit reason
 
 -- | Implements the variable parameter support for 'log'.
