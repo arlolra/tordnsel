@@ -9,7 +9,7 @@
 ## Answer queries authoritatively for this DNS zone. For example, if this
 ## is set to "exitlist.example.com.", your server would accept queries of
 ## the form "1.0.0.10.80.4.3.2.1.ip-port.exitlist.example.com.".
-#AuthoritativeZone exitlist.example.com.
+#ZoneOfAuthority exitlist.example.com.
 
 ## This name server's own domain name, for use in NS and SOA records.
 #DomainName exitlist-ns.example.com.
@@ -43,8 +43,8 @@
 #DNSListenAddress 127.0.0.1:53
 
 ## The IP address that will be returned in response to requests for the A
-## record matching our authoritative zone. If you don't specify this
-## option, no A record will be returned for the authoritative zone.
+## record matching our zone of authority. If you don't specify this option,
+## no A record will be returned for the zone of authority.
 #Address 10.0.0.1
 
 ## Make Tor controller connections to this IP address and TCP port. You'll

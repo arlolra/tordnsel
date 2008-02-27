@@ -18,7 +18,7 @@ Currently, only query type 1 from torel-design.txt is supported:
 
 A request for the A record "1.0.0.10.80.4.3.2.1.ip-port.exitlist.example.com"
 would return 127.0.0.2 if there's a running Tor node at 10.0.0.1 that allows
-exits to port 80 at 1.2.3.4 and our AuthoritativeZone is set to
+exits to port 80 at 1.2.3.4 and our ZoneOfAuthority is set to
 "exitlist.example.com". If there isn't such an exit node, we return NXDOMAIN.
 If the query is unsolicited and outside our authoritative zone, we return
 REFUSED.
@@ -69,7 +69,7 @@ Building TorDNSEL
 Configuring TorDNSEL
 
   Copy config/tordnsel.conf.sample. At the very least, you'll need to uncomment
-  and modify AuthoritativeZone, DomainName, SOARName, StateDirectory,
+  and modify ZoneOfAuthority, DomainName, SOARName, StateDirectory,
   RuntimeDirectory, and probably DNSListenAddress.
 
   To run exit tests, you'll need to specify at least EnableActiveTesting,
@@ -80,7 +80,7 @@ Configuring TorDNSEL
   Options listed in tordnsel.conf.sample can also be specified on the command
   line:
 
-    ./tordnsel -f /etc/tordnsel.conf --AuthoritativeZone exitlist.example.com
+    ./tordnsel -f /etc/tordnsel.conf --ZoneOfAuthority exitlist.example.com
 
   Command line options override those included in a config file.
 

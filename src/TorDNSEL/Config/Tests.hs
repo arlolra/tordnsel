@@ -33,7 +33,7 @@ config' = toConfig
 configArgs = ["--User", "nobody", "-f", "/etc/tordnsel.conf"]
 
 config = toConfig
-  [ "AuthoritativeZone"      ~> "exitlist.example.com."
+  [ "ZoneOfAuthority"        ~> "exitlist.example.com."
   , "DomainName"             ~> "exitlist-ns.example.com."
   , "SOARName"               ~> "hostmaster.example.com."
   , "StateDirectory"         ~> "/state"
@@ -65,7 +65,7 @@ configFile = B.pack
   \## Answer queries authoritatively for this DNS zone. For example, if this\n\
   \## is set to \"exitlist.example.com.\", your server would accept queries of\n\
   \## the form \"1.0.0.10.80.4.3.2.1.ip-port.exitlist.example.com.\".\n\
-  \AuthoritativeZone exitlist.example.com.\n\
+  \ZoneOfAuthority exitlist.example.com.\n\
   \\n\
   \## This name server's own domain name, for use in NS and SOA records.\n\
   \DomainName exitlist-ns.example.com.\n\
@@ -99,8 +99,8 @@ configFile = B.pack
   \DNSListenAddress 127.0.0.1:53\n\
   \\n\
   \## The IP address that will be returned in response to requests for the A\n\
-  \## record matching our authoritative zone. If you don't specify this\n\
-  \## option, no A record will be returned for the authoritative zone.\n\
+  \## record matching our zone of authority. If you don't specify this option,\n\
+  \## no A record will be returned for the zone of authority.\n\
   \Address 10.0.0.1\n\
   \\n\
   \## Make Tor controller connections to this IP address and TCP port. You'll\n\

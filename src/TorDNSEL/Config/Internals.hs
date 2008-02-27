@@ -86,7 +86,7 @@ data Config = Config
     -- | Address Tor is listening on for SOCKS connections, through which we
     -- make exit tests.
   , cfTorSocksAddress     :: SockAddr
-  , cfAuthoritativeZone   :: DomainName -- ^ DNS zone we're authoritative for.
+  , cfZoneOfAuthority     :: DomainName -- ^ DNS zone we're authoritative for.
   , cfDomainName          :: DomainName -- ^ Name for our own NS record.
   , cfSOARName            :: DomainName -- ^ RNAME we return in our SOA record.
   , cfRunAsDaemon         :: Bool -- ^ Should we daemonize on startup?
@@ -120,7 +120,7 @@ knownConfigItems
   , "DNSListenAddress"
   , "TorControlAddress"
   , "TorSocksAddress"
-  , "AuthoritativeZone"
+  , "ZoneOfAuthority"
   , "DomainName"
   , "SOARName"
   , "RunAsDaemon"
@@ -146,7 +146,7 @@ makeConfig conf =
     "DNSListenAddress"# `app`
     "TorControlAddress"# `app`
     "TorSocksAddress"# `app`
-    "AuthoritativeZone"# `app`
+    "ZoneOfAuthority"# `app`
     "DomainName"# `app`
     "SOARName"# `app`
     "RunAsDaemon"# `app`

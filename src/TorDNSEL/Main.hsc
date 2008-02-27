@@ -505,13 +505,13 @@ mkDNSServerConfig dnsSock conf =
     { dnsSocket = dnsSock
     , dnsAuthZone = DomainName $ reverse authLabels
     , dnsMyName = cfDomainName conf
-    , dnsSOA = SOA (cfAuthoritativeZone conf) ttl (cfDomainName conf)
+    , dnsSOA = SOA (cfZoneOfAuthority conf) ttl (cfDomainName conf)
                    (cfSOARName conf) 0 ttl ttl ttl ttl
-    , dnsNS = NS (cfAuthoritativeZone conf) ttl (cfDomainName conf)
-    , dnsA = A (cfAuthoritativeZone conf) ttl `fmap` cfAddress conf
+    , dnsNS = NS (cfZoneOfAuthority conf) ttl (cfDomainName conf)
+    , dnsA = A (cfZoneOfAuthority conf) ttl `fmap` cfAddress conf
     , dnsByteStats = incrementBytes
     , dnsRespStats = incrementResponses }
-  where DomainName authLabels = cfAuthoritativeZone conf
+  where DomainName authLabels = cfZoneOfAuthority conf
 
 -- | Return the exit test config.
 mkExitTestConfig :: StaticState -> Map SockAddr (Maybe Socket) -> Config
