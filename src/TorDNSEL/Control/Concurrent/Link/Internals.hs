@@ -170,7 +170,7 @@ forkLinkIO' shouldLink io = E.block $ do
   parent <- C.myThreadId
   childId <- Tid `fmap` newUnique
   modifyMVar_ threadMap $ \tm -> do
-    assertThreadMap tm
+    -- assertThreadMap tm
     child <- forkHandler $ do
       child <- C.myThreadId
       e <- either extractReason (const Nothing) `fmap` E.try (E.unblock io)
@@ -178,7 +178,7 @@ forkLinkIO' shouldLink io = E.block $ do
       -- exception could be delivered here. Forking an anonymous thread should
       -- avoid this race since nobody can throwTo it.
       forkHandler $ do
-        withMVar threadMap assertThreadMap
+        -- withMVar threadMap assertThreadMap
         (signalAll,notifyAll) <- modifyMVar threadMap $ \tm1 ->
           let s = state tm1 M.! child
               unlinkAll = flip (F.foldl' (flip (child `unlinkFrom`))) (links s)
@@ -194,7 +194,7 @@ forkLinkIO' shouldLink io = E.block $ do
               notifyAll ex = F.mapM_ (forkHandler . ($ ex) . fst) (monitors s)
               tm1' = tm1 { ids = newIds, state = newState }
           in tm1' `seq` return (tm1', (signalAll, notifyAll))
-        withMVar threadMap assertThreadMap
+        -- withMVar threadMap assertThreadMap
         notifyAll e
         signalAll e
 
@@ -212,7 +212,7 @@ forkLinkIO' shouldLink io = E.block $ do
       tm { ids   = M.insert childId child $ ids tm
          , state = M.insert child initialState . linkToParent $ state tm }
 
-  withMVar threadMap assertThreadMap
+  -- withMVar threadMap assertThreadMap
   return childId
   where
     forkHandler = C.forkIO . ignore . (>> return ()) . E.block
