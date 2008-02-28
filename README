@@ -42,9 +42,9 @@ Dependencies
 
     http://hackage.haskell.org/packages/archive/binary/0.3/binary-0.3.tar.gz
 
-  Before building binary, apply the included patch in binary.patch.
+  Before building binary, apply the included patch in contrib/binary.patch.
 
-    cd binary-0.3 && patch -p0 < ../tordnsel-0.0.6/binary.patch
+    cd binary-0.3 && patch -p0 < ../tordnsel-0.0.6/contrib/binary.patch
 
   If you don't, you're likely to experience a segfault if you receive a
   malformed DNS message.

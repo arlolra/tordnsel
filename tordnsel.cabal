@@ -14,7 +14,7 @@ Build-Depends:   base>=2.0, network>=2.0, mtl>=1.0, unix>=1.0, stm>=2.0,
   time>=1.0, HUnit>=1.1, binary>=0.3
 Tested-With:     GHC==6.6
 Data-Files:      config/tordnsel.conf.sample, contrib/cacti-input.pl,
-  config/tordnsel-init.d-script.sample, doc/tordnsel.8
+  contrib/tordnsel-init.d-script.sample, doc/tordnsel.8
 
 Executable:      tordnsel
 Main-Is:         tordnsel.hs
