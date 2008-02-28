@@ -76,6 +76,9 @@ Configuring TorDNSEL
 
   Command line options override those included in a config file.
 
+  TorDNSEL needs an accurate system clock, so it would be a good idea to run
+  an ntpd.
+
 Running TorDNSEL practically
 
   cp config/tordnsel-init.d-script.sample /etc/init.d/tordnsel
