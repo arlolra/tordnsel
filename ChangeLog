@@ -1,3 +1,72 @@
+0.1.0 - 2008-0?-??
+  o Deployment:
+    - Add support for logging messages to stdout, stderr, syslog, or to a file.
+      Syslog logging should be useful for running in a chroot.
+    - Display better error messages for config file parsing, directory parsing,
+      Tor controller errors, I/O errors, and almost every error condition.
+    - Add a man page fully documenting config options, signals, files, sockets,
+      and exit codes.
+    - Add support for reloading the configuration by reloading the config file
+      when we receive SIGHUP, or by listening for the contents of the config
+      file on a Unix domain socket. The latter is useful for running in a
+      chroot, where the process can't access its own config file.
+    - Implement the reload command in the sample init.d script using the new
+      --reconfigure command-line option, which reloads the config file through
+      a Unix domain socket for chroot-friendliness.
+    - Exit gracefully when we receive SIGINT or SIGTERM.
+    - Add a --verify-config command-line option for checking whether the config
+      file is well-formed without starting TorDNSEL. Apply it in the sample
+      init.d script.
+    - Add --help and --version command-line options.
+
+  o Reliability:
+    - Implement Erlang-style thread links and monitors for error handling.
+    - Refactor every thread to support a start/reconfigure/terminate API.
+    - Each thread now runs in a fault-tolerant supervision hierarchy in which
+      the thread is responsible for handling errors in its children, and its
+      supervisor handles errors in it. If a thread dies unexpectedly, the reason
+      it died is logged and its supervisor attempts to restart it when possible.
+
+  o New required options:
+    - Create a new required RuntimeDirectory option for the statistics and
+      reconfigure sockets.
+    - Rename the AuthoritativeZone option to ZoneOfAuthority, since name servers
+      are authoritative, not zones.
+
+  o Performance:
+    - Share copies of exit policy rules and exit policies with a hash table of
+      weak pointers. According to nickm, only 5% of them are distinct.
+    - Squash some space leaks in network state updates.
+
+  o Standards conformance:
+    - Stop requiring that reserved bits in the DNS header be 0.
+
+  o Active tests:
+    - Replace the ConcurrentExitTests option with EnableActiveTesting, since we
+      now automatically detect limits imposed on open file descriptors by
+      FD_SETSIZE and resource limits.
+    - Refactor the exit test initiator to keep a history of scheduled exit tests
+      and dynamically adjust the rate at which tests are initiated. This should
+      smooth out the pubkey crypto demands on Tor that were maxing out CPU
+      utilization.
+    - Make a better effort to avoid redundant testing by storing pending tests
+      in a distinct queue.
+    - Stop testing every node periodically between descriptor publications.
+      Instead, every hour attempt to test through any exit nodes that haven't
+      been successfully tested since they last published a descriptor. This
+      should have a similar effect of catching nodes that slipped through an
+      earlier attempted test.
+    - Regenerate the exit-addresses store every time a new network status
+      consensus is received instead of every 15 minutes.
+
+  o Controller:
+    - Close controller connections cleanly with the QUIT command.
+    - Add support for authenticating with PROTOCOLINFO.
+    - Set the new FetchDirInfoEarly option to enable fetching dir info on the
+      mirror schedule, preferably from authorities.
+    - Ensure that config options we set are rolled back to their previous state
+      when a controller connection is closed cleanly.
+
 0.0.6 - 2007-07-28
   - Support an optional A record for our authoritative zone.
   - Return our own NS record in the appropriate places.
