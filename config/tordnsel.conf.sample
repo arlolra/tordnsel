@@ -16,7 +16,7 @@
 
 ## Use this email address in the RNAME field of SOA records. Usually, this
 ## should be something like "hostmaster@example.com" in the form of a
-## fully-qualified domain name. This option is required.
+## fully-qualified domain name.
 #SOARName hostmaster.example.com.
 
 ## Store exit test results in this directory. This should be an absolute
@@ -33,7 +33,7 @@
 ################ Optional options #########################################
 ##
 ## These options either have sensible default values or can be left
-## unspecifed. You will probably need to uncomment and change some of
+## unspecified. You will probably need to uncomment and change some of
 ## these.
 
 ## Bind the name server to this IP address and UDP port. If you want to
