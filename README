@@ -1,18 +1,10 @@
 TorDNSEL: A Tor DNS-based Exit List
 
-TorDNSEL implements the design described at
-<https://www.torproject.org/svn/trunk/doc/contrib/torel-design.txt> with some
-modifications. Instead of parsing the cached-routers file, it establishes a
-persistent controller connection to Tor, receiving updated nodes and exit
-policies as Tor fetches them from directories. When Tor is running as a
-directory authority this information should be the most up to date.
+For an overview, see the man page at doc/tordnsel.8.
 
-TorDNSEL can perform active exit testing by launching an HTTP request to itself
-through every exit node with a suitable exit policy. This allows it to detect
-exit nodes configured to send outbound connections through a different IP
-address from the one they advertise in their descriptors. When configured to
-run exit tests, it tests through a particular exit node each time the node
-publishes a new descriptor.
+The design document for TorDNSEL can be found at:
+
+  https://www.torproject.org/svn/trunk/doc/contrib/torel-design.txt
 
 Currently, only query type 1 from torel-design.txt is supported:
 
@@ -20,7 +12,7 @@ A request for the A record "1.0.0.10.80.4.3.2.1.ip-port.exitlist.example.com"
 would return 127.0.0.2 if there's a running Tor node at 10.0.0.1 that allows
 exits to port 80 at 1.2.3.4 and our ZoneOfAuthority is set to
 "exitlist.example.com". If there isn't such an exit node, we return NXDOMAIN.
-If the query is unsolicited and outside our authoritative zone, we return
+If the query is unsolicited and outside our zone of authority, we return
 REFUSED.
 
 Presumably, users of software with built-in support for DNSBLs would configure

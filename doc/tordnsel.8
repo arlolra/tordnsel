@@ -1,0 +1,265 @@
+.TH TORDNSEL 8 "28 February 2008" "TORDNSEL"
+
+.SH NAME
+tordnsel \- an active-testing, DNS-based list of Tor exit IP addresses
+
+.SH SYNOPSIS
+.B tordnsel
+[\fI--OPTION value\fR]...
+
+.SH DESCRIPTION
+\fBtordnsel\fR is a name server providing a DNSBL-style interface to a
+dynamically-updated list of Tor exit IP addresses. It is designed to be useful
+to operators of Internet services, such as web sites and IRC networks, who want
+to detect anonymous clients and treat them differently from non-anonymous
+clients. Since not every Tor exit allows connections to the entire Internet,
+\fBtordnsel\fR extends the DNSBL interface to require specifying the service's
+IP address and port in queries.
+.PP
+\fBtordnsel\fR runs alongside a local \fBtor\fR client, to which it establishes
+a persistent controller connection. The \fBtor\fR process fetches up-to-date Tor
+directory information and serves as \fBtordnsel\fR's entry point into the Tor
+network for active testing.
+.PP
+\fBtordnsel\fR can optionally perform active exit testing by launching an HTTP
+request to itself through every Tor exit with a suitable exit policy. This
+allows it to detect exits configured to send outbound connections through a
+different IP address from the one they advertise in the directory. When
+configured to run active tests, \fBtordnsel\fR tests through a particular exit
+each time it publishes a new descriptor.
+
+.SH OPTIONS
+.TP
+\fB-h, --help\fP
+Display a usage message and exit.
+.TP
+\fB-f, --ConfigFile \fR\fIFILE\fP
+\fIFILE\fR contains further "option value" pairs.
+.TP
+\fB--verify-config\fP
+Verify the configuration file is valid and exit.
+.TP
+\fB--reconfigure \fR\fIDIRECTORY\fP
+Read a configuration file from the standard input stream and use it to
+reconfigure the \fBtordnsel\fR process whose \fBRuntimeDirectory\fR is located
+at \fIDIRECTORY\fR.
+.TP
+\fB--version\fP
+Display TorDNSEL version and exit.
+.PP
+Other options can be specified either on the command-line (\fI--option
+value\fR), or in the configuration file (\fIoption value\fR). Options are
+case-insensitive.
+
+.SH REQUIRED OPTIONS
+The following options must be specified for \fBtordnsel\fR to start:
+.TP
+\fBZoneOfAuthority \fR\fIFQDN\fP
+Answer queries authoritatively for \fIFQDN\fR. For example, if this is set to
+"exitlist.example.com.", your server would accept queries of the form
+"1.0.0.10.80.4.3.2.1.ip-port.exitlist.example.com.".
+.TP
+\fBDomainName \fR\fIFQDN\fP
+Use \fIFQDN\fP as this server's own domain name in NS and SOA records.
+.TP
+\fBSOARName \fR\fIFQDN\fP
+Use \fIFQDN\fR as the email address in the RNAME field of SOA records. This
+should be an address at which the operator of this \fBtordnsel\fR instance can
+be contacted, e.g. "tordnsel@example.com" in the form of a fully-qualified
+domain name ("tordnsel.example.com.").
+.TP
+\fBStateDirectory \fR\fIDIRECTORY\fP
+Store exit test results in \fIDIRECTORY\fR. If \fBChangeRootDirectory\fR is
+specified, this should be an absolute path accessible inside the chroot.
+.TP
+\fBRuntimeDirectory \fR\fIDIRECTORY\fP
+Place the statistics and reconfigure sockets in \fIDIRECTORY\fR before chrooting
+and dropping privileges.
+
+.SH OPTIONAL OPTIONS
+The following options either have sensible default values or can be left
+unspecified:
+.TP
+\fBDNSListenAddress \fR\fIIPADDR\fR:\fIPORT\fP
+Bind the name server to this IP address and UDP port. If you want to bind to all
+interfaces, set \fIIPADDR\fR to "0.0.0.0". This port is bound before dropping
+privileges. (Default: 127.0.0.1:53)
+.TP
+\fBAddress \fR\fIIPADDR\fP
+Return \fIIPADDR\fR in response to requests for the A record matching the
+\fBZoneOfAuthority\fR. (Default: none)
+.TP
+\fBTorControlAddress \fR\fIIPADDR\fR:\fIPORT\fP
+Connect to \fBtor\fR's controller interface on this IP address and TCP port.
+You'll need to set this as your \fBControlListenAddress\fR or \fBControlPort\fR
+in \fBtor\fR's \fItorrc\fR. (Default: 127.0.0.1:9051)
+.TP
+\fBTorControlPassword \fR\fIPASSWORD\fP
+The password you used to generate the \fBHashedControlPassword\fR in \fBtor\fR's
+\fItorrc\fR. This is only required when you have a \fBHashedControlPassword\fR.
+(Default: none)
+.TP
+\fBLog \fIminSeverity\fR \fBstdout\fR|\fBstderr\fR|\fBsyslog\fP
+Send log messages of at least \fIminSeverity\fR to the standard output stream,
+the standard error stream, or to the system logger. Recognized severity levels
+are debug, info, notice, warn, and error. (Default: Log notice stdout)
+.TP
+\fBLog \fIminSeverity\fR \fBfile\fR \fIFILE\fP
+As above, but send log messages to \fIFILE\fR. If \fBChangeRootDirectory\fR is
+specified, \fIFILE\fR must be an absolute path accessible inside the chroot. In
+that case, it's probably better to use \fBsyslog\fR.
+.TP
+\fBRunAsDaemon \fR\fBFalse\fR|\fBTrue\fP
+If \fBTrue\fR, detach from the controlling terminal and run in the background as
+a daemon. (Default: False)
+.TP
+\fBUser \fR\fIUSERNAME\fP
+On startup, drop privileges to \fIUSERNAME\fP. (Default: none)
+.TP
+\fBGroup \fR\fIGROUPNAME\fP
+On startup, drop privilegs to \fIGROUPNAME\fP. (Default: none)
+.TP
+\fBChangeRootDirectory \fR\fIDIRECTORY\fP
+On startup, call
+.BR chroot (2)
+to irreversibly change the root directory of
+the process to \fIDIRECTORY\fP. (Default: none)
+.TP
+\fBPIDFile \fR\fIFILE\fP
+On startup, write our PID to \fIFILE\fP. \fIFILE\fP won't be removed on exit.
+(Default: none)
+
+.SH ACTIVE TESTING OPTIONS
+The following options are only necessary if active testing through Tor exits
+should be enabled:
+.TP
+\fBEnableActiveTesting \fR\fBFalse\fR|\fBTrue\fP
+If \fBTrue\fR, enable active test connections through Tor exits to determine
+their exit IP addresses. Enabling this will result in a more accurate view of
+exit IP addresses, at the expense of putting a much greater load on your local
+Tor process and the Tor network itself. (Default: False)
+.TP
+\fBTorSocksAddress \fR\fIIPADDR\fR:\fIPORT\fP
+Make exit test connections through \fBtor\fR's \fBSocksPort\fR on this IP
+address and TCP port. (Default: 127.0.0.1:9050)
+.TP
+\fBTestListenAddress \fR\fIIPADDR\fR:\fIPORT\fR,\fIPORT\fR,\fI...\fP
+Bind the exit test listeners to this IP address and these TCP ports. These ports
+are bound before dropping privileges. Don't use the loopback interface for
+\fBTestListenAddress\fR if you're redirecting connections with
+.BR iptables (8)
+because your redirected packets will be dropped as martians. This option is only
+required when \fBEnableActiveTesting\fR is set to \fBTrue\fR. (Default: none)
+.TP
+\fBTestDestinationAddress \fR\fIIPADDR\fR:\fIPORT\fR,\fIPORT\fR,\fI...\fP
+Make exit test connections to this IP address and these TCP ports. These should
+be publicly accessible from Tor exits. This option is only required when
+\fBEnableActiveTesting\fR is set to \fBTrue\fR. (Default: none)
+
+.SH SIGNALS
+\fBtordnsel\fR catches the following signals:
+.TP
+\fBSIGTERM\fP
+\fBtordnsel\fR will catch this, then clean up and exit.
+.TP
+\fBSIGINT\fP
+The same behavior as with \fBSIGTERM\fR.
+.TP
+\fBSIGHUP\fP
+This signal instructs \fBtordnsel\fR to reload its configuration, including
+closing and reopening logs.
+.TP
+\fBSIGPIPE\fP
+\fBtordnsel\fR catches this signal and ignores it.
+
+.SH FILES
+.TP
+\fB/etc/tordnsel.conf\fP
+The configuration file, which contains "option value" pairs.
+.TP
+\fB/var/lib/tordnsel/state\fP
+The state directory where test results are stored.
+.TP
+\fB/var/run/tordnsel\fP
+The runtime directory where statistics and reconfigure sockets are located.
+.TP
+\fIStateDirectory\fR\fB/exit-addresses\fR and \fBexit-addresses.new\fP
+These files hold the results of tests through Tor exits, including exit IP
+addresses. The ".new" file is an append-only journal; when it gets too large,
+and when a new network status consensus is received, all entries are merged into
+a new exit-addresses file.
+.TP
+\fIRuntimeDirectory\fR\fB/statistics.socket\fP
+A Unix domain stream socket that dumps cumulative load information when it
+accepts a client connection. See contrib/cacti-input.pl in the TorDNSEL source
+distribution for an example of using it.
+.TP
+\fIRuntimeDirectory\fR\fB/reconfigure.socket\fP
+A Unix domain stream socket that accepts a new configuration file and
+reconfigures the process with it. This is typically used by the
+\fB--reconfigure\fR option.
+
+.SH EXIT CODES
+\fBtordnsel\fR exits with 0 on success, otherwise it exits with an appropriate
+non-zero exit code from
+.BR sysexits (3)
+:
+.TP
+\fBEX_USAGE\fR (\fB64\fR)
+Parsing command-line arguments failed.
+.TP
+\fBEX_DATAERR\fR (\fB65\fR)
+Parsing the configuration file failed.
+.TP
+\fBEX_NOINPUT\fR (\fB66\fR)
+Opening the specified configuration file failed.
+.TP
+\fBEX_UNAVAILABLE\fR (\fB69\fR)
+\fB--reconfigure\fR was specified, but connecting to the reconfigure socket
+failed.
+.TP
+\fBEX_SOFTWARE\fR (\fB70\fR)
+An unspecified internal error occurred.
+.TP
+\fBEX_OSERR\fR (\fB71\fR)
+Opening a listening socket failed.
+.TP
+\fBEX_OSFILE\fR (\fB72\fR)
+A random number device couldn't be opened, or the UID/GID couldn't be looked up.
+.TP
+\fBEX_CANTCREAT\fR (\fB73\fR)
+Preparing a directory, opening the PID file, or binding a Unix domain socket
+failed.
+.TP
+\fBEX_IOERR\fR (\fB74\fR)
+\fB--reconfigure\fR failed with an I/O error, or closing the DNS listener
+failed.
+.TP
+\fBEX_PROTOCOL\fR (\fB76\fR)
+\fB--reconfigure\fR failed because the other \fBtordnsel\fR process responded
+with an unrecognized message.
+.TP
+\fBEX_NOPERM\fR (\fB77\fR)
+One of the following happened: The resource limit on open file descriptors is
+set too low, but the process isn't running as root. The configuration specified
+\fBUser\fR, \fBGroup\fR, or \fBChangeRootDirectory\fR, but the process isn't
+running as root. Reopening a listener failed due to a permission error.
+.TP
+\fBEX_CONFIG\fR (\fB78\fR)
+\fBtordnsel\fR exited due to a configuration error.
+
+.SH SEE ALSO
+.BR tor (8)
+.PP
+.B https://www.torproject.org/
+.PP
+.B https://www.torproject.org/svn/trunk/doc/contrib/torel-design.txt
+
+.SH CAVEATS
+Active testing puts an excessive load on the local \fBtor\fR process and the Tor
+network because \fBtor\fR builds 4-hop circuits for test connections. Also, if a
+particular exit is down, \fBtor\fR will keep building and failing new circuits
+until a timeout occurs.
+
+.SH AUTHORS
+tup <tup.tuple@googlemail.com>
