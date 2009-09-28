@@ -22,12 +22,10 @@ Presumably, users of software with built-in support for DNSBLs would configure
 
 Dependencies
 
-  TorDNSEL requires GHC 6.6. It doesn't yet build with GHC 6.8.x.
-
-  If you're running Debian etch:
+  TorDNSEL requires GHC 6.8. If you're running Debian Lenny:
 
     apt-get install ghc6 libghc6-mtl-dev libghc6-network-dev libghc6-time-dev \
-      libghc6-hunit-dev
+      libghc6-hunit-dev libghc6-stm-dev libghc6-binary-dev
 
   OpenSSL's libcrypto is required for strong random numbers:
 
@@ -38,16 +36,6 @@ Dependencies
 
     http://haskell.org/ghc/download.html
 
-  binary, a serialization library, also required, is available here:
-
-    http://hackage.haskell.org/packages/archive/binary/0.3/binary-0.3.tar.gz
-
-  Before building binary, apply the included patch in contrib/binary.patch.
-
-    cd binary-0.3 && patch -p0 < ../tordnsel-0.0.6/contrib/binary.patch
-
-  If you don't, you're likely to experience a segfault if you receive a
-  malformed DNS message.
 
 Building TorDNSEL
 

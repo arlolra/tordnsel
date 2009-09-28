@@ -12,9 +12,9 @@ Author:          tup
 Maintainer:      tup.tuple@googlemail.com
 Build-Type:      Simple
 Build-Depends:   base>=2.0, network>=2.0, mtl>=1.0, unix>=1.0, stm>=2.0,
-  time>=1.0, HUnit>=1.1, binary>=0.3, bytestring>=0.9, array>=0.1, directory>=1.0,
+  time>=1.0, HUnit>=1.1, binary>=0.4, bytestring>=0.9, array>=0.1, directory>=1.0,
   containers>=0.1
-Tested-With:     GHC==6.6
+Tested-With:     GHC==6.6, GHC==6.8, GHC==6.10
 Data-Files:      config/tordnsel.conf.sample, contrib/cacti-input.pl,
   contrib/tordnsel-init.d-script.sample, doc/tordnsel.8
 
