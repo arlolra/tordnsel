@@ -64,7 +64,7 @@ module TorDNSEL.Main (
 
 import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (when, liftM, forM, forM_)
 import Control.Monad.Fix (fix)
 import Control.Monad.State (StateT, runStateT, liftIO, get, put)

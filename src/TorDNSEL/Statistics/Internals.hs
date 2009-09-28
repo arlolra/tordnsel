@@ -23,7 +23,7 @@ import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_, readMVar)
 import Control.Concurrent.QSem (QSem, newQSem, waitQSem, signalQSem)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
 import Data.Maybe (isJust, isNothing)

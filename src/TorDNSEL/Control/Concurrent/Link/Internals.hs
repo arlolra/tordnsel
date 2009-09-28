@@ -28,7 +28,7 @@ module TorDNSEL.Control.Concurrent.Link.Internals where
 import qualified Control.Concurrent as C
 import Control.Concurrent.MVar
   (MVar, newMVar, withMVar, modifyMVar, modifyMVar_)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (unless)
 import qualified Data.Foldable as F
 import qualified Data.Map as M

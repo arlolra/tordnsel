@@ -25,7 +25,7 @@ module TorDNSEL.Log.Internals where
 import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (when, liftM2)
 import Control.Monad.Fix (fix)
 import Control.Monad.Trans (MonadIO, liftIO)

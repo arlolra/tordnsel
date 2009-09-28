@@ -22,7 +22,7 @@ module TorDNSEL.NetworkState.Storage.Internals where
 import Prelude hiding (log)
 import Control.Arrow (second)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (liftM2, when, forM)
 import Control.Monad.Error (MonadError(throwError))
 import Control.Monad.Fix (fix)

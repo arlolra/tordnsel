@@ -137,7 +137,7 @@ import Control.Arrow (first, second)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar
   (MVar, newMVar, newEmptyMVar, takeMVar, tryPutMVar, withMVar, modifyMVar_)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (when, unless, liftM, mzero, mplus)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)

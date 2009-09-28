@@ -51,7 +51,7 @@ module TorDNSEL.Directory.Internals (
   ) where
 
 import Control.Concurrent.MVar (newMVar, withMVar)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (when, unless, liftM)
 import Control.Monad.Error (MonadError(throwError))
 import Data.Char

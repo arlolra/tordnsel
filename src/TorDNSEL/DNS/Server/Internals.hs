@@ -21,7 +21,7 @@
 module TorDNSEL.DNS.Server.Internals where
 
 import Prelude hiding (log)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (when, guard, liftM2, liftM3)
 import Data.Bits ((.|.), shiftL)
 import qualified Data.ByteString.Char8 as B

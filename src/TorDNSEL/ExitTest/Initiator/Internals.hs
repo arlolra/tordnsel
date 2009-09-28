@@ -56,7 +56,7 @@ import Prelude hiding (log)
 import Control.Arrow (first, second)
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad (replicateM_, guard, when)
 import qualified Data.ByteString.Char8 as B
 import Data.Dynamic (fromDynamic)

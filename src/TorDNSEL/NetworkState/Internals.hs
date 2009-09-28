@@ -64,7 +64,7 @@ import Control.Monad.State
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, swapMVar)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString.Char8 (ByteString)
 import Data.List (foldl')

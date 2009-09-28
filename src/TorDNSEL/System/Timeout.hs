@@ -53,7 +53,7 @@ import Prelude             (IO, Ord((<)), Eq((==)), Int, (.), otherwise, fmap)
 import Data.Maybe          (Maybe(..))
 import Control.Monad       (Monad(..), guard)
 import Control.Concurrent  (forkIO, threadDelay, myThreadId, killThread)
-import Control.Exception   (handleJust, throwDynTo, dynExceptions, bracket)
+import TorDNSEL.Compat.Exception (handleJust, throwDynTo, dynExceptions, bracket)
 import Data.Dynamic        (Typeable, fromDynamic)
 import Data.Unique         (Unique, newUnique)
 

@@ -12,7 +12,7 @@
 -----------------------------------------------------------------------------
 module TorDNSEL.Control.Concurrent.Util where
 
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar, tryPutMVar)
 import Data.Dynamic (Dynamic)
 import Data.Maybe (isJust)

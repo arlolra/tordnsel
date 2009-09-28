@@ -100,7 +100,7 @@ module TorDNSEL.Util (
   ) where
 
 import Control.Arrow ((&&&), first, second)
-import qualified Control.Exception as E
+import qualified TorDNSEL.Compat.Exception as E
 import Control.Monad.Error
   (Error(..), MonadError(..), MonadTrans(..), MonadIO(..))
 import qualified Control.Monad.State as State
