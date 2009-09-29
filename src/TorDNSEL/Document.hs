@@ -34,8 +34,6 @@ import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.List (find, unfoldr)
 
-import GHC.Prim (Addr#)
-
 import TorDNSEL.Util
 
 -- | A document consisting of a sequence of one or more items.
@@ -62,7 +60,7 @@ parseDocument = unfoldr parseDocument' where
   parseDocument' (x:xs) = Just . first (Item key args) . parseObjects $ xs
     where
       (key,x') = B.break isSpace . dropOpt $ x
-      dropOpt = if b 4 "opt "# `B.isPrefixOf` x then B.drop 4 else id
+      dropOpt = if B.pack "opt " `B.isPrefixOf` x then B.drop 4 else id
       args | B.null x' = Nothing
            | otherwise   = Just . B.dropWhile isSpace $ x'
 
@@ -71,10 +69,10 @@ parseDocument = unfoldr parseDocument' where
 parseObjects :: [ByteString] -> ([Object], [ByteString])
 parseObjects = unfoldAccumR parseObjects' where
   parseObjects' (x:xs)
-    | b 11 "-----BEGIN "# `B.isPrefixOf` x, b 5 "-----"# `B.isSuffixOf` x
+    | B.pack "-----BEGIN " `B.isPrefixOf` x, B.pack "-----" `B.isSuffixOf` x
     = Left . ((Object key . B.unlines) *** drop 1) . break (== endLine) $ xs
     where key = B.take (B.length x - 16) . B.drop 11 $ x
-          endLine = b 9 "-----END "# `B.append` key `B.append` b 5 "-----"#
+          endLine = B.pack "-----END " `B.append` key `B.append` B.pack "-----"
   parseObjects' xs = Right xs
 
 -- | Break a document into sub-documents each beginning with an item that has
@@ -93,7 +91,3 @@ findArg :: MonadError ShowS m => ByteString -> Document -> m ByteString
 findArg bs items
   | Just item <- find ((bs ==) . iKey) items, Just arg <- iArg item = return arg
   | otherwise = throwError $ cat "Item " bs " not found."
-
--- | An alias for 'B.unsafePackAddress'.
-b :: Int -> Addr# -> ByteString
-b = B.unsafePackAddress

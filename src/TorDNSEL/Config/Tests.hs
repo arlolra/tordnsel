@@ -53,7 +53,7 @@ config = toConfig
   , "TestListenAddress"      ~> "10.0.0.1:80,443,110,53,22,5190,6667,9030"
   , "TestDestinationAddress" ~> "10.0.0.1:80,443,110,53,22,5190,6667,9030" ]
 
-configFile = B.pack
+configFile =
   "## torndsel.conf.sample\n\
   \## Sample configuration file for TorDNSEL.\n\
   \\n\

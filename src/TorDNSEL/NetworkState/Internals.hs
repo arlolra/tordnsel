@@ -53,9 +53,6 @@ module TorDNSEL.NetworkState.Internals (
   , expireOldInfo
   , insertAddress
   , deleteAddress
-
-  -- * Aliases
-  , b
   ) where
 
 import Prelude hiding (log)
@@ -82,8 +79,6 @@ import Network.Socket
   , socket, connect, sClose, socketToHandle )
 import System.IO (IOMode(ReadWriteMode))
 import System.IO.Unsafe (unsafePerformIO)
-
-import GHC.Prim (Addr#)
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
@@ -693,8 +688,3 @@ deleteAddress addr rid = update' deleteRouterID addr
       where set' = S.delete rid set
 
 --------------------------------------------------------------------------------
--- Aliases
-
--- | An alias for unsafePackAddress.
-b :: Int -> Addr# -> ByteString
-b = B.unsafePackAddress

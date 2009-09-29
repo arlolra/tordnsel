@@ -48,9 +48,6 @@ module TorDNSEL.Directory.Internals (
   -- * Shared values
   , Hash(..)
   , lookupSharedValue
-
-  -- * Aliases
-  , b
   ) where
 
 import Control.Concurrent.MVar (newMVar, withMVar)
@@ -73,8 +70,6 @@ import Data.Time.Clock.POSIX
 import Network.Socket (HostAddress)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Mem.Weak (mkWeakPtr, deRefWeak, finalize)
-
-import GHC.Prim (Addr#)
 
 import TorDNSEL.Document
 import TorDNSEL.Util
@@ -103,13 +98,13 @@ instance Show Descriptor where
 parseDescriptor :: MonadError ShowS m => Document -> m Descriptor
 parseDescriptor items =
   prependError ("Failed parsing router descriptor: " ++) $ do
-    address    <- parseRouter    =<< findArg (b 6  "router"#)      items
-    time       <- parsePOSIXTime =<< findArg (b 9  "published"#)   items
-    fp         <- parseRouterID  =<< findArg (b 11 "fingerprint"#) items
+    address    <- parseRouter    =<< findArg (B.pack "router")      items
+    time       <- parsePOSIXTime =<< findArg (B.pack "published")   items
+    fp         <- parseRouterID  =<< findArg (B.pack "fingerprint") items
     exitPolicy <- parseExitPolicy . filter isRule $ items
     return $! Desc address time fp exitPolicy
   where
-    isRule = (\k -> k == b 6 "accept"# || k == b 6 "reject"#) . iKey
+    isRule = (\k -> k == (B.pack "accept") || k == B.pack("reject")) . iKey
 
     parseRouter router
       | _:address:_ <- B.splitWith isSpace router = inet_atoh address
@@ -123,7 +118,7 @@ parseDescriptor items =
 
 -- | Parse a 'Document' containing multiple router descriptors.
 parseDescriptors :: Document -> [Either ShowS Descriptor]
-parseDescriptors = parseSubDocs (b 6 "router"#) parseDescriptor
+parseDescriptors = parseSubDocs (B.pack "router") parseDescriptor
 
 --------------------------------------------------------------------------------
 -- Router status entries
@@ -143,8 +138,8 @@ data RouterStatus = RS
 parseRouterStatus :: MonadError ShowS m => Document -> m RouterStatus
 parseRouterStatus items = do
   (rid,published) <- prependError ("Failed parsing router status entry: " ++)
-                                  (parseRouter =<< findArg (b 1 "r"#) items)
-  return $! RS rid published (parseStatus $ findArg (b 1 "s"#) items)
+                                  (parseRouter =<< findArg (B.pack "r") items)
+  return $! RS rid published (parseStatus $ findArg (B.pack "s") items)
   where
     parseRouter router
       | _:base64RouterID:_:date:time:_ <- B.splitWith isSpace router = do
@@ -155,13 +150,13 @@ parseRouterStatus items = do
                                      (esc maxStatusLen router) '.'
       where maxStatusLen = 122
 
-    parseStatus = maybe False (elem (b 7 "Running"#) . B.splitWith isSpace)
+    parseStatus = maybe False (elem (B.pack "Running") . B.splitWith isSpace)
 
 -- | Parse a 'Document' containing multiple router status entries. Such a
 -- document isn't the same as a network-status document as it doesn't contain
 -- a preamble or a signature.
 parseRouterStatuses :: Document -> [Either ShowS RouterStatus]
-parseRouterStatuses = parseSubDocs (b 1 "r"#) parseRouterStatus
+parseRouterStatuses = parseSubDocs (B.pack "r") parseRouterStatus
 
 --------------------------------------------------------------------------------
 -- Router identifiers
@@ -282,13 +277,13 @@ parseExitPolicy xs = do
                        (maybe id (esc maxRuleLen) arg) '.'
 
     parseRuleType key
-      | key == b 6 "accept"# = return Accept
-      | key == b 6 "reject"# = return Reject
+      | key == (B.pack "accept") = return Accept
+      | key == (B.pack "reject") = return Reject
       | otherwise = throwError $ cat "Invalid rule type "
                                      (esc maxRuleTypeLen key) '.'
 
     parseAddrSpec bs
-      | bs == b 1 "*"# = return (0, 0)
+      | bs == (B.pack "*") = return (0, 0)
       | [addr,mask] <- B.split '/' bs = do
         addr' <- inet_atoh addr
         mask' <- maybe (bitsToMask =<< readInt mask) return (inet_atoh mask)
@@ -298,7 +293,7 @@ parseExitPolicy xs = do
         return (addr, 0xffffffff)
 
     parsePortSpec bs
-      | bs == b 1 "*"# = return (0, 65535)
+      | bs == (B.pack "*") = return (0, 65535)
       | ports@[_,_] <- B.split '-' bs = do
         [begin,end] <- mapM parsePort ports
         when (begin > end) $
@@ -329,7 +324,6 @@ exitPolicyAccepts addr port exitPolicy
     matchingRules = map ruleType . filter matches $ exitPolicy
     matches r = addr .&. ruleMask r == ruleAddress r &&
                 ruleBeginPort r <= port && port <= ruleEndPort r
-
 --------------------------------------------------------------------------------
 -- Shared values
 
@@ -366,10 +360,3 @@ lookupSharedValue = unsafePerformIO . E.block $ do
       let finalizer = HT.delete table value
       mkWeakPtr value (Just finalizer) >>= HT.insert table value
       return value
-
---------------------------------------------------------------------------------
--- Aliases
-
--- | An alias for unsafePackAddress.
-b :: Int -> Addr# -> ByteString
-b = B.unsafePackAddress

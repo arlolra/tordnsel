@@ -21,7 +21,7 @@ module TorDNSEL.Random (
 
 import Control.Monad (filterM)
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Base as B
+import qualified Data.ByteString.Internal as B
 import System.Directory (doesFileExist)
 import System.IO (Handle, openFile, IOMode(ReadMode))
 

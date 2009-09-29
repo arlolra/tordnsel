@@ -386,8 +386,8 @@ forkTestClient conf rid published port =
       _ ->
         log Debug "Exit test client for router " rid " port " port " finished."
   where
-    exitHost = B.concat [ testHost, b 1 "."#, encodeBase16RouterID rid
-                        , b 5 ".exit"# ]
+    exitHost = B.concat [ testHost, B.pack ".", encodeBase16RouterID rid
+                        , B.pack ".exit" ]
     testHost = B.pack . inet_htoa . eticfTestAddress $ conf
 
     connectToSocksServer =
@@ -401,8 +401,6 @@ forkTestClient conf rid published port =
     clientExceptions _                          = Nothing
 
     connectionTimeout = 120 * 10^6
-
-    b = B.unsafePackAddress
 
 -- | Fork a timer thread for the next exit test, returning its 'ThreadId'.
 forkTestTimer :: InitiatorState -> IO ThreadId

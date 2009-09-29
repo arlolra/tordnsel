@@ -60,7 +60,6 @@ module TorDNSEL.Main (
   , exitLeft
   , exitPrint
   , liftMb
-  , b
   ) where
 
 import Prelude hiding (log)
@@ -72,7 +71,6 @@ import Control.Monad.State (StateT, runStateT, liftIO, get, put)
 import Data.Bits ((.&.), (.|.))
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy.Char8 as L
-import Data.ByteString (ByteString)
 import Data.Char (toLower)
 import Data.List (intersperse)
 import qualified Data.Map as M
@@ -111,8 +109,6 @@ import System.Posix.User
   ( getEffectiveUserID, UserEntry(userID), GroupEntry(groupID)
   , getUserEntryForName, getGroupEntryForName, setUserID, setGroupID )
 import Foreign.C (CString, CInt, withCString)
-
-import GHC.Prim (Addr##)
 
 import TorDNSEL.Config
 import TorDNSEL.Control.Concurrent.Link
@@ -214,16 +210,16 @@ main = do
           B.hGetContents handle
       B.hPut stderr r
       exitWith . fromSysExitCode $ case () of
-       _| B.null r                             -> OK
-        | b "Parse error:"## `B.isPrefixOf` r  -> DataError
-        | b "Config error:"## `B.isPrefixOf` r -> ConfigError
-        | otherwise                            -> ProtocolError
+       _| B.null r                         -> OK
+        | B.pack "Parse error:" `B.isPrefixOf` r  -> DataError
+        | B.pack "Config error:" `B.isPrefixOf` r -> ConfigError
+        | otherwise                        -> ProtocolError
     _ -> return ()
 
   log Notice "Starting TorDNSEL " VERSION "."
   conf <- do
     conf <- exitLeft Usage $ parseConfigArgs args
-    case b "configfile"## `M.lookup` conf of
+    case B.pack "configfile" `M.lookup` conf of
       Just fp -> do
         file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp)
           (exitPrint NoInput . cat "Opening config file failed: ")
@@ -313,7 +309,7 @@ verifyConfig args =
   case parseConfigArgs args of
     Left e -> exitStdErr Usage e
     Right conf ->
-      case b "configfile"## `M.lookup` conf of
+      case B.pack "configfile" `M.lookup` conf of
         Just fp -> do
           file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp) $ \e -> do
             hCat stderr "Opening config file failed: " e '\n'
@@ -848,10 +844,6 @@ liftMb :: Monad m => (a -> m b) -> Maybe a -> m (Maybe b)
 liftMb f = maybe (return Nothing) (liftM Just . f)
 
 infixr 8 `liftMb`
-
--- | An alias for packAddress.
-b :: Addr## -> ByteString
-b = B.packAddress
 
 foreign import ccall unsafe "unistd.h chroot"
   c_chroot :: CString -> IO CInt

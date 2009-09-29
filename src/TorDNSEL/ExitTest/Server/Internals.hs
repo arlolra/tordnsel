@@ -185,13 +185,13 @@ handleMessage conf s (NewClient sock addr) = do
           Just cookie -> do
             now <- getCurrentTime
             etscfNotifyNewExitAddress conf now cookie addr
-            B.hPut client $ b 46 "HTTP/1.0 204 No Content\r\n\
-                                 \Connection: close\r\n\r\n"#
+            B.hPut client $ B.pack "HTTP/1.0 204 No Content\r\n\
+                                   \Connection: close\r\n\r\n"
           _ -> do
             log Info "Received invalid HTTP request from " (inet_htoa addr)
                      "; discarding."
-            B.hPut client $ b 47 "HTTP/1.0 400 Bad Request\r\n\
-                                 \Connection: close\r\n\r\n"#
+            B.hPut client $ B.pack "HTTP/1.0 400 Bad Request\r\n\
+                                   \Connection: close\r\n\r\n"
       case r of
         Just (Left e) -> do
           let msg | isEOFError e = "Connection closed by other side"
@@ -203,7 +203,6 @@ handleMessage conf s (NewClient sock addr) = do
   return (conf, s { handlers = S.insert tid (handlers s) })
   where
     readTimeout = 30 * 10^6
-    b = B.unsafePackAddress
 
 handleMessage conf s (Reconfigure reconf signal) = do
   when (conf /= newConf) $

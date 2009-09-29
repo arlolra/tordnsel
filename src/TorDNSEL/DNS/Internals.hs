@@ -66,7 +66,7 @@ import Control.Monad.Trans (lift)
 import Data.Bits ((.|.), (.&.), xor, shiftL, shiftR, testBit, setBit)
 import Data.List (foldl')
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Base as B
+import qualified Data.ByteString.Internal as B
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString (ByteString)
 import qualified Data.Map as M

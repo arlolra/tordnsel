@@ -28,10 +28,10 @@ tests = TestList . map TestCase $
     query = toLabels ["ip-port","1","2","3","4","80","10","0","0","1"]
     queryName = toName [ "1","0","0","10","80","4","3","2","1"
                        , "ip-port","torhosts","example","com" ]
-    authZone = DomainName $ map (Label . B.pack) ["com","example","torhosts"]
-    toLabels = map $ Label . B.pack
+    authZone = DomainName $ map Label ["com","example","torhosts"]
+    toLabels = map $ Label
     toName = DomainName . toLabels
     query' = do
-      qAddr <- inet_atoh $ B.pack "10.0.0.1"
-      dAddr <- inet_atoh $ B.pack "1.2.3.4"
+      qAddr <- inet_atoh "10.0.0.1"
+      dAddr <- inet_atoh "1.2.3.4"
       return $ IPPort { queryAddr = qAddr, destAddr = dAddr, destPort = 80 }

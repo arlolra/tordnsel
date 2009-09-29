@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -fglasgow-exts #-}
-
 -----------------------------------------------------------------------------
 -- |
 -- Module      : TorDNSEL.ExitTest.Request
@@ -28,13 +26,11 @@ module TorDNSEL.ExitTest.Request (
 
 import Control.Arrow ((***))
 import Control.Monad (guard)
-import Control.Monad.Trans (lift)
+import Control.Monad.Trans (lift, liftIO)
 import qualified Data.ByteString.Char8 as B
 import Data.Char (isSpace, toLower)
 import qualified Data.Map as M
 import System.IO (Handle)
-
-import GHC.Prim (Addr#)
 
 import TorDNSEL.Util
 
@@ -44,37 +40,36 @@ import TorDNSEL.Util
 -- | Create an HTTP request that POSTs a cookie to one of our listening ports.
 createRequest :: B.ByteString -> Port -> Cookie -> B.ByteString
 createRequest host port cookie =
-  B.join (b 2 "\r\n"#)
+  B.intercalate (B.pack "\r\n")
   -- POST should force caching proxies to forward the request.
-  [ b 15 "POST / HTTP/1.0"#
+  [ B.pack "POST / HTTP/1.0"
   -- Host doesn't exist in HTTP 1.0. We'll use it anyway to help the request
   -- traverse transparent proxies.
-  , b 6 "Host: "# `B.append` hostValue
-  , b 38 "Content-Type: application/octet-stream"#
-  , b 16 "Content-Length: "# `B.append` B.pack (show cookieLen)
-  , b 17 "Connection: close"#
-  , b 2 "\r\n"# `B.append` unCookie cookie ]
+  , B.pack "Host: " `B.append` hostValue
+  , B.pack "Content-Type: application/octet-stream"
+  , B.pack "Content-Length: " `B.append` B.pack (show cookieLen)
+  , B.pack "Connection: close"
+  , B.pack "\r\n" `B.append` unCookie cookie ]
   where
     hostValue
       | port == 80 = host
-      | otherwise  = B.concat [host, b 1 ":"#, B.pack $ show port]
+      | otherwise  = B.concat [host, B.pack ":", B.pack $ show port]
 
 -- | Given an HTTP client, return the cookie contained in the body of the HTTP
 -- request if it's well-formatted, otherwise return 'Nothing'.
 getRequest :: Handle -> MaybeT IO Cookie
 getRequest client = do
-  (reqLine,headers) <- lift $ getHeader
-
-  guard $ reqLine `elem` [b 15 "POST / HTTP/1.0"#, b 15 "POST / HTTP/1.1"#]
-  contentType <- b 12 "content-type"# `M.lookup` headers
-  guard $ contentType == b 24 "application/octet-stream"#
-  contentLen <- readInt =<< b 14 "content-length"# `M.lookup` headers
+  (reqLine,headers) <- liftIO $ getHeader
+  guard $ reqLine `elem` [B.pack "POST / HTTP/1.0", B.pack "POST / HTTP/1.1"]
+  Just contentType <- return $ B.pack "content-type" `M.lookup` headers
+  guard $ contentType == B.pack "application/octet-stream"
+  Just contentLen <- return $ readInt =<< B.pack "content-length" `M.lookup` headers
   guard $ contentLen == cookieLen
 
   fmap Cookie . lift $ B.hGet client cookieLen
   where
     maxHeaderLen = 2048
-    crlf = b 2 "\r\n"#
+    crlf = B.pack "\r\n"
     crlfLen = 2
 
     getHeader = do
@@ -111,10 +106,3 @@ newCookie getRandBytes = Cookie `fmap` getRandBytes cookieLen
 -- | The cookie length in bytes.
 cookieLen :: Int
 cookieLen = 32
-
---------------------------------------------------------------------------------
--- Aliases
-
--- | An alias for 'B.unsafePackAddress'.
-b :: Int -> Addr# -> B.ByteString
-b = B.unsafePackAddress

@@ -35,8 +35,6 @@ import Data.Time.Clock.POSIX (POSIXTime, getPOSIXTime)
 import Data.Word (Word8, Word32)
 import Network.Socket (Socket, HostAddress, sClose)
 
-import GHC.Prim (Addr#)
-
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
@@ -233,7 +231,7 @@ parseExitListQuery :: [Label] -> Maybe ExitListQuery
 {-# INLINE parseExitListQuery #-}
 parseExitListQuery labels = do
   (queryType:ip2,port:ip1) <- return . splitAt 5 . map unLabel $ labels
-  guard $ length ip1 == 4 && B.map toLower queryType == b 7 "ip-port"#
+  guard $ length ip1 == 4 && B.map toLower queryType == B.pack "ip-port"
   liftM3 IPPort (toAddress ip1) (toAddress ip2) (parsePort port)
   where
     toAddress xs = do
@@ -263,7 +261,3 @@ isRunning now d = now - descPublished d < maxRouterAge
 -- | The time-to-live set for caching.
 ttl :: Word32
 ttl = 30 * 60
-
--- | An alias for unsafePackAddress.
-b :: Int -> Addr# -> B.ByteString
-b = B.unsafePackAddress

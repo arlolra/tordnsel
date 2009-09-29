@@ -1,7 +1,9 @@
 {-# LANGUAGE PatternGuards, BangPatterns, ForeignFunctionInterface,
              TypeSynonymInstances, OverlappingInstances,
              UndecidableInstances #-}
-{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-orphans #-}
+{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-orphans -Wwarn #-}
+--                                                        ^^^^^^
+--                                    XXX: findSubstrings is deprecated
 
 -----------------------------------------------------------------------------
 -- |
@@ -113,8 +115,8 @@ import Data.Dynamic (Dynamic)
 import Data.List (foldl', intersperse)
 import Data.Maybe (mapMaybe)
 import qualified Data.ByteString.Char8 as B
-import qualified Data.ByteString as W
-import qualified Data.ByteString.Base as B
+import qualified Data.ByteString.Internal as B
+import qualified Data.ByteString.Unsafe as B
 import Data.ByteString (ByteString)
 import qualified Data.Map as M
 import Data.Ratio (numerator, denominator, (%))
@@ -204,13 +206,13 @@ parseQuotedString
   :: MonadError ShowS m => ByteString -> m (ByteString, ByteString)
 parseQuotedString input =
   maybe (throwError ("Malformed quoted string." ++)) return $ do
-    guard $ B.take 1 input == b 1 "\""##
+    guard $ B.take 1 input == B.pack "\""
     (content,rest) <- parseContent . B.span isText . B.drop 1 $ input
-    guard $ B.take 1 rest == b 1 "\""##
+    guard $ B.take 1 rest == B.pack "\""
     return (B.concat content, B.drop 1 rest)
   where
     parseContent (text,rest)
-      | B.take 1 rest /= b 1 "\\"## = return ([text], rest)
+      | B.take 1 rest /= B.pack "\\" = return ([text], rest)
       | otherwise = do
           guard $ B.length rest >= 2
           (char,escLen) <- case B.head (B.drop 1 rest) of
@@ -231,7 +233,6 @@ parseQuotedString input =
           return (text : B.singleton char : parsed, unparsed)
 
     isText x = isAscii x && isPrint x && x /= '\\' && x /= '"'
-    b addr = B.unsafePackAddress addr
 
 -- | Prepend a string to any error message thrown by the given action.
 prependError :: MonadError ShowS m => ShowS -> m a -> m a
@@ -321,7 +322,7 @@ inet_htoa addr =
 
 -- | Encode a 'ByteString' in base16.
 encodeBase16 :: ByteString -> ByteString
-encodeBase16 = B.pack . concat . W.foldr ((:) . toBase16) []
+encodeBase16 = B.pack . concat . B.foldr ((:) . toBase16 . B.c2w) []
   where toBase16 x = map (intToDigit . fromIntegral) [x `shiftR` 4, x .&. 0xf]
 
 -- | Split a 'ByteString' into blocks of @x@ length.

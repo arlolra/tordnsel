@@ -40,8 +40,6 @@ import System.IO (Handle, openFile, hFlush, hClose, IOMode(AppendMode))
 import System.IO.Error (isDoesNotExistError)
 import System.Posix.Files (getFileStatus, fileSize)
 
-import GHC.Prim (Addr#)
-
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
@@ -206,14 +204,14 @@ instance Show ExitAddress where
 -- uses for router descriptors and network status documents.
 renderExitAddress :: ExitAddress -> B.ByteString
 renderExitAddress x = B.unlines $
-  [ b 9 "ExitNode "# `B.append` renderID (eaRouterID x)
-  , b 10 "Published "# `B.append` renderTime (eaPublished x)
-  , b 11 "LastStatus "# `B.append` renderTime (eaLastStatus x) ] ++
+  [ B.pack "ExitNode " `B.append` renderID (eaRouterID x)
+  , B.pack "Published " `B.append` renderTime (eaPublished x)
+  , B.pack "LastStatus " `B.append` renderTime (eaLastStatus x) ] ++
   (map renderTest . sortBy (compare `on` snd) . M.assocs . eaAddresses $ x)
   where
     renderID = B.map toUpper . encodeBase16RouterID
     renderTest (addr,time) =
-      B.unwords [b 11 "ExitAddress"#, B.pack $ inet_htoa addr, renderTime time]
+      B.unwords [B.pack "ExitAddress", B.pack $ inet_htoa addr, renderTime time]
     renderTime = B.pack . take 19 . show
 
 -- | Parse a single exit address entry. Return the result or 'throwError' in the
@@ -221,10 +219,10 @@ renderExitAddress x = B.unlines $
 parseExitAddress :: MonadError ShowS m => Document -> m ExitAddress
 parseExitAddress items =
   prependError ("Failed parsing exit address entry: " ++) $ do
-    rid        <- decodeBase16RouterID =<< findArg (b 8  "ExitNode"#) items
-    published  <- parseUTCTime         =<< findArg (b 9  "Published"#) items
-    lastStatus <- parseUTCTime         =<< findArg (b 10 "LastStatus"#) items
-    addrs <- mapM parseAddr . filter ((b 11 "ExitAddress"# ==) . iKey) $ items
+    rid        <- decodeBase16RouterID =<< findArg (B.pack "ExitNode") items
+    published  <- parseUTCTime         =<< findArg (B.pack "Published") items
+    lastStatus <- parseUTCTime         =<< findArg (B.pack "LastStatus") items
+    addrs <- mapM parseAddr . filter ((B.pack "ExitAddress" ==) . iKey) $ items
     return $! ExitAddress rid published lastStatus (M.fromList addrs)
   where
     parseAddr Item { iArg = Just line } =
@@ -247,7 +245,7 @@ readExitAddresses stateDir =
       file <- E.catchJust E.ioErrors
         (B.readFile path)
         (\e -> if isDoesNotExistError e then return B.empty else ioError e)
-      addrs <- forM (parseSubDocs (b 8 "ExitNode"#) parseExitAddress .
+      addrs <- forM (parseSubDocs (B.pack "ExitNode") parseExitAddress .
                        parseDocument . B.lines $ file) $ \exitAddr -> do
         case exitAddr of
           Left e     -> log Warn e >> return Nothing
@@ -285,7 +283,3 @@ isJournalTooLarge :: Integer -> Integer -> Bool
 isJournalTooLarge addrSize journalSize
   | addrSize > 65536 = journalSize > addrSize
   | otherwise        = journalSize > 65536
-
--- | An alias for unsafePackAddress.
-b :: Int -> Addr# -> B.ByteString
-b = B.unsafePackAddress

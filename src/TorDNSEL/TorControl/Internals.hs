@@ -131,9 +131,6 @@ module TorDNSEL.TorControl.Internals (
   , parseReplyCode
   , throwIfNotPositive
   , isPositive
-
-  -- * Aliases
-  , b
   ) where
 
 import Control.Arrow (first, second)
@@ -158,8 +155,6 @@ import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)
 import Data.Typeable (Typeable)
 import System.IO (Handle, hClose, hSetBuffering, BufferMode(..), hFlush)
 import System.IO.Error (isEOFError)
-
-import GHC.Prim (Addr#)
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Future
@@ -219,7 +214,7 @@ openConnection handle mbPasswd = do
   E.handle
     (\e -> do ignoreJust syncExceptions (closeConnection' conn confSettings)
               E.throwIO e) $ do
-    let protInfoCommand = Command (b 12 "protocolinfo"#) [b 1 "1"#] []
+    let protInfoCommand = Command (B.pack "protocolinfo") [B.pack "1"] []
     rs@(r:_) <- sendCommand' protInfoCommand False Nothing conn
     throwIfNotPositive protInfoCommand r
     protInfo <- either (protocolError protInfoCommand) return
@@ -249,7 +244,7 @@ closeConnection' conn@(tellIOManager,ioManagerTid) confSettingsMv =
     `E.finally`
     terminateThread Nothing ioManagerTid (tellIOManager CloseConnection)
   where set (ConfSetting var val) = setConf_ var val conn
-        quit = Command (b 4 "quit"#) [] []
+        quit = Command (B.pack "quit") [] []
 
 -- | 'ProtocolInfo' associated with a 'Connection'.
 protocolInfo :: Connection -> ProtocolInfo
@@ -288,9 +283,9 @@ authenticate mbPasswd conn = do
     | hashedPasswordAuth methods, isJust mbPasswd -> return mbPasswd
     | Just cookiePath <- cookieAuth methods -> Just `fmap` B.readFile cookiePath
     | otherwise                                   -> return Nothing
-  let authCommand = Command (b 12 "authenticate"#) (maybeToList secret) []
+  let authCommand = Command (B.pack "authenticate") (maybeToList secret) []
   sendCommand authCommand False Nothing conn
-    >>= throwIfNotPositive authCommand { comArgs = [b 10 "[scrubbed]"#] } . head
+    >>= throwIfNotPositive authCommand { comArgs = [B.pack "[scrubbed]"] } . head
 
 -- | Control protocol extensions
 data Feature = ExtendedEvents -- ^ Extended event syntax
@@ -302,9 +297,9 @@ useFeature :: [Feature] -> Connection -> IO ()
 useFeature features conn =
   sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
-    command = Command (b 10 "usefeature"#) (map renderFeature features) []
-    renderFeature ExtendedEvents = b 15 "extended_events"#
-    renderFeature VerboseNames   = b 13 "verbose_names"#
+    command = Command (B.pack "usefeature") (map renderFeature features) []
+    renderFeature ExtendedEvents = B.pack "extended_events"
+    renderFeature VerboseNames   = B.pack "verbose_names"
 
 -- | Fetch the most recent descriptor for a given router. Throw a
 -- 'TorControlError' if the reply code isn't 250 or parsing the descriptor
@@ -313,7 +308,7 @@ getDescriptor :: RouterID -> Connection -> IO Descriptor
 getDescriptor rid conn = do
   (r,command) <- getDocument arg parseDescriptor conn
   either (parseError command) return r
-  where arg = b 8 "desc/id/"# `B.append` encodeBase16RouterID rid
+  where arg = B.pack "desc/id/" `B.append` encodeBase16RouterID rid
 
 -- | Fetch the most recent descriptor for every router Tor knows about. Throw a
 -- 'TorControlError' if the reply code isn't 250. Also return error messages for
@@ -322,7 +317,7 @@ getAllDescriptors :: Connection -> IO ([Descriptor], [ShowS])
 getAllDescriptors conn = do
   (r,command) <- getDocument arg parseDescriptors conn
   return $ map (cat (commandFailed command)) `second` swap (partitionEither r)
-  where arg = b 15 "desc/all-recent"#
+  where arg = B.pack "desc/all-recent"
 
 -- | Fetch the current status entry for a given router. Throw a
 -- 'TorControlError' if the reply code isn't 250 or parsing the router status
@@ -331,7 +326,7 @@ getRouterStatus :: RouterID -> Connection -> IO RouterStatus
 getRouterStatus rid conn = do
   (r,command) <- getDocument arg parseRouterStatus conn
   either (parseError command) return r
-  where arg = b 6 "ns/id/"# `B.append` encodeBase16RouterID rid
+  where arg = B.pack "ns/id/" `B.append` encodeBase16RouterID rid
 
 -- | Fetch the current status entries for every router Tor has an opinion about.
 -- Throw a 'TorControlError' if the reply code isn't 250. Also return error
@@ -340,7 +335,7 @@ getNetworkStatus :: Connection -> IO ([RouterStatus], [ShowS])
 getNetworkStatus conn = do
   (r,command) <- getDocument arg parseRouterStatuses conn
   return $ map (cat (commandFailed command)) `second` swap (partitionEither r)
-  where arg = b 6 "ns/all"#
+  where arg = B.pack "ns/all"
 
 -- | Send a GETINFO command using @key@ as a single keyword. If the reply code
 -- is 250, pass the document contained in data from the first reply to @parse@
@@ -354,18 +349,18 @@ getDocument key parse conn = do
       | text == B.snoc key '=' -> return (parse $ parseDocument doc, command)
       | otherwise -> protocolError command $ cat "Got " (esc maxRepLen text) '.'
     _             -> E.throwDyn $ toTCError command reply
-  where command = Command (b 7 "getinfo"#) [key] []
+  where command = Command (B.pack "getinfo") [key] []
         maxRepLen = 64
 
 -- | Get the current status of all open circuits. Throw a 'TorControlError' if
 -- the reply code isn't 250.
 getCircuitStatus :: Connection -> IO [CircuitStatus]
-getCircuitStatus = getStatus (b 14 "circuit-status"#) parseCircuitStatus
+getCircuitStatus = getStatus (B.pack "circuit-status") parseCircuitStatus
 
 -- | Get the current status of all open streams. Throw a 'TorControlError' if
 -- the reply code isn't 250.
 getStreamStatus :: Connection -> IO [StreamStatus]
-getStreamStatus = getStatus (b 13 "stream-status"#) parseStreamStatus
+getStreamStatus = getStatus (B.pack "stream-status") parseStreamStatus
 
 -- | Get the current status of all open circuits or streams. The GETINFO key is
 -- specified by @key@, and the line-parsing function by @parse@. Throw a
@@ -385,7 +380,7 @@ getStatus key parse conn = do
       | null dataLines -> check (:[]) (parse $ B.drop (B.length key + 1) text)
       | otherwise      -> check id $ mapM parse dataLines
     _                  -> E.throwDyn $ toTCError command reply
-  where command = Command (b 7 "getinfo"#) [key] []
+  where command = Command (B.pack "getinfo") [key] []
         check f = either (parseError command) (return . f)
         maxRepLen = 64
 
@@ -414,17 +409,17 @@ extendCircuit' circuit path purpose conn = do
   reply:_ <- sendCommand command False Nothing conn
   case reply of
     Reply ('2','5','0') text _
-      | msg:cid':_ <- B.split ' ' text, msg == b 8 "EXTENDED"#
+      | msg:cid':_ <- B.split ' ' text, msg == B.pack "EXTENDED"
       , maybe True (== CircId cid') circuit -> return $ CircId (B.copy cid')
       | otherwise -> protocolError command $ cat "Got " (esc maxRepLen text) '.'
     _             -> E.throwDyn $ toTCError command reply
   where
-    command = Command (b 13 "extendcircuit"#) args []
-    args = add purpose [cid, B.join (b 1 ","#) $ map encodeBase16RouterID path]
+    command = Command (B.pack "extendcircuit") args []
+    args = add purpose [cid, B.intercalate (B.pack ",") $ map encodeBase16RouterID path]
     CircId cid = fromMaybe nullCircuitID circuit
-    renderPurpose CrGeneral    = b 7  "general"#
-    renderPurpose CrController = b 10 "controller"#
-    add = maybe id (\p -> (++ [b 8 "purpose="# `B.append` renderPurpose p]))
+    renderPurpose CrGeneral    = B.pack "general"
+    renderPurpose CrController = B.pack "controller"
+    add = maybe id (\p -> (++ [B.pack "purpose=" `B.append` renderPurpose p]))
     maxRepLen = 64
 
 -- | Attach an unattached stream to a completed circuit, exiting from @hop@ if
@@ -446,9 +441,9 @@ attachStream'
 attachStream' (StrmId sid) circuit hop conn =
   sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
-    command = Command (b 12 "attachstream"#) (add hop [sid,cid]) []
+    command = Command (B.pack "attachstream") (add hop [sid,cid]) []
     CircId cid = fromMaybe nullCircuitID circuit
-    add = maybe id (flip (++) . (:[]) . B.append (b 4 "HOP="#) . B.pack . show)
+    add = maybe id (flip (++) . (:[]) . B.append (B.pack "HOP=") . B.pack . show)
 
 -- | Change a stream's destination address and port, if specified. Throw a
 -- 'TorControlError' if the reply code indicates failure.
@@ -456,7 +451,7 @@ redirectStream :: StreamID -> Address -> Maybe Port -> Connection -> IO ()
 redirectStream (StrmId sid) addr port conn =
   sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
-    command = Command (b 14 "redirectstream"#) args []
+    command = Command (B.pack "redirectstream") args []
     args = [sid, showAddress addr] ++ maybeToList ((B.pack . show) `fmap` port)
 
 -- | Flags to pass to 'closeCircuit'
@@ -474,8 +469,8 @@ closeCircuit :: CircuitID -> CloseCircuitFlags -> Connection -> IO ()
 closeCircuit (CircId cid) flags conn =
   sendCommand command False Nothing conn >>= throwIfNotPositive command . head
   where
-    command = Command (b 12 "closecircuit"#) (cid : flagArgs) []
-    flagArgs = [flag | (p,flag) <- [(ifUnused, b 8 "IfUnused"#)], p flags]
+    command = Command (B.pack "closecircuit") (cid : flagArgs) []
+    flagArgs = [flag | (p,flag) <- [(ifUnused, B.pack "IfUnused")], p flags]
 
 -- | Send a GETCONF command with a set of config variable names, returning
 -- a set of key-value pairs. Throw a 'TorControlError' if the reply code
@@ -486,24 +481,24 @@ getConf' keys conn = do
   throwIfNotPositive command r
   either (protocolError command) return (mapM (parseText . repText) rs)
   where
-    command = Command (b 7 "getconf"#) keys []
+    command = Command (B.pack "getconf") keys []
     parseText text
-      | B.null eq      = return (key, Nothing)
-      | eq == b 1 "="# = return (key, Just val)
-      | otherwise      = throwError $ cat "Malformed GETCONF reply "
-                                          (esc maxTextLen text) '.'
+      | B.null eq = return (key, Nothing)
+      | eq == (B.pack "=") = return (key, Just val)
+      | otherwise = throwError $ cat "Malformed GETCONF reply "
+                                     (esc maxTextLen text) '.'
       where (key,(eq,val)) = B.splitAt 1 `second` B.span isAlpha text
             maxTextLen = 128
 
 -- | Send a SETCONF command with a set of key-value pairs. Throw a
 -- 'TorControlError' if the reply code indicates failure.
 setConf' :: [(ByteString, Maybe ByteString)] -> Connection' -> IO ()
-setConf' = setConf'' (b 7 "setconf"#)
+setConf' = setConf'' (B.pack "setconf")
 
 -- | Send a RESETCONF command with a set of key-value pairs. Throw a
 -- 'TorControlError' if the reply code indicates failure.
 resetConf' :: [(ByteString, Maybe ByteString)] -> Connection' -> IO ()
-resetConf' = setConf'' (b 9 "resetconf"#)
+resetConf' = setConf'' (B.pack "resetconf")
 
 -- | Send a SETCONF or RESETCONF command with a set of key-value pairs. Throw a
 -- 'TorControlError' if the reply code indicates failure.
@@ -513,7 +508,7 @@ setConf'' name args conn =
   sendCommand' command False Nothing conn >>= throwIfNotPositive command . head
   where
     command = Command name (map renderArg args) []
-    renderArg (key, Just val) = B.join (b 1 "="#) [key, val]
+    renderArg (key, Just val) = B.intercalate (B.pack "=") [key, val]
     renderArg (key, _)        = key
 
 -- | Send a command using a connection, blocking the current thread until all
@@ -553,12 +548,12 @@ class ConfVal a where
   decodeConfVal :: MonadError ShowS m => ByteString -> m a
 
 instance ConfVal Bool where
-  encodeConfVal True  = b 1 "1"#
-  encodeConfVal False = b 1 "0"#
+  encodeConfVal True  = (B.pack "1")
+  encodeConfVal False = (B.pack "0")
 
   decodeConfVal bool
-    | bool == b 1 "1"# = return True
-    | bool == b 1 "0"# = return False
+    | bool == (B.pack "1") = return True
+    | bool == (B.pack "0") = return False
     | otherwise = throwError $ cat "Malformed boolean conf value "
                                    (esc maxBoolLen bool) '.'
     where maxBoolLen = 32
@@ -628,12 +623,12 @@ setConfWithRollback var newVal conn = do
 
 -- | Enables fetching descriptors for non-running routers.
 fetchUselessDescriptors :: ConfVar Bool Bool
-fetchUselessDescriptors = boolVar (b 23 "fetchuselessdescriptors"#)
+fetchUselessDescriptors = boolVar (B.pack "fetchuselessdescriptors")
 
 -- | Enables fetching directory info on the mirror schedule, preferably from
 -- authorities.
 fetchDirInfoEarly :: ConfVar Bool Bool
-fetchDirInfoEarly = boolVar (b 17 "fetchdirinfoearly"#)
+fetchDirInfoEarly = boolVar (B.pack "fetchdirinfoearly")
 
 -- | Given the name of a boolean conf variable, return the corresponding
 -- 'ConfVar'.
@@ -668,12 +663,12 @@ registerEventHandlers :: [EventHandler] -> Connection -> IO ()
 registerEventHandlers handlers conn =
   sendCommand command False (Just handlers) conn
     >>= throwIfNotPositive command . head
-  where command = Command (b 9 "setevents"#) (map evCode handlers) []
+  where command = Command (B.pack "setevents") (map evCode handlers) []
 
 -- | Create an event handler for new router descriptor events.
 newDescriptorsEvent ::
   ([TorControlError] -> [Descriptor] -> IO ()) -> Connection -> EventHandler
-newDescriptorsEvent handler conn = EventHandler (b 7 "NEWDESC"#) handleNewDesc
+newDescriptorsEvent handler conn = EventHandler (B.pack "NEWDESC") handleNewDesc
   where
     safeGetDescriptor rid = Right `fmap` getDescriptor rid conn
       `E.catchDyn` \(e :: TorControlError) -> return (Left e)
@@ -689,7 +684,7 @@ newDescriptorsEvent handler conn = EventHandler (b 7 "NEWDESC"#) handleNewDesc
 -- | Create an event handler for network status events.
 networkStatusEvent ::
   ([TorControlError] -> [RouterStatus] -> IO ()) -> EventHandler
-networkStatusEvent handler = EventHandler (b 2 "NS"#) handleNS
+networkStatusEvent handler = EventHandler (B.pack "NS") handleNS
   where
     handleNS (Reply _ _ doc@(_:_):_) = handler (map ParseError es) rs
       where (es,rs) = partitionEither . parseRouterStatuses $ parseDocument doc
@@ -697,11 +692,11 @@ networkStatusEvent handler = EventHandler (b 2 "NS"#) handleNS
 
 -- | Create an event handler for stream status change events.
 streamEvent :: (Either TorControlError StreamStatus -> IO ()) -> EventHandler
-streamEvent = lineEvent (b 6 "STREAM"#) parseStreamStatus
+streamEvent = lineEvent (B.pack "STREAM") parseStreamStatus
 
 -- | Create an event handler for circuit status change events.
 circuitEvent :: (Either TorControlError CircuitStatus -> IO ()) -> EventHandler
-circuitEvent = lineEvent (b 4 "CIRC"#) parseCircuitStatus
+circuitEvent = lineEvent (B.pack "CIRC") parseCircuitStatus
 
 -- | Create an event handler for circuit/stream status change events. The event
 -- code is specified by @code@, and the line-parsing function by @parse@.
@@ -716,7 +711,7 @@ lineEvent code parse handler = EventHandler code handleStatus
 
 -- | Create an event handler for new address mapping events.
 addressMapEvent :: (Either TorControlError AddressMap -> IO ()) -> EventHandler
-addressMapEvent handler = EventHandler (b 7 "ADDRMAP"#) handleAddrMap
+addressMapEvent handler = EventHandler (B.pack "ADDRMAP") handleAddrMap
   where
     handleAddrMap (Reply _ text _:_) = do
       -- XXX Extended events will provide the UTCTime in 0.2.0.x.
@@ -822,12 +817,12 @@ startIOManager handle = do
                  E.AsyncException E.ThreadKilled
 
     renderCommand (Command key args []) =
-      B.join (b 1 " "#) (key : args) `B.append` b 2 "\r\n"#
+      B.intercalate (B.pack " ") (key : args) `B.append` B.pack "\r\n"
     renderCommand c@(Command _ _ data') =
       B.cons '+' (renderCommand c { comData = [] }) `B.append` renderData data'
 
     renderData =
-      B.concat . foldr (\line xs -> line : b 2 "\r\n"# : xs) [b 3 ".\r\n"#]
+      B.concat . foldr (\line xs -> line : B.pack "\r\n" : xs) [B.pack ".\r\n"]
 
     eventCode = B.takeWhile (/= ' ') . repText
 
@@ -855,20 +850,20 @@ startSocketReader handle sendRepliesToIOManager =
       where (code,(typ,text)) = B.splitAt 1 `second` B.splitAt 3 line
 
     parseReplyLine' typ text code
-      | typ == b 1 "-"# = return . MidReply $ Reply code text []
-      | typ == b 1 "+"# = (MidReply . Reply code text) `fmap` readData
-      | typ == b 1 " "# = return . LastReply $ Reply code text []
+      | typ == B.pack "-" = return . MidReply $ Reply code text []
+      | typ == B.pack "+" = (MidReply . Reply code text) `fmap` readData
+      | typ == B.pack " " = return . LastReply $ Reply code text []
       | otherwise = E.throwDyn . ProtocolError $
                       cat "Malformed reply line type " (esc 1 typ) '.'
 
     readData = do
-      line <- hGetLine handle (b 1 "\n"#) maxLineLength
+      line <- hGetLine handle (B.pack "\n") maxLineLength
       case (if B.last line == '\r' then B.init else id) line of
-        line' | line == b 2 ".\r"#       -> return []
+        line' | line == (B.pack ".\r")   -> return []
               | any B.null [line, line'] -> readData
               | otherwise                -> fmap (line' :) readData
 
-    crlf = b 2 "\r\n"#
+    crlf = B.pack "\r\n"
     maxLineLength = 2^20
 
 --------------------------------------------------------------------------------
@@ -907,7 +902,7 @@ parseTorVersion bs
 
     int = StateT (maybe mzero return . B.readInteger)
 
-    (dot,hyphen) = (str (b 1 "."#), str (b 1 "-"#))
+    (dot,hyphen) = (str (B.pack "."), str (B.pack "-"))
 
     str x = do
       (x',rest) <- B.splitAt (B.length x) `fmap` get
@@ -936,21 +931,21 @@ data ProtocolInfo = ProtocolInfo
 parseProtocolInfo :: MonadError ShowS m => [Reply] -> m ProtocolInfo
 parseProtocolInfo [] = throwError ("Missing PROTOCOLINFO reply." ++)
 parseProtocolInfo (Reply _ text _:rs)
-  | not $ B.isPrefixOf (b 12 "PROTOCOLINFO"#) text
+  | not $ B.isPrefixOf (B.pack "PROTOCOLINFO") text
   = throwError ("Malformed PROTOCOLINFO reply." ++)
-  | B.drop 13 text /= b 1 "1"#
+  | B.drop 13 text /= (B.pack "1")
   = throwError ("Unsupported PROTOCOLINFO version." ++)
   | otherwise = do
-      authLine <- findPrefix (b 13 "AUTH METHODS="#)
+      authLine <- findPrefix (B.pack "AUTH METHODS=")
       let (methods,restAuth) = B.split ',' `first` B.span (/= ' ') authLine
-      cookiePath <- if b 12 " COOKIEFILE="# `B.isPrefixOf` restAuth
+      cookiePath <- if (B.pack " COOKIEFILE=") `B.isPrefixOf` restAuth
         then (Just . fst) `liftM` parseQuotedString (B.drop 12 restAuth)
         else return Nothing
-      versionLine <- findPrefix (b 12 "VERSION Tor="#)
+      versionLine <- findPrefix (B.pack "VERSION Tor=")
       version <- parseTorVersion . fst =<< parseQuotedString versionLine
       return $! ProtocolInfo version AuthMethods
-        { nullAuth           = b 4 "NULL"# `elem` methods
-        , hashedPasswordAuth = b 14 "HASHEDPASSWORD"# `elem` methods
+        { nullAuth           = B.pack "NULL" `elem` methods
+        , hashedPasswordAuth = B.pack "HASHEDPASSWORD" `elem` methods
         , cookieAuth         = B.unpack `liftM` cookiePath }
   where
     findPrefix prefix
@@ -968,7 +963,7 @@ instance Show CircuitID where
 
 -- | A special 'CircuitID' of "0".
 nullCircuitID :: CircuitID
-nullCircuitID = CircId (b 1 "0"#)
+nullCircuitID = CircId (B.pack "0")
 
 -- | Parse an identifier using the constructor @con@. 'throwError' in the monad
 -- if parsing fails.
@@ -1010,11 +1005,11 @@ data CircuitState
 -- | Parse a circuit state. 'throwError' in the monad if parsing fails.
 parseCircuitState :: MonadError ShowS m => ByteString -> m CircuitState
 parseCircuitState bs
-  | bs == b 8 "LAUNCHED"# = return CrLaunched
-  | bs == b 5 "BUILT"#    = return CrBuilt
-  | bs == b 8 "EXTENDED"# = return CrExtended
-  | bs == b 6 "FAILED"#   = return CrFailed
-  | bs == b 6 "CLOSED"#   = return CrClosed
+  | bs == (B.pack "LAUNCHED") = return CrLaunched
+  | bs == (B.pack "BUILT")    = return CrBuilt
+  | bs == (B.pack "EXTENDED") = return CrExtended
+  | bs == (B.pack "FAILED")   = return CrFailed
+  | bs == (B.pack "CLOSED")   = return CrClosed
   | otherwise = throwError $ cat "Unknown circuit state "
                                  (esc maxStateLen bs) '.'
   where maxStateLen = 32
@@ -1064,15 +1059,15 @@ data StreamState
 -- | Parse a stream state. 'throwError' in the monad if parsing fails.
 parseStreamState :: MonadError ShowS m => ByteString -> m StreamState
 parseStreamState bs
-  | bs == b 3  "NEW"#         = return StNew
-  | bs == b 10 "NEWRESOLVE"#  = return StNewResolve
-  | bs == b 5  "REMAP"#       = return StRemap
-  | bs == b 11 "SENTCONNECT"# = return StSentConnect
-  | bs == b 11 "SENTRESOLVE"# = return StSentResolve
-  | bs == b 9  "SUCCEEDED"#   = return StSucceeded
-  | bs == b 6  "FAILED"#      = return StFailed
-  | bs == b 6  "CLOSED"#      = return StClosed
-  | bs == b 8  "DETACHED"#    = return StDetached
+  | bs == (B.pack "NEW")         = return StNew
+  | bs == (B.pack "NEWRESOLVE")  = return StNewResolve
+  | bs == (B.pack "REMAP")       = return StRemap
+  | bs == (B.pack "SENTCONNECT") = return StSentConnect
+  | bs == (B.pack "SENTRESOLVE") = return StSentResolve
+  | bs == (B.pack "SUCCEEDED")   = return StSucceeded
+  | bs == (B.pack "FAILED")      = return StFailed
+  | bs == (B.pack "CLOSED")      = return StClosed
+  | bs == (B.pack "DETACHED")    = return StDetached
   | otherwise = throwError $ cat "Unknown stream state "
                                  (esc maxStateLen bs) '.'
   where maxStateLen = 32
@@ -1087,8 +1082,8 @@ data AddressMap = AddrMap Address -- old address
 -- expiry time to UTC. 'throwError' in the monad if parsing fails.
 parseAddressMap :: MonadError ShowS m => TimeZone -> ByteString -> m AddressMap
 parseAddressMap tz line
-  | fst (breakWS rest) == b 5 "NEVER"# = return $! mapping Never
-  | b 1 "\""# `B.isPrefixOf` rest, _:time:_ <- B.split '"' rest
+  | fst (breakWS rest) == (B.pack "NEVER") = return $! mapping Never
+  | (B.pack "\"") `B.isPrefixOf` rest, _:time:_ <- B.split '"' rest
   = prependError
       ("Failed parsing address mapping: " ++)
       ((mapping . Expiry . localTimeToUTC tz) `liftM` parseLocalTime time)
@@ -1168,10 +1163,3 @@ throwIfNotPositive command reply =
 isPositive :: ReplyCode -> Bool
 isPositive ('2',_,_) = True
 isPositive _         = False
-
---------------------------------------------------------------------------------
--- Aliases
-
--- | An alias for unsafePackAddress.
-b :: Int -> Addr# -> ByteString
-b = B.unsafePackAddress

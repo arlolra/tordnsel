@@ -148,15 +148,14 @@ terminateStatsServer mbWait (StatsServer tellStatsServer statsServerTid) =
 -- | Render 'Stats' to text as a sequence of CRLF-terminated lines.
 renderStats :: Stats -> B.ByteString
 renderStats s = B.concat . map line $
-  [ b 14 "BytesReceived "#     ~> bytesRecv
-  , b 10 "BytesSent "#         ~> bytesSent
-  , b 18 "DatagramsReceived "# ~> dgramsRecv
-  , b 14 "PositivesSent "#     ~> positives
-  , b 14 "NegativesSent "#     ~> negatives
-  , b 11 "OthersSent "#        ~> others ]
+  [ B.pack "BytesReceived "     ~> bytesRecv
+  , B.pack "BytesSent "         ~> bytesSent
+  , B.pack "DatagramsReceived " ~> dgramsRecv
+  , B.pack "PositivesSent "     ~> positives
+  , B.pack "NegativesSent "     ~> negatives
+  , B.pack "OthersSent "        ~> others ]
   where
-    line (x,f) = x `B.append` (B.pack . show $ f s) `B.append` b 2 "\r\n"#
-    b = B.unsafePackAddress
+    line (x,f) = x `B.append` (B.pack . show $ f s) `B.append` B.pack "\r\n"
     (~>) = (,)
 
 -- | Generate the statistics socket path from the runtime directory path.

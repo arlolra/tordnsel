@@ -26,24 +26,24 @@ import TorDNSEL.Util
 tests = TestList [TestCase descriptorParses, fingerprint, TestCase exitPolicy]
 
 exitPolicy = do
-  let Just [ip1,ip2,ip3] = mapM (inet_atoh . B.pack) ips
+  let Just [ip1,ip2,ip3] = mapM inet_atoh ips
       Just policy = parseExitPolicy $ parseDocument doc
   False @=? exitPolicyAccepts ip1 80 policy
   False @=? exitPolicyAccepts ip2 80 policy
   True @=? exitPolicyAccepts ip3 81 policy
   where
     ips = ["192.169.64.11","192.168.64.11","18.244.0.188"]
-    doc = map B.pack ["reject *:80","accept 18.244.0.18:*"]
+    doc = ["reject *:80","accept 18.244.0.18:*"]
 
 fingerprint = TestList . map TestCase $
   [ Just rid @=? decodeBase16RouterID base16
   , Just rid @=? decodeBase64RouterID base64
   , base16 @=? encodeBase16RouterID rid ]
   where
-    base16 = b 40 "ffcb46db1339da84674c70d7cb586434c4370441"#
-    base64 = b 27 "/8tG2xM52oRnTHDXy1hkNMQ3BEE"#
-    rid = RtrId $ b 20 "\255\203\70\219\19\57\218\132\103\76\112\
-                        \\215\203\88\100\52\196\55\4\65"#
+    base16 = "ffcb46db1339da84674c70d7cb586434c4370441"
+    base64 = "/8tG2xM52oRnTHDXy1hkNMQ3BEE"
+    rid = RtrId "\255\203\70\219\19\57\218\132\103\76\112\
+                 \\215\203\88\100\52\196\55\4\65"
 
 descriptorParses =
   "[Right " ++ parsed ++ ",Right " ++ parsed ++ "]" @=? parse descriptor
@@ -77,7 +77,7 @@ descriptorParses =
       \Reject 192.168.0.0/255.255.0.0:22-25\n\
       \Accept 0.0.0.0/0.0.0.0:0-65535\n"
 
-descriptor = map B.pack . lines $
+descriptor = B.lines $
   "router err 128.2.141.33 9001 0 9030\n\
   \platform Tor 0.1.0.17 on FreeBSD i386\n\
   \published 2007-03-31 21:34:31\n\
