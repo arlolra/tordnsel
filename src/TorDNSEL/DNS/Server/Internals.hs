@@ -157,6 +157,12 @@ dnsResponse c msg now ns
       TAny -> (Other, noErr { msgAnswers = [dnsSOA c, dnsNS c] ++
                               maybeToList (dnsA c), msgAuthority = [dnsNS c] })
       _    -> (Other, noErr { msgAnswers = [], msgAuthority = [dnsSOA c] })
+  -- a incomplete request
+  | Just qLabels <- mbQLabels
+  , Nothing      <- parseExitListQuery qLabels
+  , B.map toLower (unLabel (head qLabels)) == B.pack "ip-port" && length qLabels <= 9
+  = emptyAnswer
+  -- a full request
   | Just qLabels <- mbQLabels
   , Just query   <- parseExitListQuery qLabels
   = if isTest query || isExitNode now ns query
@@ -165,7 +171,7 @@ dnsResponse c msg now ns
         then (Positive, noErr { msgAnswers = [positive]
                               , msgAuthority = [dnsNS c] })
         -- RFC 2308
-        else (Other, noErr { msgAnswers = [], msgAuthority = [dnsSOA c] })
+        else emptyAnswer
       else (Negative, nxDomain)
   | otherwise = (Other, nxDomain)
   where
@@ -173,6 +179,7 @@ dnsResponse c msg now ns
     mbQLabels = dropAuthZone (dnsAuthZone c) (qName question)
     positive = A (qName question) ttl 0x7f000002
     noErr = r { msgAA = True, msgRCode = NoError }
+    emptyAnswer = (Other, noErr { msgAnswers = [], msgAuthority = [dnsSOA c] })
     nxDomain = r { msgAA = True, msgRCode = NXDomain, msgAnswers = []
                  , msgAuthority = [dnsSOA c] }
     r = msg { msgQR = True, msgTC = False, msgRA = False, msgAD = False
