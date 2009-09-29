@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, TypeSynonymInstances #-}
+{-# LANGUAGE PatternGuards, TypeSynonymInstances, FlexibleContexts #-}
 
 -----------------------------------------------------------------------------
 -- |

@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternGuards, DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-ignore-asserts #-}
 
 -----------------------------------------------------------------------------

@@ -1,5 +1,11 @@
 {-# LANGUAGE PatternGuards, BangPatterns, Rank2Types #-}
-{-# OPTIONS_GHC -fno-warn-type-defaults #-}
+{-# OPTIONS_GHC -fno-warn-type-defaults -fglasgow-exts #-}
+-- XXX: We use -fglasgow-exts here as it is not possible to specify LANGUAGE
+--      pragmas for different GHC versions using CPP.
+--      Otherwise, we would add on GHC 6.10:
+--        ScopedTypeVariables
+--      and on GHC 6.8:
+--        PatternSignatures
 
 -----------------------------------------------------------------------------
 -- |

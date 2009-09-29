@@ -1,6 +1,7 @@
 {-# LANGUAGE PatternGuards, BangPatterns, ForeignFunctionInterface,
              TypeSynonymInstances, OverlappingInstances,
-             UndecidableInstances #-}
+             UndecidableInstances, FlexibleInstances, MultiParamTypeClasses,
+             GeneralizedNewtypeDeriving, FlexibleContexts #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-orphans -Wwarn #-}
 --                                                        ^^^^^^
 --                                    XXX: findSubstrings is deprecated

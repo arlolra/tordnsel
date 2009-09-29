@@ -1,4 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-warn-unused-binds #-}
 
 -----------------------------------------------------------------------------
