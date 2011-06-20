@@ -1,4 +1,4 @@
-0.1.0 - 2008-0?-??
+0.1.0 - 201?-??-??
   o Deployment:
     - Add support for logging messages to stdout, stderr, syslog, or to a file.
       Syslog logging should be useful for running in a chroot.
@@ -58,6 +58,9 @@
       earlier attempted test.
     - Regenerate the exit-addresses store every time a new network status
       consensus is received instead of every 15 minutes.
+    - Reduce the maximum relay age from 48 hours to 24 hours.  This should
+      cut down the length of time a relay is listed in the exitlist after
+      it has been disabled or changed to a non-exit relay.
 
   o Controller:
     - Close controller connections cleanly with the QUIT command.
