@@ -1,4 +1,4 @@
-0.1.0 - 201?-??-??
+0.1.0 - 2011-06-28
   o Deployment:
     - Add support for logging messages to stdout, stderr, syslog, or to a file.
       Syslog logging should be useful for running in a chroot.
