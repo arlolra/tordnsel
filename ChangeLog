@@ -1,3 +1,8 @@
+0.1.1 - 2011-06-28
+  - Correctly label the release version and Changelog.
+  - Add updated website and maintainers in tordnsel.cabal.
+  - Document the tordnsel init script for Debian. 
+
 0.1.0 - 2011-06-28
   o Deployment:
     - Add support for logging messages to stdout, stderr, syslog, or to a file.
