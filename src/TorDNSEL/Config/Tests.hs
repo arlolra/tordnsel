@@ -28,26 +28,26 @@ tests = TestList . map TestCase $
 
 config' = toConfig
   [ "User"       ~> "nobody"
-  , "ConfigFile" ~> "/etc/tordnsel.conf" ]
+  , "ConfigFile" ~> "/srv/tordnsel/tordnsel.conf" ]
 
-configArgs = ["--User", "nobody", "-f", "/etc/tordnsel.conf"]
+configArgs = ["--User", "nobody", "-f", "/srv/tordnsel/tordnsel.conf"]
 
 config = toConfig
   [ "ZoneOfAuthority"        ~> "exitlist.example.com."
   , "DomainName"             ~> "exitlist-ns.example.com."
   , "SOARName"               ~> "hostmaster.example.com."
   , "StateDirectory"         ~> "/state"
-  , "RuntimeDirectory"       ~> "/var/run/tordnsel"
+  , "RuntimeDirectory"       ~> "/srv/tordnsel/run/"
   , "DNSListenAddress"       ~> "127.0.0.1:53"
   , "Address"                ~> "10.0.0.1"
   , "TorControlAddress"      ~> "127.0.0.1:9051"
   , "TorControlPassword"     ~> "password"
-  , "Log"                    ~> "notice file /var/log/tordnsel/log"
+  , "Log"                    ~> "notice file /srv/tordnsel/log/"
   , "RunAsDaemon"            ~> "True"
   , "User"                   ~> "tordnsel"
   , "Group"                  ~> "tordnsel"
-  , "ChangeRootDirectory"    ~> "/var/lib/tordnsel"
-  , "PIDFile"                ~> "/var/run/tordnsel.pid"
+  , "ChangeRootDirectory"    ~> "/srv/tordnsel/"
+  , "PIDFile"                ~> "/srv/tordnsel/run/tordnsel.pid"
   , "EnableActiveTesting"    ~> "True"
   , "TorSocksAddress"        ~> "127.0.0.1:9050"
   , "TestListenAddress"      ~> "10.0.0.1:80,443,110,53,22,5190,6667,9030"
@@ -77,14 +77,14 @@ configFile =
   \\n\
   \## Store exit test results in this directory. This should be an absolute\n\
   \## path accessible inside the chroot (if one is configured).\n\
-  \#StateDirectory /var/lib/tordnsel/state\n\
+  \#StateDirectory /srv/tordnsel/state\n\
   \## This line is equivalent to the previous line if you've specified\n\
-  \## ChangeRootDirectory as /var/lib/tordnsel.\n\
+  \## ChangeRootDirectory as /srv/tordnsel.\n\
   \StateDirectory /state\n\
   \\n\
   \## Place the statistics and reconfigure sockets in this directory before\n\
   \## chrooting or dropping privileges.\n\
-  \RuntimeDirectory /var/run/tordnsel\n\
+  \RuntimeDirectory /srv/tordnsel/run/\n\
   \\n\
   \################ Optional options #########################################\n\
   \##\n\
@@ -121,7 +121,7 @@ configFile =
   \#Log notice stdout\n\
   \#Log info stderr\n\
   \#Log warn syslog\n\
-  \Log notice file /var/log/tordnsel/log\n\
+  \Log notice file /srv/tordnsel/log/\n\
   \\n\
   \## Detach from the controlling terminal and run in the background as a\n\
   \## daemon. The default is \"False\".\n\
@@ -137,11 +137,11 @@ configFile =
   \\n\
   \## Call chroot(2) to change our root directory. This option also requires\n\
   \## root privileges.\n\
-  \ChangeRootDirectory /var/lib/tordnsel\n\
+  \ChangeRootDirectory /srv/tordnsel\n\
   \\n\
   \## Write our PID to the specified file before chrooting or dropping\n\
   \## privileges. This file won't be removed on exit.\n\
-  \PIDFile /var/run/tordnsel.pid\n\
+  \PIDFile /srv/tordnsel/run/tordnsel.pid\n\
   \\n\
   \################ Active testing options ###################################\n\
   \##\n\
