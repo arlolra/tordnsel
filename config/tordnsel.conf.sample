@@ -21,14 +21,14 @@
 
 ## Store exit test results in this directory. This should be an absolute
 ## path accessible inside the chroot (if one is configured).
-#StateDirectory /var/lib/tordnsel/state
+#StateDirectory /srv/tordnsel/state
 ## This line is equivalent to the previous line if you've specified
 ## ChangeRootDirectory as /var/lib/tordnsel.
 #StateDirectory /state
 
 ## Place the statistics and reconfigure sockets in this directory before
 ## chrooting or dropping privileges.
-#RuntimeDirectory /var/run/tordnsel
+#RuntimeDirectory /srv/tordnsel/tordnsel
 
 ################ Optional options #########################################
 ##
@@ -65,7 +65,7 @@
 #Log notice stdout
 #Log info stderr
 #Log warn syslog
-#Log notice file /var/log/tordnsel/log
+#Log notice file /srv/tordnsel/log
 
 ## Detach from the controlling terminal and run in the background as a
 ## daemon. The default is "False".
@@ -81,11 +81,11 @@
 
 ## Call chroot(2) to change our root directory. This option also requires
 ## root privileges.
-#ChangeRootDirectory /var/lib/tordnsel
+#ChangeRootDirectory /srv/tordnsel/root
 
 ## Write our PID to the specified file before chrooting or dropping
 ## privileges. This file won't be removed on exit.
-#PIDFile /var/run/tordnsel.pid
+#PIDFile /srv/tordnsel/run/tordnsel.pid
 
 ################ Active testing options ###################################
 ##
