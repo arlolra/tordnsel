@@ -1,0 +1,15 @@
+# tordnsel wishlist for haskell hackers looking for a challenge
+
+ - update for compatibility with ghc 7.4 or newer
+ - make sure we are IPv6 compatible and safe
+    - support ipv6 dns queries
+    - support ipv6 tor exit relays
+    - separate options to enable/disable ipv4 and ipv6 functionality
+ - more input validation on dns queries
+ - update the TorControl for the latest Tor 0.2.3.x torcontrol spec
+ - don't trust the local running environment to be sane or safe
+ - figure out some sort of packaging to make installation easier
+ - implement check.torproject.org web functionality so an instance
+ doesn't need to run haskell, python, apache, and wsgi scripts.
+    - bonus if this is a simple json or api call for yes/no answers
+    rather than an entire website.
