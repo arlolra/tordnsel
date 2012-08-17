@@ -216,7 +216,7 @@ dropAuthZone (DomainName authZone) (DomainName name) =
 -- | Queries asking whether there's a Tor exit node at a specific IP address.
 data ExitListQuery
   -- |  Query type 1 from
-  -- <https://www.torproject.org/svn/trunk/doc/contrib/torel-design.txt>.
+  -- <https://gitweb.torproject.org/tordnsel.git/blob/HEAD:/doc/torel-design.txt>
   = IPPort
   { -- | The address of the candidate exit node.
     queryAddr :: {-# UNPACK #-} !HostAddress,
