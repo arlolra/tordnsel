@@ -18,7 +18,7 @@ module TorDNSEL.Control.Concurrent.Future (
   ) where
 
 import Control.Concurrent.MVar (MVar, newEmptyMVar, putMVar, withMVar)
-import qualified TorDNSEL.Compat.Exception as E
+import qualified Control.Exception as E
 
 import TorDNSEL.Control.Concurrent.Link
 

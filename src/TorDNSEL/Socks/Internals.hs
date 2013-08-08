@@ -40,7 +40,7 @@ module TorDNSEL.Socks.Internals (
   , showSocksError
   ) where
 
-import qualified TorDNSEL.Compat.Exception as E
+import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString (ByteString)
