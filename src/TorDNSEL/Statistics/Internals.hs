@@ -31,12 +31,12 @@ import qualified Data.Set as S
 import Network.Socket (accept, socketToHandle, Socket)
 import System.IO (hClose, IOMode(ReadWriteMode))
 import System.IO.Unsafe (unsafePerformIO)
+import System.Timeout
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.DNS.Server
 import TorDNSEL.Log
-import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
 -- | Cumulative counts of bytes transferred, datagrams received, and responses

@@ -16,9 +16,9 @@ import qualified TorDNSEL.Compat.Exception as E
 import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar, tryPutMVar)
 import Data.Dynamic (Dynamic)
 import Data.Maybe (isJust)
+import System.Timeout
 
 import TorDNSEL.Control.Concurrent.Link
-import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
 -- | A type representing a handle to a thread.

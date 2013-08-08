@@ -41,12 +41,12 @@ import Network.Socket
   , socketToHandle )
 import System.IO (hClose, IOMode(ReadWriteMode))
 import System.IO.Error (isEOFError)
+import System.Timeout
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.ExitTest.Request
 import TorDNSEL.Log
-import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
 -- | A handle to the exit test server thread.

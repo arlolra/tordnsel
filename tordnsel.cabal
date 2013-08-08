@@ -52,7 +52,6 @@ Other-Modules:   TorDNSEL.Config,
                  TorDNSEL.Socks.Internals,
                  TorDNSEL.Statistics,
                  TorDNSEL.Statistics.Internals,
-                 TorDNSEL.System.Timeout,
                  TorDNSEL.TorControl,
                  TorDNSEL.TorControl.Internals,
                  TorDNSEL.Util

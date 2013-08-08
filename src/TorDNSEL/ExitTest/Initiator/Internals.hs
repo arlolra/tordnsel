@@ -81,6 +81,7 @@ import Network.Socket
   ( HostAddress, SockAddr, Family(AF_INET), SocketType(Stream)
   , socket, connect, sClose, socketToHandle )
 import System.IO (hClose, IOMode(ReadWriteMode))
+import System.Timeout
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Util
@@ -91,7 +92,6 @@ import TorDNSEL.ExitTest.Request
 import TorDNSEL.Log
 import TorDNSEL.NetworkState.Types
 import TorDNSEL.Socks
-import TorDNSEL.System.Timeout
 import TorDNSEL.Util
 
 --------------------------------------------------------------------------------
