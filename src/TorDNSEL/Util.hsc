@@ -531,15 +531,6 @@ bindListeningUnixDomainStreamSocket sockPath mode = do
     listen sock sOMAXCONN
     return sock
 
-instance Ord SockAddr where
-  SockAddrInet port1 addr1 `compare` SockAddrInet port2 addr2 =
-    case addr1 `compare` addr2 of
-      EQ    -> port1 `compare` port2
-      other -> other
-  SockAddrUnix path1 `compare` SockAddrUnix path2 = path1 `compare` path2
-  SockAddrInet _ _ `compare` SockAddrUnix _ = LT
-  SockAddrUnix _ `compare` SockAddrInet _ _ = GT
-
 --------------------------------------------------------------------------------
 -- Monads
 
