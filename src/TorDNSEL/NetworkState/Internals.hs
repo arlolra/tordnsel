@@ -448,13 +448,12 @@ startTorController
 startTorController net conf mbDelay = liftIO $ do
   log Info "Starting Tor controller."
   (r,tid) <- tryForkLinkIO $ do
-    E.bracketOnError (socket AF_INET Stream tcpProtoNum)
-                     (ignoreJust syncExceptions . sClose) $ \sock -> do
+    E.bracketOnError' (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do
       connect sock $ nsmcfTorControlAddr conf
-      E.bracketOnError
-        (do handle <- socketToHandle sock ReadWriteMode
-            openConnection handle $ nsmcfTorControlPasswd conf)
-        (ignoreJust syncExceptions . closeConnection) $ \conn -> do
+      E.bracketOnError'
+        ( socketToHandle sock ReadWriteMode >>=
+            (`openConnection` nsmcfTorControlPasswd conf) )
+        closeConnection $ \conn -> do
           setConfWithRollback fetchUselessDescriptors (Just True) conn
           when (torVersion (protocolInfo conn) >= TorVersion 0 2 0 13 B.empty) $
             setConfWithRollback fetchDirInfoEarly (Just True) conn

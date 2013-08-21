@@ -51,13 +51,17 @@ module TorDNSEL.Util (
   , split
   , ignoreJust
   , syncExceptions
+  , bracket'
+  , finally'
+  , bracketOnError'
+  , onException'
   , exitUsage
+  , trySync
   , inBoundsOf
   , htonl
   , ntohl
   , hGetLine
   , splitByDelimiter
-  , showException
   , showUTCTime
 
   -- * Network functions
@@ -98,6 +102,7 @@ module TorDNSEL.Util (
   ) where
 
 import Control.Arrow ((&&&), first, second)
+import Control.Applicative
 import qualified Control.Exception as E
 import Control.Monad.Error
   (Error(..), MonadError(..), MonadTrans(..), MonadIO(..))
@@ -318,14 +323,59 @@ encodeBase16 = B.pack . concat . B.foldr ((:) . toBase16 . B.c2w) []
 split :: Int -> ByteString -> [ByteString]
 split x = takeWhile (not . B.null) . map (B.take x) . iterate (B.drop x)
 
+
+-- | Try an action, catching -- roughly -- "synchronous" exceptions.
+--
+-- XXX This is a remnant of the original code base; it's actually impossible to
+-- determine if an exception was thrown synchronously just by its type. Usage of
+-- this and derived combinators should be pruned in favour of only handling
+-- per-use-site expected exceptions.
+--
+trySync :: IO a -> IO (Either E.SomeException a)
+trySync = E.tryJust $ \e ->
+  case E.fromException (e :: E.SomeException) of
+       Just (_ :: E.AsyncException) -> Nothing
+       _                            -> Just e
+
+-- | Like 'E.bracket', but if cleanup re-throws while handling a throw, don't
+-- eat the original exception.
+bracket' :: IO a -> (a -> IO b) -> (a -> IO c) -> IO c
+bracket' before after act =
+  E.mask $ \restore -> do
+    a <- before
+    r <- restore (act a) `E.onException` trySync (after a)
+    _ <- after a
+    return r
+
+-- | Like 'E.finally', but if cleanup re-throws while handling a throw, don't
+-- eat the original exception.
+finally' :: IO a -> IO b -> IO a
+finally' act after = bracket' (return ()) (const after) (const act)
+
+-- | Like 'E.bracketOnError', but if cleanup re-throws while handling a throw,
+-- don't eat the original exception.
+bracketOnError' :: IO a -> (a -> IO b) -> (a -> IO c) -> IO c
+bracketOnError' before after act =
+  E.mask $ \restore -> do
+    a <- before
+    restore (act a) `E.onException` trySync (after a)
+
+-- | Like 'E.onException'
+onException' :: IO a -> IO b -> IO a
+onException' io act = io `E.catch` \e ->
+  trySync act >> E.throwIO (e :: E.SomeException)
+
 -- | Catch and discard exceptions matching the predicate.
-ignoreJust :: (E.Exception -> Maybe a) -> IO () -> IO ()
+ignoreJust :: (E.Exception e) => (e -> Maybe a) -> IO () -> IO ()
 ignoreJust p = E.handleJust p . const . return $ ()
 
 -- | A predicate matching synchronous exceptions.
-syncExceptions :: E.Exception -> Maybe E.Exception
-syncExceptions (E.AsyncException _) = Nothing
-syncExceptions e                    = Just e
+-- XXX This is a bad idea. The exn itself conveys no info on how it was thrown.
+syncExceptions :: E.SomeException -> Maybe E.SomeException
+syncExceptions e
+  | show e == "<<timeout>>"                           = Nothing
+  | Just (_ :: E.AsyncException) <- E.fromException e = Nothing
+  | otherwise                                         = Just e
 
 -- | Print a usage message to the given handle and exit with the given code.
 exitUsage :: Handle -> ExitCode -> IO a
@@ -477,10 +527,10 @@ splitByDelimiter delimiter bs = subst (-len : B.findSubstrings delimiter bs)
 
 -- | Convert an exception to a string given a list of functions for displaying
 -- dynamically typed exceptions.
-showException :: [Dynamic -> Maybe String] -> E.Exception -> String
-showException fs (E.DynException dyn)
-  | str:_ <- mapMaybe ($ dyn) fs = str
-showException _ e                = show e
+-- showException :: [Dynamic -> Maybe String] -> E.Exception -> String
+-- showException fs (E.DynException dyn)
+--   | str:_ <- mapMaybe ($ dyn) fs = str
+-- showException _ e                = show e
 
 -- | Convert a 'UTCTime' to a string in ISO 8601 format.
 showUTCTime :: UTCTime -> String

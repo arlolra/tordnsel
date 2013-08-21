@@ -162,6 +162,7 @@ import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
 import TorDNSEL.Document
 import TorDNSEL.Util
+improt qualified TorDNSEL.Util ( bracket', finally' )
 
 --------------------------------------------------------------------------------
 -- Connections
@@ -193,15 +194,8 @@ data ConfSetting = forall a b. (ConfVal b, SameConfVal a b) =>
 -- 'IO' action. If an exception interrupts execution, close the connection
 -- gracefully before re-throwing the exception.
 withConnection :: Handle -> Maybe ByteString -> (Connection -> IO a) -> IO a
-withConnection handle mbPasswd io =
-  E.block $ do
-    conn <- openConnection handle mbPasswd
-    r <- E.catch (E.unblock $ io conn) $ \e -> do
-           -- so the original exception isn't lost
-           ignoreJust syncExceptions (closeConnection conn)
-           E.throwIO e
-    closeConnection conn
-    return r
+withConnection handle mbPasswd =
+  bracket' (openConnection handle mbPasswd) closeConnection
 
 -- | Open a connection with a handle and an optional password. Throw a
 -- 'TorControlError' or 'IOError' if initializing the connection fails.
@@ -211,19 +205,18 @@ openConnection handle mbPasswd = do
   conn@(tellIOManager,ioManagerTid) <- startIOManager handle
   confSettings <- newMVar []
 
-  E.handle
-    (\e -> do ignoreJust syncExceptions (closeConnection' conn confSettings)
-              E.throwIO e) $ do
-    let protInfoCommand = Command (B.pack "protocolinfo") [B.pack "1"] []
-    rs@(r:_) <- sendCommand' protInfoCommand False Nothing conn
-    throwIfNotPositive protInfoCommand r
-    protInfo <- either (protocolError protInfoCommand) return
-                       (parseProtocolInfo rs)
+  ( do let protInfoCommand = Command (B.pack "protocolinfo") [B.pack "1"] []
+       rs@(r:_) <- sendCommand' protInfoCommand False Nothing conn
+       throwIfNotPositive protInfoCommand r
+       protInfo <- either (protocolError protInfoCommand) return
+                          (parseProtocolInfo rs)
 
-    let conn' = Conn tellIOManager ioManagerTid protInfo confSettings
-    authenticate mbPasswd conn'
-    useFeature [VerboseNames] conn'
-    return conn'
+       let conn' = Conn tellIOManager ioManagerTid protInfo confSettings
+       authenticate mbPasswd conn'
+       useFeature [VerboseNames] conn'
+       putStrLn "*X MRMLJ"
+       return conn'
+    ) `onException'` closeConnection' conn confSettings
 
 -- | Close a connection gracefully, blocking the current thread until the
 -- connection has terminated.
