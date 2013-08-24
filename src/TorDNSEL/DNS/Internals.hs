@@ -165,10 +165,13 @@ encodeMessage :: Message -> Packet
 encodeMessage = Packet . B.concat . L.toChunks . runPutMessage . putPacket
 
 -- | Decode a DNS message strictly, returning @'Just' _@ if parsing succeeded.
+--
+-- XXX We just fight lazy decoding here -- we should replace `binary` with
+-- `cereal`. ( See `Socks`. )
 decodeMessage :: Packet -> IO (Maybe Message)
-decodeMessage pkt = do
-  r <- E.tryJust syncExceptions (E.evaluate $!! unsafeDecodeMessage pkt)
-  return $ either (const Nothing) Just r
+decodeMessage pkt =
+  ( E.evaluate $ Just $!! unsafeDecodeMessage pkt )
+    `E.catch` \(E.ErrorCall _) -> return Nothing
 
 -- | Lazily decode a DNS message. If parsing fails, the result will contain an
 -- exceptional value at some level.

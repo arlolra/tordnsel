@@ -142,11 +142,13 @@ encodeRequest = B.concat . L.toChunks . runPut . putRequest
           putWord8 0
 
 -- | Decode a Socks4 response.
+--
+-- XXX We just fight lazy decoding here -- we should replace `binary` with
+-- `cereal`. ( See `DNS`. )
 decodeResponse :: ByteString -> IO (Maybe Response)
-decodeResponse resp = do
-  r <- E.tryJust syncExceptions
-                 (E.evaluate $!! runGet getResponse (L.fromChunks [resp]))
-  return $ either (const Nothing) Just r
+decodeResponse resp =
+  ( E.evaluate $ Just $!! runGet getResponse (L.fromChunks [resp]) )
+    `E.catch` \(E.ErrorCall _) -> return Nothing
   where
     getResponse = do
       0 <- getWord8
