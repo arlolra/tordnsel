@@ -13,7 +13,8 @@
 module TorDNSEL.Control.Concurrent.Util where
 
 import qualified Control.Exception as E
-import Control.Concurrent.MVar (newEmptyMVar, takeMVar, putMVar, tryPutMVar)
+import Data.Functor ( (<$) )
+import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar, tryPutMVar)
 import Data.Dynamic (Dynamic)
 import Data.Maybe (isJust)
 import System.Timeout
@@ -51,10 +52,9 @@ terminateThread mbWait tid terminate = do
 sendSyncMessage :: (IO () -> IO ()) -> ThreadId -> IO ()
 sendSyncMessage sendMsg tid = do
   err <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar err
-  withMonitor tid putResponse $ do
-    sendMsg $ putResponse Nothing
-    takeMVar err >>= flip whenJust E.throwIO
+  withMonitor tid (tryPutMVar_ err) $ do
+    sendMsg $ tryPutMVar_ err NormalExit
+    takeMVar err >>= throwAbnormal
 
 -- | Send a message parameterized by a reply action to @tid@, returning the
 -- response value. If the thread exits before responding to the message, throw
@@ -62,19 +62,13 @@ sendSyncMessage sendMsg tid = do
 call :: ((a -> IO ()) -> IO ()) -> ThreadId -> IO a
 call sendMsg tid = do
   mv <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar mv
-  withMonitor tid (putResponse . Left) $ do
-    sendMsg $ putResponse . Right
+  withMonitor tid (tryPutMVar_ mv . Left) $ do
+    sendMsg $ tryPutMVar_ mv . Right
     response <- takeMVar mv
     case response of
-      Left Nothing  -> E.throwDyn NonexistentThread
-      Left (Just e) -> E.throwIO e
-      Right r       -> return r
-
--- | A wrapper for using 'showException' with 'ExitReason's.
-showExitReason :: [Dynamic -> Maybe String] -> ExitReason -> String
-showExitReason _ Nothing   = "Normal exit"
-showExitReason fs (Just e) = showException (showLinkException:fs) e
+      Left NormalExit       -> E.throwIO NonexistentThread
+      Left (AbnormalExit e) -> E.throwIO e
+      Right r               -> return r
 
 -- | Invoke the given 'IO' action in a new thread, passing it an action to
 -- invoke when it has successfully started. Link the new thread to the calling
@@ -83,14 +77,13 @@ showExitReason fs (Just e) = showException (showLinkException:fs) e
 startLink :: (IO () -> IO a) -> IO ThreadId
 startLink io = do
   sync <- newEmptyMVar
-  err <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar err
+  err  <- newEmptyMVar
   tid <- forkLinkIO $ do
     takeMVar sync
-    io (putResponse Nothing)
-  withMonitor tid putResponse $ do
+    io $ tryPutMVar_ err NormalExit
+  withMonitor tid (tryPutMVar_ err) $ do
     putMVar sync ()
-    takeMVar err >>= flip whenJust E.throwIO
+    takeMVar err >>= throwAbnormal
   return tid
 
 -- | Invoke the given 'IO' action in a temporary thread (linked to the calling
@@ -100,15 +93,17 @@ startLink io = do
 tryForkLinkIO :: Thread a => IO a -> IO (Either ExitReason a, ThreadId)
 tryForkLinkIO io = do
   sync <- newEmptyMVar
-  response <- newEmptyMVar
-  let putResponse = (>> return ()) . tryPutMVar response
+  resp <- newEmptyMVar
   intermediate <- forkLinkIO $ do
     takeMVar sync
-    io >>= putResponse . Right
-  r <- withMonitor intermediate (putResponse . Left) $ do
+    io >>= tryPutMVar_ resp . Right
+  r <- withMonitor intermediate (tryPutMVar_ resp . Left) $ do
     putMVar sync ()
     E.block $ do
-      r <- takeMVar response
+      r <- takeMVar resp
       either (const $ return ()) (linkThread . threadId) r
       return r
   return (r, intermediate)
+
+tryPutMVar_ :: MVar a -> a -> IO ()
+tryPutMVar_ = ((() <$) .) . tryPutMVar

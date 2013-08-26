@@ -30,15 +30,16 @@ module TorDNSEL.Control.Concurrent.Link (
   , withMonitor
   , exit
   , throwTo
-  , throwDynTo
   , killThread
   , setTrapExit
   , unsetTrapExit
-  , ExitReason
+  , ExitReason(..)
+  , exitReason
+  , isAbnormal
+  , throwAbnormal
   , extractReason
   , fromExitSignal
   , LinkException(..)
-  , showLinkException
   ) where
 
 import TorDNSEL.Control.Concurrent.Link.Internals

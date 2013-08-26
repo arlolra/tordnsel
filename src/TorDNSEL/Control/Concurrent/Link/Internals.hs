@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# OPTIONS_GHC -fno-ignore-asserts #-}
 
 -----------------------------------------------------------------------------
@@ -24,15 +25,18 @@
 -- #not-home
 module TorDNSEL.Control.Concurrent.Link.Internals where
 
+import qualified Control.Exception as E
 import qualified Control.Concurrent as C
 import Control.Concurrent.MVar
   (MVar, newMVar, withMVar, modifyMVar, modifyMVar_)
-import qualified Control.Exception as E
+import GHC.Conc (setUncaughtExceptionHandler)
+import System.Exit (ExitCode)
 import Control.Monad (unless)
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import qualified Data.Set as S
-import Data.Dynamic (Dynamic, fromDynamic, toDyn, Typeable)
+--  import Data.Dynamic (Dynamic, fromDynamic, toDyn, Typeable)
+import Data.Typeable (Typeable)
 import Data.List (nub)
 import Data.Unique (Unique, newUnique)
 import System.IO (hPutStrLn, hFlush, stderr)
@@ -45,6 +49,9 @@ import TorDNSEL.Util
 -- garbage collected.
 newtype ThreadId = Tid Unique
   deriving (Eq, Ord)
+
+-- ( Else an orphaned Show Unique... )
+instance Show ThreadId where show _ = "#<thread>"
 
 -- | Return the 'ThreadId' of the calling thread.
 myThreadId :: IO ThreadId
@@ -74,11 +81,17 @@ threadMap :: MVar ThreadMap
 {-# NOINLINE threadMap #-}
 threadMap = unsafePerformIO . newMVar $ ThreadMap M.empty M.empty
 
+-- | Erase 'threadMap', making it possible to re-run 'withLinksDo'. For
+-- debugging only, as it loses track of threads.
+unsafeResetThreadMap :: IO ()
+unsafeResetThreadMap =
+  modifyMVar_ threadMap $ const . return $ ThreadMap M.empty M.empty
+
 -- | Assert various invariants of the global link and monitor state, printing a
 -- message to stdout if any assertions fail.
 assertThreadMap :: ThreadMap -> IO ()
 assertThreadMap tm =
-  E.handleJust E.assertions (putStr . ("assertThreadMap: " ++)) $
+  E.handle (\(E.AssertionFailed msg) -> putStrLn $ "assertThreadMap: " ++ msg) $
     E.assert (M.size (ids tm) > 0) $
     E.assert (M.size (ids tm) == M.size (state tm)) $
     E.assert (M.elems (ids tm) == nub (M.elems (ids tm))) $
@@ -100,36 +113,35 @@ assertThreadMap tm =
 -- | An internal type used to transmit the originating 'ThreadId' in an
 -- asynchronous exception to a linked thread.
 data ExitSignal = ExitSignal !ThreadId !ExitReason
-  deriving Typeable
+  deriving (Show, Typeable)
 
--- | Extract the 'ExitReason' from an 'ExitSignal' contained within a
--- dynamically-typed exception. If the exception doesn't contain an
--- 'ExitSignal', tag it with 'Just'.
-extractReason :: E.Exception -> ExitReason
-extractReason (E.DynException dyn)
-  | Just (ExitSignal _ e) <- fromDynamic dyn = e
-extractReason e                              = Just e
+instance E.Exception ExitSignal
 
--- | Extract an exit signal from an 'E.Exception' if it has the right type.
-fromExitSignal :: Typeable a => E.Exception -> Maybe (ThreadId, a)
-fromExitSignal (E.DynException d)
-  | Just (ExitSignal tid (Just (E.DynException d'))) <- fromDynamic d
-  = (,) tid `fmap` fromDynamic d'
+-- | Extract the 'ExitReason' from an 'ExitSignal' contained within an
+-- exception. If the exception doesn't contain an 'ExitReason', it becomes the
+-- exit reason itself.
+extractReason :: E.SomeException -> ExitReason
+extractReason (E.fromException -> Just (ExitSignal _ e)) = e
+extractReason e                                          = AbnormalExit e
+
+-- | Extract a particular exception type from an 'ExitSignal', if present.
+fromExitSignal :: E.Exception e => ExitSignal -> Maybe (ThreadId, e)
+fromExitSignal (ExitSignal tid (AbnormalExit e))
+  | Just e' <- E.fromException e = Just (tid, e')
 fromExitSignal _ = Nothing
 
 -- | The default action used to signal a thread. Abnormal 'ExitReason's are
 -- sent to the thread and normal exits are ignored.
 defaultSignal :: C.ThreadId -> ThreadId -> ExitReason -> IO ()
-defaultSignal dst src e@(Just _) = E.throwDynTo dst $ ExitSignal src e
-defaultSignal _   _      Nothing = return ()
+defaultSignal dst src NormalExit = return ()
+defaultSignal dst src e          = E.throwTo dst $ ExitSignal src e
 
--- | Initialize the state supporting links and monitors. Use the given function
--- to display an uncaught exception. It is an error to call this function
--- outside the main thread, or to call any other functions in this module
--- outside this function.
-withLinksDo :: (E.Exception -> String) -> IO a -> IO ()
-withLinksDo showE io = E.block $ do
-  E.setUncaughtExceptionHandler . const . return $ ()
+-- | Initialize the state supporting links and monitors. It is an error to call
+-- this function outside the main thread, or to call any other functions in this
+-- module outside this function.
+withLinksDo :: IO a -> IO ()
+withLinksDo io = E.mask $ \restore -> do
+  setUncaughtExceptionHandler . const . return $ ()
   main <- C.myThreadId
   mainId <- Tid `fmap` newUnique
   let initialState = ThreadState
@@ -146,12 +158,13 @@ withLinksDo showE io = E.block $ do
          , state = M.insert main initialState (state tm) }
   -- Don't bother propagating signals from the main thread
   -- since it's about to exit.
-  (E.unblock io >> return ()) `E.catch` \e ->
+  (restore io >> return ()) `E.catch` \(e :: E.SomeException) ->
     case extractReason e of
-      Nothing                     -> return ()
-      Just e'@(E.ExitException _) -> E.throwIO e'
-      Just e' -> do
-        hPutStrLn stderr ("*** Exception: " ++ showE e')
+      NormalExit -> return ()
+      AbnormalExit (E.fromException -> Just e') ->
+        E.throwIO (e' :: ExitCode)
+      AbnormalExit e' -> do
+        hPutStrLn stderr ("*** Exception: " ++ show e')
         hFlush stderr
         E.throwIO e'
 
@@ -169,15 +182,19 @@ forkLinkIO' shouldLink io = E.block $ do
   parent <- C.myThreadId
   childId <- Tid `fmap` newUnique
   modifyMVar_ threadMap $ \tm -> do
-    -- assertThreadMap tm
+#ifdef DEBUG
+    assertThreadMap tm
+#endif
     child <- forkHandler $ do
       child <- C.myThreadId
-      e <- either extractReason (const Nothing) `fmap` E.try (E.unblock io)
+      e <- either extractReason (const NormalExit) `fmap` E.try (E.unblock io)
       -- modifyMVar is interruptible (a misfeature in this case), so an async
       -- exception could be delivered here. Forking an anonymous thread should
       -- avoid this race since nobody can throwTo it.
       forkHandler $ do
-        -- withMVar threadMap assertThreadMap
+#ifdef DEBUG
+        withMVar threadMap assertThreadMap
+#endif
         (signalAll,notifyAll) <- modifyMVar threadMap $ \tm1 ->
           let s = state tm1 M.! child
               unlinkAll = flip (F.foldl' (flip (child `unlinkFrom`))) (links s)
@@ -193,7 +210,9 @@ forkLinkIO' shouldLink io = E.block $ do
               notifyAll ex = F.mapM_ (forkHandler . ($ ex) . fst) (monitors s)
               tm1' = tm1 { ids = newIds, state = newState }
           in tm1' `seq` return (tm1', (signalAll, notifyAll))
-        -- withMVar threadMap assertThreadMap
+#ifdef DEBUG
+        withMVar threadMap assertThreadMap
+#endif
         notifyAll e
         signalAll e
 
@@ -211,11 +230,13 @@ forkLinkIO' shouldLink io = E.block $ do
       tm { ids   = M.insert childId child $ ids tm
          , state = M.insert child initialState . linkToParent $ state tm }
 
-  -- withMVar threadMap assertThreadMap
+#ifdef DEBUG
+  withMVar threadMap assertThreadMap
+#endif
   return childId
   where
     forkHandler = C.forkIO . ignore . (>> return ()) . E.block
-    ignore = E.handle . const . return $ ()
+    ignore      = E.handle $ \(e :: E.SomeException) -> return ()
 
 -- | Establish a bidirectional link between the calling thread and a given
 -- thread. If either thread terminates, an exit signal will be sent to the other
@@ -225,16 +246,14 @@ forkLinkIO' shouldLink io = E.block $ do
 linkThread :: ThreadId -> IO ()
 linkThread tid = do
   me <- C.myThreadId
-  mbSignalSelf <- modifyMVar threadMap $ \tm ->
+  mbSignalSelf <- modifyMVar threadMap $ \tm -> return $!
     case M.lookup tid (ids tm) of
       Just tid'
-        | tid' == me -> return (tm, Nothing)
-        | otherwise -> let tm' = tm { state = linkTogether me tid' $ state tm }
-                       in tm' `seq` return (tm', Nothing)
-      Nothing ->
-        let s = state tm M.! me
-        in return (tm, Just . signal s tid . Just . E.DynException .
-                         toDyn $ NonexistentThread)
+        | tid' == me -> (tm, Nothing)
+        | otherwise  -> (tm', Nothing)
+        where !tm' = tm { state = linkTogether me tid' $ state tm }
+      Nothing -> (tm, Just . signal s tid $ exitReason NonexistentThread)
+        where s = state tm M.! me
   whenJust mbSignalSelf id
   where linkTogether x y = (x `linkTo` y) . (y `linkTo` x)
 
@@ -258,9 +277,22 @@ linkTo, unlinkFrom :: C.ThreadId -> C.ThreadId -> StateModifier
 data Monitor = Monitor !ThreadId !Unique
   deriving (Eq, Ord)
 
--- | The reason a thread was terminated. @Nothing@ means the thread exited
--- normally. @Just exception@ contains the reason for an abnormal exit.
-type ExitReason = Maybe E.Exception
+-- | The reason a thread was terminated.
+data ExitReason = NormalExit | AbnormalExit E.SomeException
+  deriving (Show)
+
+-- | Construct an 'ExitReason' from any 'E.Exception'.
+exitReason :: E.Exception e => e -> ExitReason
+exitReason = AbnormalExit . E.toException
+
+isAbnormal :: ExitReason -> Bool
+isAbnormal (AbnormalExit _) = True
+isAbnormal _                = False
+
+-- | Check the exit reason and re-throw it if it's an 'AbnormalExit'.
+throwAbnormal :: ExitReason -> IO ()
+throwAbnormal NormalExit       = return ()
+throwAbnormal (AbnormalExit e) = E.throwIO e
 
 -- | Start monitoring the given thread, invoking an 'IO' action with the
 -- 'ExitReason' when the thread dies. Return a handle to the monitor, which can
@@ -271,20 +303,19 @@ monitorThread :: ThreadId -> (ExitReason -> IO ()) -> IO Monitor
 monitorThread tid notify = do
   me <- C.myThreadId
   mon@(Monitor _ monId) <- Monitor tid `fmap` newUnique
-  let cleanup tid' = adjust' (\ts ->
-        ts { ownedMons = S.delete (tid', monId) (ownedMons ts) }) me
+  let cleanup tid' = flip adjust' me $ \ts ->
+        ts { ownedMons = S.delete (tid', monId) (ownedMons ts) }
       addMon tid' ts = ts { monitors = M.insert monId (notify, cleanup tid')
                                                 (monitors ts) }
       addOwned tid' ts = ts {ownedMons = S.insert (tid', monId) (ownedMons ts)}
-  exists <- modifyMVar threadMap $ \tm ->
+  exists <- modifyMVar threadMap $ \tm -> return $!
     case M.lookup tid (ids tm) of
-      Nothing   -> return (tm, False)
-      Just tid' ->
-        let tm' = tm { state = adjust' (addMon tid') tid' .
-                                 adjust' (addOwned tid') me $ state tm }
-        in tm' `seq` return (tm', True)
+      Nothing   -> (tm, False)
+      Just tid' -> (tm', True)
+        where !tm' = tm { state = adjust' (addMon tid') tid' .
+                                  adjust' (addOwned tid') me $ state tm }
   unless exists $
-    notify . Just . E.DynException . toDyn $ NonexistentThread
+    notify $ exitReason NonexistentThread
   return mon
 
 -- | Cancel a monitor, if it is currently active.
@@ -310,10 +341,10 @@ withMonitor tid notify =
 
 -- | Terminate the calling thread with the given 'ExitReason'.
 exit :: ExitReason -> IO a
-exit e = E.throwDyn . flip ExitSignal e =<< myThreadId
+exit e = E.throwIO . (`ExitSignal` e) =<< myThreadId
 
 -- | Send an exit signal with an 'ExitReason' to a thread. If the 'ExitReason'
--- is 'Nothing', the signal will be ignored unless the target thread is trapping
+-- is 'NormalExit', the signal will be ignored unless the target thread is trapping
 -- signals. Otherwise, the target thread will either exit with the same
 -- 'ExitReason' or be notified of the signal depending on whether it is trapping
 -- signals. If the target thread doesn't exist, do nothing.
@@ -324,15 +355,11 @@ throwTo tid e = do
     let me' = ident (state tm M.! me)
     in if tid == me'
          -- special case: an exception thrown to oneself is untrappable
-         then E.throwDyn $ ExitSignal me' e
+         then E.throwIO $ ExitSignal me' e
          else return $ do tid' <- M.lookup tid (ids tm)
                           return $ signal (state tm M.! tid') me'
   -- since signal can block, we don't want to hold a lock on threadMap
   whenJust mbSignal ($ e)
-
--- | A variant of 'throwTo' for dynamically typed 'ExitReason's.
-throwDynTo :: Typeable a => ThreadId -> a -> IO ()
-throwDynTo tid = throwTo tid . Just . E.DynException . toDyn
 
 -- | Send an untrappable exit signal to a thread, if it exists.
 killThread :: ThreadId -> IO ()
@@ -340,9 +367,8 @@ killThread tid = do
   me <- C.myThreadId
   mbSignal <- withMVar threadMap $ \tm -> return $ do
     tid' <- M.lookup tid (ids tm)
-    return .
-      E.throwDynTo tid' $ ExitSignal (ident (state tm M.! me))
-                                     (Just (E.AsyncException E.ThreadKilled))
+    return . E.throwTo tid' $ ExitSignal (ident (state tm M.! me))
+                                         (exitReason E.ThreadKilled)
   whenJust mbSignal id
 
 -- | Redirect exit signals destined for the calling thread to the given 'IO'
@@ -367,6 +393,4 @@ data LinkException = NonexistentThread -- ^
 instance Show LinkException where
   show NonexistentThread = "Attempt to link to nonexistent thread"
 
--- | Boilerplate conversion of a dynamically typed 'LinkException' to a string.
-showLinkException :: Dynamic -> Maybe String
-showLinkException = fmap (show :: LinkException -> String) . fromDynamic
+instance E.Exception LinkException
