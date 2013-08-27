@@ -32,6 +32,7 @@ import Control.Concurrent.MVar
 import GHC.Conc (setUncaughtExceptionHandler)
 import System.Exit (ExitCode)
 import Control.Monad (unless)
+import Data.Functor
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import qualified Data.Set as S
@@ -142,7 +143,7 @@ defaultSignal dst src e          = E.throwTo dst $ ExitSignal src e
 withLinksDo :: IO a -> IO ()
 withLinksDo io = E.mask $ \restore -> do
   setUncaughtExceptionHandler . const . return $ ()
-  main <- C.myThreadId
+  main   <- C.myThreadId
   mainId <- Tid `fmap` newUnique
   let initialState = ThreadState
         { ident     = mainId
@@ -158,7 +159,7 @@ withLinksDo io = E.mask $ \restore -> do
          , state = M.insert main initialState (state tm) }
   -- Don't bother propagating signals from the main thread
   -- since it's about to exit.
-  (restore io >> return ()) `E.catch` \(e :: E.SomeException) ->
+  (() <$ restore io) `E.catch` \(e :: E.SomeException) ->
     case extractReason e of
       NormalExit -> return ()
       AbnormalExit (E.fromException -> Just e') ->
@@ -178,8 +179,8 @@ forkLinkIO :: IO a -> IO ThreadId
 forkLinkIO = forkLinkIO' True
 
 forkLinkIO' :: Bool -> IO a -> IO ThreadId
-forkLinkIO' shouldLink io = E.block $ do
-  parent <- C.myThreadId
+forkLinkIO' shouldLink io = E.mask $ \restore -> do
+  parent  <- C.myThreadId
   childId <- Tid `fmap` newUnique
   modifyMVar_ threadMap $ \tm -> do
 #ifdef DEBUG
@@ -187,7 +188,9 @@ forkLinkIO' shouldLink io = E.block $ do
 #endif
     child <- forkHandler $ do
       child <- C.myThreadId
-      e <- either extractReason (const NormalExit) `fmap` E.try (E.unblock io)
+      e     <- either (extractReason :: E.SomeException -> ExitReason)
+                      (const NormalExit)
+                `fmap` E.try (restore io)
       -- modifyMVar is interruptible (a misfeature in this case), so an async
       -- exception could be delivered here. Forking an anonymous thread should
       -- avoid this race since nobody can throwTo it.
@@ -234,9 +237,10 @@ forkLinkIO' shouldLink io = E.block $ do
   withMVar threadMap assertThreadMap
 #endif
   return childId
+
   where
-    forkHandler = C.forkIO . ignore . (>> return ()) . E.block
-    ignore      = E.handle $ \(e :: E.SomeException) -> return ()
+    forkHandler io = E.mask_ . C.forkIO $
+      (() <$ io) `E.catch` \(e :: E.SomeException) -> return ()
 
 -- | Establish a bidirectional link between the calling thread and a given
 -- thread. If either thread terminates, an exit signal will be sent to the other

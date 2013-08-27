@@ -34,8 +34,8 @@ spawn :: IO a -> IO (Future a)
 spawn io = do
   mv <- newEmptyMVar
   callingThread <- myThreadId
-  forkLinkIO . E.block $ do
-    r <- either (Left . extractReason) (Right . id) `fmap` E.try (E.unblock io)
+  forkLinkIO . E.mask $ \restore -> do
+    r <- either (Left . extractReason) (Right . id) `fmap` E.try (restore io)
     putMVar mv r
     unlinkThread callingThread
     either exit (const $ return ()) r
