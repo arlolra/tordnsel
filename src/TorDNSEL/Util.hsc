@@ -49,7 +49,6 @@ module TorDNSEL.Util (
   , inet_htoa
   , encodeBase16
   , split
-  , ignoreJust
   , syncExceptions
   , bracket'
   , finally'
@@ -365,10 +364,6 @@ onException' :: IO a -> IO b -> IO a
 onException' io act = io `E.catch` \e ->
   trySync act >> E.throwIO (e :: E.SomeException)
 
--- | Catch and discard exceptions matching the predicate.
-ignoreJust :: (E.Exception e) => (e -> Maybe a) -> IO () -> IO ()
-ignoreJust p = E.handleJust p . const . return $ ()
-
 -- | A predicate matching synchronous exceptions.
 -- XXX This is a bad idea. The exn itself conveys no info on how it was thrown.
 syncExceptions :: E.SomeException -> Maybe E.SomeException
@@ -524,13 +519,6 @@ splitByDelimiter delimiter bs = subst (-len : B.findSubstrings delimiter bs)
     subst [x]          = [B.drop (x+len) bs]
     subst []           = error "splitByDelimiter: empty list"
     len = B.length delimiter
-
--- | Convert an exception to a string given a list of functions for displaying
--- dynamically typed exceptions.
--- showException :: [Dynamic -> Maybe String] -> E.Exception -> String
--- showException fs (E.DynException dyn)
---   | str:_ <- mapMaybe ($ dyn) fs = str
--- showException _ e                = show e
 
 -- | Convert a 'UTCTime' to a string in ISO 8601 format.
 showUTCTime :: UTCTime -> String

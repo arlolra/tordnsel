@@ -197,10 +197,10 @@ main = do
           verifyConfig args
     ["--reconfigure",runtimeDir] -> do
       sock <- connectToReconfigSocket runtimeDir
-        `E.catch` \e -> do
+        `E.catch` \(e :: E.SomeException) -> do
           hCat stderr "Connecting to reconfigure socket failed: " e '\n'
           exitWith $ fromSysExitCode Unavailable
-      r <- E.handleJust E.ioErrors (\e -> do
+      r <- E.handle (\(e :: E.IOException) -> do
              hCat stderr "An I/O error occurred while reconfiguring: " e '\n'
              exitWith $ fromSysExitCode IOError) $
         E.bracket (socketToHandle sock ReadWriteMode) hClose $ \handle -> do
@@ -221,7 +221,7 @@ main = do
     conf <- exitLeft Usage $ parseConfigArgs args
     case B.pack "configfile" `M.lookup` conf of
       Just fp -> do
-        file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp)
+        file <- catchIO (B.readFile $ B.unpack fp)
           (exitPrint NoInput . cat "Opening config file failed: ")
         exitLeft DataError $ makeConfig . M.union conf =<< parseConfigFile file
       Nothing -> exitLeft Usage $ makeConfig conf
@@ -237,33 +237,33 @@ main = do
         euid /= 0) $
     exitPrint NoPermission ("You must be root to drop privileges or chroot." ++)
 
-  ids <- E.catchJust E.ioErrors
+  ids <- catchIO
     (getIDs (cfUser conf) (cfGroup conf))
     (exitPrint OSFile . cat "Looking up uid/gid failed: ")
 
-  E.catchJust E.ioErrors
+  catchIO
     (checkDirectory (fst ids) (cfChangeRootDirectory conf)
                     (cfStateDirectory conf))
     (exitPrint Can'tCreate . cat "Preparing state directory failed: ")
 
-  E.catchJust E.ioErrors
+  catchIO
     (checkDirectory Nothing Nothing (cfRuntimeDirectory conf))
     (exitPrint Can'tCreate . cat "Preparing runtime directory failed: ")
 
-  statsSock <- E.catchJust E.ioErrors
+  statsSock <- catchIO
     (bindStatsSocket $ cfRuntimeDirectory conf)
     (exitPrint Can'tCreate . cat "Opening statistics listener failed: ")
 
-  reconfigSock <- E.catchJust E.ioErrors
+  reconfigSock <- catchIO
     (bindReconfigSocket (cfRuntimeDirectory conf) (fst ids))
     (exitPrint Can'tCreate . cat "Opening reconfigure listener failed: ")
 
-  pidHandle <- E.catchJust E.ioErrors
+  pidHandle <- catchIO
     (flip openFile WriteMode `liftMb` cfPIDFile conf)
     (exitPrint Can'tCreate . cat "Opening PID file failed: ")
 
   log Notice "Opening DNS listener on " (cfDNSListenAddress conf) '.'
-  dnsSock <- E.catchJust E.ioErrors
+  dnsSock <- catchIO
     (bindUDPSocket $ cfDNSListenAddress conf)
     (\e -> exitPrint (bindErrorCode e) $
              cat "Opening DNS listener on " (cfDNSListenAddress conf)
@@ -276,7 +276,7 @@ main = do
         let sockAddr = SockAddrInet (fromIntegral port)
                                    (htonl . fst $ tcfTestListenAddress testConf)
         log Notice "Opening exit test listener on " sockAddr '.'
-        sock <- E.catchJust E.ioErrors
+        sock <- catchIO
          (bindListeningTCPSocket sockAddr)
          (\e -> exitPrint (bindErrorCode e) $
                   cat "Opening exit test listener on " sockAddr " failed: " e)
@@ -285,7 +285,7 @@ main = do
   -- We lose any other running threads when we 'forkProcess', so don't 'forkIO'
   -- before this point.
   (if cfRunAsDaemon conf then daemonize else id) .
-    withLinksDo (showException [showLinkException]) $ do
+    withLinksDo $ do
 
     whenJust pidHandle $ \handle -> do
       hPutStrLn handle . show =<< getProcessID
@@ -311,7 +311,7 @@ verifyConfig args =
     Right conf ->
       case B.pack "configfile" `M.lookup` conf of
         Just fp -> do
-          file <- E.catchJust E.ioErrors (B.readFile $ B.unpack fp) $ \e -> do
+          file <- catchIO (B.readFile $ B.unpack fp) $ \e -> do
             hCat stderr "Opening config file failed: " e '\n'
             exitWith $ fromSysExitCode NoInput
           check DataError $ parseConfigFile file >>= makeConfig . M.union conf
@@ -334,10 +334,13 @@ runMainThread static initTestListeners initDNSListener initConf = do
   installHandler sigHUP (Catch hupHandler) Nothing
   installHandler sigINT (Catch $ termHandler sigINT) Nothing
 
-  initState <- E.handle (\e -> do log Error "Starting failed: " e
-                                  terminateLogger Nothing
-                                  closeSystemLogger
-                                  exitWith $ fromSysExitCode ConfigError) $ do
+  initState <-
+    E.handle (\(e :: E.SomeException) -> do
+      log Error "Starting failed: " e
+      terminateLogger Nothing
+      closeSystemLogger
+      exitWith $ fromSysExitCode ConfigError) $ do
+
     initLogger <- initializeLogger initConf
     whenJust (cfChangeRootDirectory initConf) $ \dir ->
       log Notice "Chrooted in " (esc 256 $ B.pack dir) '.'
@@ -347,12 +350,11 @@ runMainThread static initTestListeners initDNSListener initConf = do
     initReconfig <- startReconfigServer (reconfigSocket static)
                       (((writeChan mainChan . Reconfigure) .) . curry Just)
     let cleanup = terminateReconfigServer Nothing initReconfig
-    stats <- startStatsServer (statsSocket static)
-      `E.catch` \e -> cleanup >> E.throwIO e
+    stats <- startStatsServer (statsSocket static) `E.onException` cleanup
     let cleanup' = cleanup >> terminateStatsServer Nothing stats
     netState <- initializeNetworkStateManager
                   (mkExitTestConfig static initTestListeners initConf) initConf
-      `E.catch` \e -> cleanup' >> E.throwIO e
+      `E.onException` cleanup'
     dns <- startDNSServer (mkDNSServerConfig initDNSListener initConf)
     return $ State (Just initLogger) (Just initReconfig) (Just stats) netState
                    dns initTestListeners initDNSListener S.empty
@@ -374,9 +376,9 @@ handleMessage _ static conf s (Reconfigure reconf) = flip runStateT s $ do
     Nothing
       | Just configFile <- cfConfigFile conf -> do
           log Notice "Caught SIGHUP. Reloading config file."
-          r <- liftIO . E.tryJust E.ioErrors $ B.readFile configFile
+          r <- liftIO . E.try $ B.readFile configFile
           case r of
-            Left e -> do
+            Left (e :: E.IOException) -> do
               -- If we're chrooted, it's not suprising that we can't read our
               -- config file.
               when (isNothing $ cfChangeRootDirectory conf) $
@@ -412,7 +414,7 @@ handleMessage _ static conf s (Reconfigure reconf) = flip runStateT s $ do
 
       when (cfStateDirectory conf /= cfStateDirectory newConf') $
         liftIO $ checkDirectory Nothing Nothing (cfStateDirectory newConf')
-          `E.catch` \e -> do
+          `catchIO` \e -> do
             errorRespond $ cat "Preparing new state directory failed: " e
                                "; exiting gracefully."
             terminateProcess Can'tCreate static s Nothing
@@ -442,30 +444,30 @@ handleMessage mainChan static conf s (Exit tid reason)
         Left _ -> return Nothing
         Right newLogger -> do
           log Warn "The logger thread exited unexpectedly: "
-                   (showExitReason [] reason) "; restarted."
+                   (show reason) "; restarted."
           return $ Just newLogger
       return (conf, s { logger = mbNewLogger
                       , deadThreads = S.insert dead (deadThreads s) })
   | deadThreadIs reconfigServer = do
       log Warn "The reconfigure server thread exited unexpectedly: "
-               (showExitReason [] reason) "; restarting."
+               (show reason) "; restarting."
       (r,dead) <- tryForkLinkIO $ startReconfigServer (reconfigSocket static)
                            (((writeChan mainChan . Reconfigure) .) . curry Just)
       mbNewReconfigServer <- case r of
         Left e -> do
           log Warn "Restarting reconfigure server failed: "
-                   (showExitReason [] e) "; disabling reconfigure server."
+                   (show e) "; disabling reconfigure server."
           return Nothing
         Right newReconfigServer -> return $ Just newReconfigServer
       return (conf, s { reconfigServer = mbNewReconfigServer
                       , deadThreads = S.insert dead (deadThreads s) })
   | deadThreadIs statsServer = do
       log Warn "The statistics server thread exited unexpectedly: "
-               (showExitReason [] reason) "; restarting."
+               (show reason) "; restarting."
       (r,dead) <- tryForkLinkIO . startStatsServer $ statsSocket static
       mbNewStatsServer <- case r of
         Left e -> do
-          log Warn "Restarting statistics server failed: " (showExitReason [] e)
+          log Warn "Restarting statistics server failed: " (show e)
                    "; disabling statistics server."
           return Nothing
         Right newStatsServer -> return $ Just newStatsServer
@@ -473,24 +475,24 @@ handleMessage mainChan static conf s (Exit tid reason)
                       , deadThreads = S.insert dead (deadThreads s) })
   | tid == threadId (networkStateManager s) = do
       log Warn "The network state manager thread exited unexpectedly: "
-               (showExitReason [] reason) "; restarting."
+               (show reason) "; restarting."
       newManager <- initializeNetworkStateManager
                       (mkExitTestConfig static (exitTestListeners s) conf) conf
-        `E.catch` \e -> do
+        `E.catch` \(e :: E.SomeException) -> do
           log Error "Restarting network state manager failed: " e
                     "; exiting gracefully."
           terminateProcess Internal static s Nothing
       return (conf, s { networkStateManager = newManager })
   | tid == threadId (dnsServer s) = do
       log Warn "The DNS server thread exited unexpectedly: "
-               (showExitReason [] reason) "; restarting."
+               (show reason) "; restarting."
       newDNSServer <- startDNSServer $ mkDNSServerConfig (dnsListener s) conf
       return (conf, s { dnsServer = newDNSServer })
   | tid `S.member` deadThreads s
   = return (conf, s { deadThreads = S.delete tid (deadThreads s) })
   | otherwise = do
       log Warn "Bug: Received unexpected exit signal: "
-               (showExitReason [] reason)
+               (show reason)
       return (conf, s)
   where deadThreadIs thr = ((tid ==) . threadId) `fmap` thr s == Just True
 
@@ -615,10 +617,9 @@ reconfigureDNSListenerAndServer
 reconfigureDNSListenerAndServer static oldConf newConf errorRespond = do
   when (cfDNSListenAddress oldConf /= cfDNSListenAddress newConf) $ do
     log Notice "Opening DNS listener on " (cfDNSListenAddress newConf) '.'
-    r <- liftIO . E.tryJust E.ioErrors $
-           bindUDPSocket $ cfDNSListenAddress newConf
+    r <- liftIO . E.try $ bindUDPSocket $ cfDNSListenAddress newConf
     case r of
-      Left e -> do
+      Left (e :: E.IOException) -> do
         errorRespond $
           cat "Opening DNS listener on " (cfDNSListenAddress newConf)
               " failed: " e "; exiting gracefully."
@@ -649,18 +650,20 @@ terminateProcess status static s mbWait = do
   forM_ (M.assocs $ exitTestListeners s) $ \(addr,mbSock) ->
     whenJust mbSock $ \sock -> do
       log Info "Closing exit test listener on " addr '.'
-      ignoreJust E.ioErrors $ sClose sock
+      ignoreIOExn $ sClose sock
   log Info "Closing DNS listener."
-  ignoreJust E.ioErrors . sClose $ dnsListener s
+  ignoreIOExn . sClose $ dnsListener s
   log Info "Closing statistics listener."
-  ignoreJust E.ioErrors . sClose $ statsSocket static
+  ignoreIOExn . sClose $ statsSocket static
   log Info "Closing reconfigure listener."
-  ignoreJust E.ioErrors . sClose $ reconfigSocket static
-  ignoreJust E.ioErrors . hClose $ randomHandle static
+  ignoreIOExn . sClose $ reconfigSocket static
+  ignoreIOExn . hClose $ randomHandle static
   log Notice "All subsystems have terminated. Exiting now."
   terminateLogger mbWait
   closeSystemLogger
   exitWith $ fromSysExitCode status
+  where
+    ignoreIOExn = (`catchIO` \_ -> return ())
 
 --------------------------------------------------------------------------------
 -- Daemon operations
@@ -732,7 +735,7 @@ setMaxOpenFiles lowerLimit cap = do
       unResourceLimit (ResourceLimit n) = n
       unResourceLimit _ = error "unResourceLimit: bug"
 
-  fmap unResourceLimit $ E.catchJust E.ioErrors
+  fmap unResourceLimit $ catchIO
     (setResourceLimit ResourceOpenFiles (newLimits most) >> return most) $ \e ->
     do
 #ifdef OPEN_MAX
@@ -743,7 +746,7 @@ setMaxOpenFiles lowerLimit cap = do
                 return openMax
         else E.throwIO (E.IOException e)
 #else
-      E.throwIO (E.IOException e)
+      E.throwIO e
 #endif
 
 instance Ord ResourceLimit where
@@ -777,10 +780,8 @@ checkDirectory uid newRoot path = do
 -- return 'ToStdOut'.
 checkLogTarget :: LogTarget -> IO LogTarget
 checkLogTarget target@(ToFile logPath) =
-  E.catchJust E.ioErrors
-    (do E.bracket (openFile logPath AppendMode) hClose (const $ return ())
-        return target)
-    (const $ return ToStdOut)
+  E.bracket (openFile logPath AppendMode) hClose (\_ -> return target)
+    `catchIO` (\_ -> return ToStdOut)
 checkLogTarget target = return target
 
 -- | System exit status codes from sysexits.h.
@@ -844,6 +845,10 @@ liftMb :: Monad m => (a -> m b) -> Maybe a -> m (Maybe b)
 liftMb f = maybe (return Nothing) (liftM Just . f)
 
 infixr 8 `liftMb`
+
+-- | Specialization of 'E.catch' for 'E.IOException'.
+catchIO :: IO a -> (E.IOException -> IO a) -> IO a
+catchIO = E.catch
 
 foreign import ccall unsafe "unistd.h chroot"
   c_chroot :: CString -> IO CInt

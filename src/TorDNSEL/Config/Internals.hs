@@ -52,7 +52,7 @@ import Control.Monad (liftM, liftM2, ap)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)
 import Data.Char (isSpace, toLower)
-import Data.Maybe (catMaybes, isJust)
+import Data.Maybe (catMaybes)
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import qualified Data.Map as M
@@ -422,7 +422,7 @@ Otherwise, the server runs with the new configuration and closes the connection:
 startReconfigServer
   :: Socket -> (Config -> (Maybe String -> IO ()) -> IO ()) -> IO ReconfigServer
 startReconfigServer sock sendConfig = do
-  log Info "Starting reconfigure server."
+  log Info "Starting reconfigure server." :: IO ()
   chan <- newChan
   tid <- forkLinkIO $ do
     setTrapExit $ (writeChan chan .) . Exit
@@ -433,13 +433,13 @@ startReconfigServer sock sendConfig = do
 
 handleMessage :: State -> ReconfigMessage -> IO State
 handleMessage s (NewClient client signal) = do
-  E.handleJust E.ioErrors
-    (log Warn "Reading config from reconfigure socket failed: ") $
+  E.handle
+    (\(e :: E.IOException) -> log Warn "Reading config from reconfigure socket failed: " e) $
     E.bracket (socketToHandle client ReadWriteMode) hClose $ \handle -> do
       str <- B.hGetContents handle
       case parseConfigFile str >>= makeConfig of
         Left e -> do
-          hCat handle "Parse error: " e "\r\n"
+          hCat handle "Parse error: " e "\r\n" :: IO ()
           log Warn "Parsing config from reconfigure socket failed: " e
         Right config -> do
           mv <- newEmptyMVar
@@ -451,7 +451,7 @@ handleMessage s (NewClient client signal) = do
   return s
 
 handleMessage s (Terminate reason) = do
-  log Info "Terminating reconfigure server."
+  log Info "Terminating reconfigure server." :: IO ()
   terminateThread Nothing (listenerTid s) (killThread $ listenerTid s)
   msgs <- untilM (isEmptyChan $ reconfigChan s) (readChan $ reconfigChan s)
   sequence_ [sClose client | NewClient client _ <- msgs]
@@ -460,10 +460,10 @@ handleMessage s (Terminate reason) = do
 handleMessage s (Exit tid reason)
   | tid == listenerTid s = do
       log Warn "The reconfigure listener thread exited unexpectedly: "
-               (showExitReason [] reason) "; restarting."
+               (show reason) "; restarting." :: IO ()
       newListenerTid <- forkListener (listenSock s) (writeChan $ reconfigChan s)
       return s { listenerTid = newListenerTid }
-  | isJust reason = exit reason
+  | isAbnormal reason = exit reason
   | otherwise = return s
 
 -- | Fork the listener thread.
@@ -481,4 +481,4 @@ forkListener sock send =
 -- exit signal will be sent.
 terminateReconfigServer :: Maybe Int -> ReconfigServer -> IO ()
 terminateReconfigServer mbWait (ReconfigServer tid send) =
-  terminateThread mbWait tid (send $ Terminate Nothing)
+  terminateThread mbWait tid (send $ Terminate NormalExit)

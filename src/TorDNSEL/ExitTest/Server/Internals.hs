@@ -27,6 +27,7 @@ import qualified Control.Exception as E
 import Control.Monad (when, forM, foldM)
 import Control.Monad.Fix (fix)
 import Control.Monad.Trans (lift)
+import Control.Applicative
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Foldable as F
 import qualified Data.Map as M
@@ -136,7 +137,7 @@ startListenerThread notifyServerNewClient sem owner listener addr =
   forkLinkIO . E.block . finallyCloseSocket . forever $ do
     waitQSemN sem 1
     (client,SockAddrInet _ clientAddr) <- E.unblock (accept listener)
-      `E.catch` \e -> signalQSemN sem 1 >> E.throwIO e
+      `E.catch` \(e :: E.SomeException) -> signalQSemN sem 1 >> E.throwIO e
     let clientAddr' = ntohl clientAddr
     log Debug "Accepted exit test client from " (inet_htoa clientAddr') '.'
     notifyServerNewClient client clientAddr'
@@ -157,9 +158,9 @@ reopenSocketIfClosed addr mbSock = MaybeT $ do
     else do
       whenJust mbSock sClose
       log Notice "Opening exit test listener on " addr '.'
-      r <- E.tryJust E.ioErrors $ bindListeningTCPSocket addr
+      r <- E.try $ bindListeningTCPSocket addr
       case r of
-        Left e -> do
+        Left (e :: E.IOException ) -> do
           log Warn "Opening exit test listener on " addr " failed: " e "; \
                    \skipping listener."
           return Nothing
@@ -169,7 +170,8 @@ reopenSocketIfClosed addr mbSock = MaybeT $ do
   where
     isListeningSocketOpen Nothing = return False
     isListeningSocketOpen (Just sock) =
-      getSocketName sock >> return True `catch` const (return False)
+      (True <$ getSocketName sock)
+        `E.catch` \(_ :: E.SomeException) -> return False
 
 -- | Process a 'ServerMessage' and return the new config and state, given the
 -- current config and state.
@@ -178,7 +180,7 @@ handleMessage :: ExitTestServerConfig -> ServerState -> ServerMessage
 handleMessage conf s (NewClient sock addr) = do
   tid <- forkLinkIO . (`E.finally` signalQSemN (handlerSem s) 1) .
     E.bracket (socketToHandle sock ReadWriteMode) hClose $ \client -> do
-      r <- timeout readTimeout . E.tryJust E.ioErrors $ do
+      r <- timeout readTimeout . E.try $ do
         r <- runMaybeT $ getRequest client
         case r of
           Just cookie -> do
@@ -251,32 +253,34 @@ handleMessage _conf s (Terminate reason) = do
 
 handleMessage conf s (Exit tid reason)
   | tid `S.member` handlers s = do
-      whenJust reason $
-        log Warn "Bug: An exit test client handler exited abnormally: "
-      return (conf, s { handlers = S.delete tid (handlers s) })
-  | tid `S.member` deadListeners s
-  = return (conf, s { deadListeners = S.delete tid (deadListeners s) })
+    case reason of
+        AbnormalExit _ -> log Warn "Bug: An exit test client handler exited abnormally: "
+        NormalExit     -> return ()
+    return (conf, s { handlers = S.delete tid (handlers s) })
+  | tid `S.member` deadListeners s =
+    return (conf, s { deadListeners = S.delete tid (deadListeners s) })
   | Just (Listener addr sock owner) <- tid `M.lookup` listenerThreads s = do
-      log Warn "An exit test listener thread for " addr " exited unexpectedly: "
-               (fromJust reason) "; restarting."
-      mbSock <- runMaybeT $ reopenSocketIfClosed addr (Just sock)
-      case mbSock of
-        -- The socket couldn't be reopened, so drop the listener.
-        Nothing ->
-          return ( conf { etscfListenAddrs =
-                            S.delete addr (etscfListenAddrs conf) }
-                 , s { listenerThreads = M.delete tid (listenerThreads s) } )
-        Just sock' -> do
-          -- If the socket was reopened, we own it now.
-          let owner' | sock /= sock' = ExitTestServerOwned
-                     | otherwise     = owner
-              listener' = Listener addr sock' owner'
-          tid' <- startListenerThread ((writeChan (serverChan s) .) . NewClient)
-                                      (handlerSem s) owner sock addr
-          listener' `seq` return
-            (conf, s { listenerThreads = M.insert tid' listener' .
-                                           M.delete tid $ listenerThreads s })
-  | isJust reason = exit reason
+
+    log Warn "An exit test listener thread for " addr " exited unexpectedly: "
+              reason "; restarting."
+    mbSock <- runMaybeT $ reopenSocketIfClosed addr (Just sock)
+    case mbSock of
+      -- The socket couldn't be reopened, so drop the listener.
+      Nothing ->
+        return ( conf { etscfListenAddrs =
+                          S.delete addr (etscfListenAddrs conf) }
+                , s { listenerThreads = M.delete tid (listenerThreads s) } )
+      Just sock' -> do
+        -- If the socket was reopened, we own it now.
+        let owner' | sock /= sock' = ExitTestServerOwned
+                    | otherwise     = owner
+            listener' = Listener addr sock' owner'
+        tid' <- startListenerThread ((writeChan (serverChan s) .) . NewClient)
+                                    (handlerSem s) owner sock addr
+        listener' `seq` return
+          (conf, s { listenerThreads = M.insert tid' listener' .
+                                       M.delete tid $ listenerThreads s })
+  | isAbnormal reason = exit reason
   | otherwise = return (conf, s)
 
 -- | Reconfigure the exit test server synchronously with the given function. If
@@ -293,4 +297,4 @@ reconfigureExitTestServer reconf (ExitTestServer send tid) =
 -- be sent.
 terminateExitTestServer :: Maybe Int -> ExitTestServer -> IO ()
 terminateExitTestServer mbWait (ExitTestServer send tid) =
-  terminateThread mbWait tid (send $ Terminate Nothing)
+  terminateThread mbWait tid (send $ Terminate NormalExit)

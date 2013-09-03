@@ -63,7 +63,7 @@ import qualified Data.Foldable as F
 import Data.List (foldl', unfoldr, mapAccumL)
 import qualified Data.Map as M
 import Data.Map (Map)
-import Data.Maybe (mapMaybe, isJust)
+import Data.Maybe (mapMaybe )
 import qualified Data.Sequence as Seq
 import Data.Sequence (Seq, ViewL((:<)), viewl, (<|), (|>), ViewR((:>)), viewr)
 import qualified Data.Set as Set
@@ -153,7 +153,7 @@ data TestStatus
 -- thread.
 startExitTestInitiator :: ExitTestInitiatorConfig -> IO ExitTestInitiator
 startExitTestInitiator initConf = do
-  log Info "Starting exit test initiator."
+  log Info "Starting exit test initiator." :: IO ()
   chan <- newChan
   initiatorTid <- forkLinkIO $ do
     setTrapExit ((writeChan chan .) . Exit)
@@ -172,15 +172,15 @@ startExitTestInitiator initConf = do
       | TestWaiting rid ports published <- testStatus s
       , canRunExitTest conf s ports = do
           log Info "Forking exit test clients for router " rid
-                   " ports " ports '.'
+                   " ports " ports '.' :: IO ()
           newClients <- mapM (forkTestClient conf rid published) ports
           let newRunningClients = foldl' (flip Set.insert) (runningClients s)
                                          newClients
           log Info "Exit test clients currently running: "
-                   (Set.size newRunningClients) '.'
+                   (Set.size newRunningClients) '.' :: IO ()
           if Q.length (pendingTests s) == 0
             then do
-              log Info "Pending exit tests: 0."
+              log Info "Pending exit tests: 0." :: IO ()
               loop conf s { runningClients = newRunningClients
                           , testStatus = NoTestsPending }
             else do
@@ -201,7 +201,7 @@ handleMessage
 handleMessage conf s (NewDirInfo routers)
   | nRouterTests == 0 = return (conf, s)
   | otherwise = do
-      log Info "Scheduling exit tests for " nRouterTests " routers."
+      log Info "Scheduling exit tests for " nRouterTests " routers." :: IO ()
       now <- getCurrentTime
       let newS = s { pendingTests = newPendingTests
                    , testHistory = appendTestsToHistory now nRouterTests .
@@ -237,7 +237,7 @@ handleMessage conf s (Reconfigure reconf signal) = do
   return (newConf, s)
 
 handleMessage _ s (Terminate reason) = do
-  log Info "Terminating exit test initiator."
+  log Info "Terminating exit test initiator." :: IO ()
   F.forM_ (runningClients s) $ \client ->
     terminateThread Nothing client (killThread client)
   exit reason
@@ -251,13 +251,13 @@ handleMessage conf s (Exit tid reason)
       routers <- nsRouters `fmap` eticfGetNetworkState conf
       case testsToExecute conf routers (pendingTests s) of
         Nothing -> do
-          log Info "Pending exit tests: 0."
+          log Info "Pending exit tests: 0." :: IO ()
           return (conf, s { pendingTests = Q.empty
                           , testStatus = NoTestsPending })
         Just (rid,ports,published,newPendingTests) -> do
-          log Info "Pending exit tests: " (Q.length newPendingTests + 1) '.'
+          log Info "Pending exit tests: " (Q.length newPendingTests + 1) '.' :: IO ()
           log Debug "Waiting to run exit test for router " rid
-                    " ports " ports '.'
+                    " ports " ports '.' :: IO ()
           return (conf, s { pendingTests = newPendingTests
                           , testStatus = TestWaiting rid ports published })
   -- Periodically, add every eligible router to the exit test queue. This should
@@ -267,7 +267,7 @@ handleMessage conf s (Exit tid reason)
                     =<< eticfGetNetworkState conf
       newTid <- forkPeriodicTestTimer
       return (conf, newS { periodicTestTimer = newTid })
-  | isJust reason = exit reason
+  | isAbnormal reason = exit reason
   | otherwise = return (conf, s)
 
 -- | Notify the exit test initiator of new directory information.
@@ -295,7 +295,7 @@ reconfigureExitTestInitiator reconf (ExitTestInitiator send tid) =
 -- exit signal will be sent.
 terminateExitTestInitiator :: Maybe Int -> ExitTestInitiator -> IO ()
 terminateExitTestInitiator mbWait (ExitTestInitiator send tid) =
-  terminateThread mbWait tid (send $ Terminate Nothing)
+  terminateThread mbWait tid (send $ Terminate NormalExit)
 
 --------------------------------------------------------------------------------
 -- Scheduling exit tests
@@ -362,7 +362,7 @@ forkTestClient
   :: ExitTestInitiatorConfig -> RouterID -> UTCTime -> Port -> IO ThreadId
 forkTestClient conf rid published port =
   forkLinkIO $ do
-    r <- E.tryJust clientExceptions .
+    r <- E.try .
       eticfWithCookie conf rid published port $ \cookie ->
         timeout connectionTimeout .
           E.bracket connectToSocksServer hClose $ \handle ->
@@ -371,15 +371,16 @@ forkTestClient conf rid published port =
               B.hGet handle 1024 -- ignore response
               return ()
     case r of
-      Left e@(E.DynException d) | Just (e' :: SocksError) <- fromDynamic d -> do
-        log Info "Exit test for router " rid " port " port " failed: " e'
+      Left (E.fromException -> Just (e :: SocksError)) -> do
+        log Info "Exit test for router " rid " port " port " failed: " e :: IO ()
         E.throwIO e
-      Left e -> do
+      Left (E.fromException -> Just (e :: E.IOException)) -> do
         log Warn "Exit test for router " rid " port " port " failed : " e
                  ". This might indicate a problem with making application \
                  \connections through Tor. Is Tor running? Is its SocksPort \
-                 \listening on " (eticfSocksServer conf) '?'
+                 \listening on " (eticfSocksServer conf) '?' :: IO ()
         E.throwIO e
+      Left e -> E.throwIO e
       Right Nothing ->
         log Info "Exit test for router " rid " port " port " timed out."
       _ ->
@@ -394,11 +395,6 @@ forkTestClient conf rid published port =
         connect sock (eticfSocksServer conf)
         socketToHandle sock ReadWriteMode
 
-    clientExceptions e@(E.DynException d)
-      | Just (_ :: SocksError) <- fromDynamic d = Just e
-    clientExceptions e@(E.IOException _)        = Just e
-    clientExceptions _                          = Nothing
-
     connectionTimeout = 120 * 10^6
 
 -- | Fork a timer thread for the next exit test, returning its 'ThreadId'.
@@ -406,8 +402,8 @@ forkTestTimer :: InitiatorState -> IO ThreadId
 forkTestTimer s = forkLinkIO $ do
   log Debug "Total routers scheduled in exit test history: "
             (nTotalRouters $ testHistory s) ". "
-            (show . F.toList . historySeq $ testHistory s)
-  log Info "Running next exit test in " currentInterval " microseconds."
+            (show . F.toList . historySeq $ testHistory s) :: IO ()
+  log Info "Running next exit test in " currentInterval " microseconds." :: IO ()
   threadDelay $ fromIntegral currentInterval
   where
     currentInterval = currentTestInterval nPending (testHistory s)

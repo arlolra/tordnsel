@@ -126,7 +126,6 @@ module TorDNSEL.TorControl.Internals (
   , protocolError
   , parseError
   , TorControlError(..)
-  , showTorControlError
   , toTCError
   , parseReplyCode
   , throwIfNotPositive
@@ -162,7 +161,6 @@ import TorDNSEL.Control.Concurrent.Util
 import TorDNSEL.Directory
 import TorDNSEL.Document
 import TorDNSEL.Util
-improt qualified TorDNSEL.Util ( bracket', finally' )
 
 --------------------------------------------------------------------------------
 -- Connections
@@ -341,7 +339,7 @@ getDocument key parse conn = do
     Reply ('2','5','0') text doc
       | text == B.snoc key '=' -> return (parse $ parseDocument doc, command)
       | otherwise -> protocolError command $ cat "Got " (esc maxRepLen text) '.'
-    _             -> E.throwDyn $ toTCError command reply
+    _             -> E.throwIO $ toTCError command reply
   where command = Command (B.pack "getinfo") [key] []
         maxRepLen = 64
 
@@ -372,7 +370,7 @@ getStatus key parse conn = do
                                                       (esc maxRepLen text) '.'
       | null dataLines -> check (:[]) (parse $ B.drop (B.length key + 1) text)
       | otherwise      -> check id $ mapM parse dataLines
-    _                  -> E.throwDyn $ toTCError command reply
+    _                  -> E.throwIO $ toTCError command reply
   where command = Command (B.pack "getinfo") [key] []
         check f = either (parseError command) (return . f)
         maxRepLen = 64
@@ -405,7 +403,7 @@ extendCircuit' circuit path purpose conn = do
       | msg:cid':_ <- B.split ' ' text, msg == B.pack "EXTENDED"
       , maybe True (== CircId cid') circuit -> return $ CircId (B.copy cid')
       | otherwise -> protocolError command $ cat "Got " (esc maxRepLen text) '.'
-    _             -> E.throwDyn $ toTCError command reply
+    _             -> E.throwIO $ toTCError command reply
   where
     command = Command (B.pack "extendcircuit") args []
     args = add purpose [cid, B.intercalate (B.pack ",") $ map encodeBase16RouterID path]
@@ -523,11 +521,11 @@ sendCommand' command isQuit mbEvHandlers (tellIOManager,ioManagerTid) = do
     tellIOManager $ SendCommand command isQuit mbEvHandlers (putResponse.Right)
     response <- takeMVar mv
     case response of
-      Left Nothing                                -> E.throwDyn ConnectionClosed
-      Left (Just (E.DynException d))
-        | Just NonexistentThread <- fromDynamic d -> E.throwDyn ConnectionClosed
-      Left (Just e)                               -> E.throwIO e
-      Right replies                               -> return replies
+      Left NormalExit                               -> E.throwIO ConnectionClosed
+      Left (AbnormalExit (E.fromException -> Just NonexistentThread))
+                                                    -> E.throwIO ConnectionClosed
+      Left (AbnormalExit e)                         -> E.throwIO e
+      Right replies                                 -> return replies
 
 --------------------------------------------------------------------------------
 -- Config variables
@@ -637,7 +635,7 @@ boolVar var = ConfVar getc (setc setConf') (setc resetConf') where
             (esc maxVarLen key) ", expecting \"" var "\"."
         | otherwise                -> return val'
   setc f val = f [(var, fmap encodeConfVal val)]
-  psErr = E.throwDyn . ParseError
+  psErr = E.throwIO . ParseError
   maxVarLen = 64
 
 --------------------------------------------------------------------------------
@@ -664,7 +662,7 @@ newDescriptorsEvent ::
 newDescriptorsEvent handler conn = EventHandler (B.pack "NEWDESC") handleNewDesc
   where
     safeGetDescriptor rid = Right `fmap` getDescriptor rid conn
-      `E.catchDyn` \(e :: TorControlError) -> return (Left e)
+      `E.catch` \(e :: TorControlError) -> return (Left e)
     handleNewDesc (Reply _ text _:_) = do
       -- pipeline descriptor requests
       (es',ds) <- fmap partitionEither . mapM resolve
@@ -761,15 +759,20 @@ startIOManager handle = do
     runIOManager $ \loop s -> do
       message <- readChan ioChan
       case message of
-        Exit tid reason
+        Exit tid _
           | tid == evHandlerTid s -> do
               newEvHandlerTid <- startEventHandler eventChan
               loop s { evHandlerTid = newEvHandlerTid }
-          | isNothing reason -> loop s
+
+        Exit _ NormalExit         -> loop s
+
+        Exit tid (AbnormalExit (E.fromException -> Just e))
           | tid == socketReaderTid
-          , Just (E.IOException e) <- reason, isEOFError e
-          , quitSent s, S.null (responds s) -> kill $ evHandlerTid s
-          | otherwise -> exit reason
+          , isEOFError e
+          , quitSent s
+          , S.null (responds s)   -> kill $ evHandlerTid s
+
+        Exit _ reason             -> exit reason
 
         CloseConnection -> mapM_ kill [socketReaderTid, evHandlerTid s]
 
@@ -806,8 +809,8 @@ startIOManager handle = do
               | otherwise           -> loop
             Right event             -> event >> loop
 
-    kill tid = terminateThread Nothing tid . throwTo tid . Just $
-                 E.AsyncException E.ThreadKilled
+    kill tid = terminateThread Nothing tid . throwTo tid $
+                exitReason E.ThreadKilled
 
     renderCommand (Command key args []) =
       B.intercalate (B.pack " ") (key : args) `B.append` B.pack "\r\n"
@@ -838,7 +841,7 @@ startSocketReader handle sendRepliesToIOManager =
         LastReply reply -> return [reply]
 
     parseReplyLine line =
-      either (E.throwDyn . ProtocolError) (parseReplyLine' typ text)
+      either (E.throwIO . ProtocolError) (parseReplyLine' typ text)
              (parseReplyCode code)
       where (code,(typ,text)) = B.splitAt 1 `second` B.splitAt 3 line
 
@@ -846,7 +849,7 @@ startSocketReader handle sendRepliesToIOManager =
       | typ == B.pack "-" = return . MidReply $ Reply code text []
       | typ == B.pack "+" = (MidReply . Reply code text) `fmap` readData
       | typ == B.pack " " = return . LastReply $ Reply code text []
-      | otherwise = E.throwDyn . ProtocolError $
+      | otherwise = E.throwIO . ProtocolError $
                       cat "Malformed reply line type " (esc 1 typ) '.'
 
     readData = do
@@ -1117,10 +1120,7 @@ instance Show TorControlError where
   showsPrec _ (ProtocolError msg) = cat "Protocol error: " msg
   showsPrec _ ConnectionClosed = ("Connection is already closed" ++)
 
--- | Boilerplate conversion of a dynamically typed 'TorControlError' to a
--- string.
-showTorControlError :: Dynamic -> Maybe String
-showTorControlError = fmap (show :: TorControlError -> String) . fromDynamic
+instance E.Exception TorControlError
 
 -- | Given a command, return a \"command failed\" message.
 commandFailed :: Command -> ShowS
@@ -1129,11 +1129,11 @@ commandFailed (Command key args _) =
 
 -- | Throw a 'ProtocolError' given a command and error message.
 protocolError :: Command -> ShowS -> IO a
-protocolError command = E.throwDyn . ProtocolError . cat (commandFailed command)
+protocolError command = E.throwIO . ProtocolError . cat (commandFailed command)
 
 -- | Throw a 'ParseError' given a command and an error message.
 parseError :: Command -> ShowS -> IO a
-parseError command = E.throwDyn . ParseError . cat (commandFailed command)
+parseError command = E.throwIO . ParseError . cat (commandFailed command)
 
 -- | Convert a command and negative reply to a 'TorControlError'.
 toTCError :: Command -> Reply -> TorControlError
@@ -1150,7 +1150,7 @@ parseReplyCode bs
 throwIfNotPositive :: Command -> Reply -> IO ()
 throwIfNotPositive command reply =
   unless (isPositive $ repCode reply) $
-    E.throwDyn $ toTCError command reply
+    E.throwIO $ toTCError command reply
 
 -- | Is a reply successful?
 isPositive :: ReplyCode -> Bool

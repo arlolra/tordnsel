@@ -81,11 +81,18 @@ data DNSMessage
   | Terminate ExitReason -- ^ Terminate the DNS server gracefully
   deriving Typeable
 
+-- This is to please the Exception instance.
+instance Show DNSMessage where
+  showsPrec _ (Terminate a)     = ("Terminate " ++) . shows a
+  showsPrec _ (Reconfigure _ _) = ("Reconfigure" ++)
+
+instance E.Exception DNSMessage
+
 -- | Given an initial 'DNSConfig', start the DNS server and return a handle to
 -- it. Link the DNS server to the calling thread.
 startDNSServer :: DNSConfig -> IO DNSServer
 startDNSServer initConf = do
-  log Info "Starting DNS server."
+  log Info "Starting DNS server." :: IO ()
   fmap DNSServer . forkLinkIO . E.block . loop $ initConf
   where
     loop conf = do
@@ -101,7 +108,7 @@ startDNSServer initConf = do
           signal
           loop newConf
         Left (_,Terminate reason) -> do
-          log Info "Terminating DNS server."
+          log Info "Terminating DNS server." :: IO ()
           exit reason
         Right _ -> loop conf -- impossible
 
@@ -110,7 +117,7 @@ startDNSServer initConf = do
 -- the calling thread.
 reconfigureDNSServer :: (DNSConfig -> DNSConfig) -> DNSServer -> IO ()
 reconfigureDNSServer reconf (DNSServer tid) =
-  sendSyncMessage (throwDynTo tid . Reconfigure reconf) tid
+  sendSyncMessage (throwTo tid . exitReason . Reconfigure reconf) tid
 
 -- | Terminate the DNS server gracefully. The optional parameter specifies the
 -- amount of time in microseconds to wait for the thread to terminate. If the
@@ -118,7 +125,7 @@ reconfigureDNSServer reconf (DNSServer tid) =
 -- sent.
 terminateDNSServer :: Maybe Int -> DNSServer -> IO ()
 terminateDNSServer mbWait (DNSServer tid) =
-  terminateThread mbWait tid (throwDynTo tid $ Terminate Nothing)
+  terminateThread mbWait tid (throwTo tid $ exitReason $ Terminate NormalExit)
 
 -- | A stateful wrapper for 'dnsResponse'.
 dnsHandler :: DNSConfig -> Message -> IO (Maybe Message)

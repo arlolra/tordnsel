@@ -137,9 +137,9 @@ startStorageManager initConf = do
       return (s { exitAddrLen = addrLen, journalLen = 0 }, nullSignal)
 
     getFileSize fp =
-      E.catchJust E.ioErrors
+      E.catch
         ((fromIntegral . fileSize) `fmap` getFileStatus fp)
-        (\e -> if isDoesNotExistError e then return 0 else ioError e)
+        (\e -> if isDoesNotExistError e then return 0 else E.throwIO e)
 
     nullSignal = return ()
 
@@ -179,7 +179,7 @@ reconfigureStorageManager reconf (StorageManager tellStorageManager tid)
 -- be sent.
 terminateStorageManager :: Maybe Int -> StorageManager -> IO ()
 terminateStorageManager mbWait (StorageManager tellStorageManager tid) =
-  terminateThread mbWait tid (tellStorageManager $ Terminate Nothing)
+  terminateThread mbWait tid (tellStorageManager $ Terminate NormalExit)
 
 -- | An exit address entry stored in our state directory. The design here is the
 -- same as Tor uses for storing router descriptors.
@@ -241,9 +241,9 @@ readExitAddresses stateDir =
     merge new old = new { eaAddresses = (M.union `on` eaAddresses) new old }
     parseFile fp = do
       let path = stateDir ++ fp
-      file <- E.catchJust E.ioErrors
+      file <- E.catch
         (B.readFile path)
-        (\e -> if isDoesNotExistError e then return B.empty else ioError e)
+        (\e -> if isDoesNotExistError e then return B.empty else E.throwIO e)
       addrs <- forM (parseSubDocs (B.pack "ExitNode") parseExitAddress .
                        parseDocument . B.lines $ file) $ \exitAddr -> do
         case exitAddr of

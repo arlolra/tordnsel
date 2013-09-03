@@ -23,6 +23,7 @@ import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
 import Control.Concurrent.MVar (MVar, newMVar, modifyMVar_, readMVar)
 import Control.Concurrent.QSem (QSem, newQSem, waitQSem, signalQSem)
 import qualified Control.Exception as E
+import Control.Monad (when)
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
 import Data.Maybe (isJust, isNothing)
@@ -107,19 +108,19 @@ startStatsServer listenSock = do
               if isNothing $ terminateReason s
                 then do
                   log Warn "The statistics listener thread exited unexpectedly:\
-                           \ " (showExitReason [] reason) "; restarting."
+                           \ " (show reason) "; restarting."
                   newListenerTid <- forkListener statsChan listenSock handlerQSem
                   loop s { listenerTid = newListenerTid }
                 else loop s
           | tid `S.member` handlers s -> do
-              whenJust reason $
+              when (isAbnormal reason) $
                 log Warn "Bug: A statistics client handler exited abnormally: "
               let newHandlers = S.delete tid (handlers s)
               case terminateReason s of
                 -- all the handlers have finished, so let's exit
                 Just exitReason | S.null newHandlers -> exit exitReason
                 _ -> loop s { handlers = newHandlers }
-          | isJust reason -> exit reason
+          | isAbnormal reason -> exit reason
           | otherwise -> loop s
 
   return $ StatsServer (writeChan statsChan) statsServerTid
@@ -133,7 +134,7 @@ forkListener statsChan listenSock sem =
   forkLinkIO . E.block . forever $ do
     waitQSem sem
     (client,_) <- E.unblock $ accept listenSock
-      `E.catch` \e -> signalQSem sem >> E.throwIO e
+      `E.onException` signalQSem sem
     writeChan statsChan $ NewClient client
 
 -- | Terminate the stats server gracefully. The optional parameter specifies the
@@ -142,7 +143,7 @@ forkListener statsChan listenSock sem =
 -- sent.
 terminateStatsServer :: Maybe Int -> StatsServer -> IO ()
 terminateStatsServer mbWait (StatsServer tellStatsServer statsServerTid) =
-  terminateThread mbWait statsServerTid (tellStatsServer $ Terminate Nothing)
+  terminateThread mbWait statsServerTid (tellStatsServer $ Terminate NormalExit)
 
 -- | Render 'Stats' to text as a sequence of CRLF-terminated lines.
 renderStats :: Stats -> B.ByteString

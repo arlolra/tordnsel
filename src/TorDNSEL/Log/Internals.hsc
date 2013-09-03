@@ -173,7 +173,7 @@ reconfigureLogger reconf =
 terminateLogger :: Maybe Int -> IO ()
 terminateLogger mbWait =
   withLogger $ \tid logChan ->
-    terminateThread mbWait tid (writeChan logChan $ Terminate Nothing)
+    terminateThread mbWait tid (writeChan logChan $ Terminate NormalExit)
 
 --------------------------------------------------------------------------------
 -- System logger

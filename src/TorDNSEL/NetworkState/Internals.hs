@@ -187,7 +187,7 @@ startNetworkStateManager initConf = do
       Just testConf | Right conn <- controller ->
         execStateT (initializeExitTests net (nsmcfStateDir initConf) testConf)
                    emptyState
-          `E.catch` \e -> closeConnection conn >> E.throwIO e
+          `E.onException` closeConnection conn
       _ -> return emptyState
     swapMVar networkStateMV $! networkState initState
     signal
@@ -213,7 +213,7 @@ reconfigureNetworkStateManager reconf (NetworkStateManager send tid) =
 -- exit signal will be sent.
 terminateNetworkStateManager :: Maybe Int -> NetworkStateManager -> IO ()
 terminateNetworkStateManager mbWait (NetworkStateManager send tid) =
-  terminateThread mbWait tid (send $ Terminate Nothing)
+  terminateThread mbWait tid (send $ Terminate NormalExit)
 
 -- | Process a 'ManagerMessage' and return the new config and state, given the
 -- current config and state.
@@ -361,7 +361,7 @@ handleMessage net conf (Exit tid reason) = get >>= handleExit where
         return conf
     | Right conn <- torControlConn s, tid == threadId conn = do
         log Warn "The Tor controller thread exited unexpectedly: "
-                 (showExitReason [showTorControlError] reason) "; restarting."
+                 (show reason) "; restarting."
         (controller,deadTid) <- startTorController net conf Nothing
         put $! s { torControlConn = controller
                  , deadThreads = S.insert deadTid (deadThreads s) }
@@ -378,7 +378,7 @@ handleMessage net conf (Exit tid reason) = get >>= handleExit where
         Just (testConf,testState)
           | tid == toTid storageManager -> do
               log Warn "The storage manager thread exited unexpectedly: "
-                      (showExitReason [] reason) "; restarting."
+                      (show reason) "; restarting."
               storage <- liftIO . startStorageManager . StorageConfig $
                            nsmcfStateDir conf
               liftIO $ rebuildExitAddressStorage (nsRouters $ networkState s)
@@ -387,7 +387,7 @@ handleMessage net conf (Exit tid reason) = get >>= handleExit where
               return conf
           | tid == toTid exitTestServer -> do
               log Warn "The exit test server thread exited unexpectedly: "
-                       (showExitReason [] reason) "; restarting."
+                       (show reason) "; restarting."
               server <- liftIO $ startExitTestServer
                                    (M.assocs $ etcfListeners testConf)
                                    (initExitTestServerConfig net testConf)
@@ -395,7 +395,7 @@ handleMessage net conf (Exit tid reason) = get >>= handleExit where
               return conf
           | tid == toTid exitTestInitiator -> do
               log Warn "The exit test initiator thread exited unexpectedly: "
-                       (showExitReason [] reason) "; restarting."
+                       (show reason) "; restarting."
               initiator <- liftIO $ startExitTestInitiator
                                       (initExitTestInitiatorConfig net testConf)
               putTestState testState { exitTestInitiator = initiator }
@@ -403,7 +403,7 @@ handleMessage net conf (Exit tid reason) = get >>= handleExit where
           where
             toTid f = threadId $ f testState
             putTestState x = put $! s { exitTestState = Just $! x}
-        _ | isJust reason -> liftIO $ exit reason
+        _ | isAbnormal reason -> liftIO $ exit reason
           | otherwise -> return conf
 
 -- | Register a mapping from cookie to router identifier, descriptor published
@@ -448,9 +448,9 @@ startTorController
 startTorController net conf mbDelay = liftIO $ do
   log Info "Starting Tor controller."
   (r,tid) <- tryForkLinkIO $ do
-    E.bracketOnError' (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do
+    bracketOnError' (socket AF_INET Stream tcpProtoNum) sClose $ \sock -> do
       connect sock $ nsmcfTorControlAddr conf
-      E.bracketOnError'
+      bracketOnError'
         ( socketToHandle sock ReadWriteMode >>=
             (`openConnection` nsmcfTorControlPasswd conf) )
         closeConnection $ \conn -> do
@@ -473,7 +473,7 @@ startTorController net conf mbDelay = liftIO $ do
   case r of
     Left reason -> do
       log Warn "Initializing Tor controller connection failed: "
-                (showExitReason [showTorControlError] reason)
+                (show reason)
                 "; I'll try again in " delay " seconds."
       timerTid <- forkLinkIO $ threadDelay (delay * 10^6)
       return (Left (timerTid, nextDelay), tid)
@@ -481,8 +481,12 @@ startTorController net conf mbDelay = liftIO $ do
       log Info "Successfully initialized Tor controller connection."
       return (Right conn, tid)
   where
+    logTorControlErrors :: (CatArg a) => String -> [a] -> IO ()
     logTorControlErrors event = mapM_ (log Warn "Error in " event " event: ")
+
+    logParseErrors :: (CatArg b) => ([a], [b]) -> IO [a]
     logParseErrors (xs,errors) = mapM_ (log Warn) errors >> return xs
+
     updateDescriptors (NetworkStateManager send _) = send . NewDescriptors
     updateNetworkStatus (NetworkStateManager send _) = send . NewNetworkStatus
     nextDelay | delay' < maxDelay = delay'

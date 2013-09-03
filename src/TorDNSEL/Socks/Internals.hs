@@ -36,7 +36,6 @@ module TorDNSEL.Socks.Internals (
 
   -- * Errors
   , SocksError(..)
-  , showSocksError
   ) where
 
 import qualified Control.Exception as E
@@ -69,8 +68,8 @@ withSocksConnection handle addr port io = (`E.finally` hClose handle) $ do
   r <- decodeResponse =<< B.hGet handle 8
   case r of
     Just (Response Granted _ _) -> io
-    Just (Response result _ _)  -> E.throwDyn (SocksError result)
-    _                           -> E.throwDyn SocksProtocolError
+    Just (Response result _ _)  -> E.throwIO (SocksError result)
+    _                           -> E.throwIO SocksProtocolError
 
 --------------------------------------------------------------------------------
 -- Data types
@@ -176,6 +175,4 @@ instance Show SocksError where
   showsPrec _ (SocksError result) = cat "Socks error: " result
   showsPrec _ SocksProtocolError  = cat "Socks protocol error"
 
--- | Boilerplate conversion of a dynamically typed 'SocksError' to a string.
-showSocksError :: Dynamic -> Maybe String
-showSocksError = fmap (show :: SocksError -> String) . fromDynamic
+instance E.Exception SocksError
