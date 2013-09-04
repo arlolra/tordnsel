@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternGuards, DeriveDataTypeable #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
 
 -----------------------------------------------------------------------------

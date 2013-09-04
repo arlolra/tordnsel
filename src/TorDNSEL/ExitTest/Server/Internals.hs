@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternGuards, BangPatterns #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------

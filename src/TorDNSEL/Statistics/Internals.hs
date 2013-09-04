@@ -1,5 +1,4 @@
-{-# LANGUAGE BangPatterns #-}
-{-# OPTIONS_GHC -fglasgow-exts -fno-warn-type-defaults #-}
+{-# OPTIONS_GHC -fno-warn-type-defaults #-}
 
 -----------------------------------------------------------------------------
 -- |

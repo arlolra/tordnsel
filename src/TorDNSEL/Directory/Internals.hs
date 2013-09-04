@@ -1,5 +1,3 @@
-{-# LANGUAGE PatternGuards, TypeSynonymInstances, FlexibleContexts #-}
-
 -----------------------------------------------------------------------------
 -- |
 -- Module      : TorDNSEL.Directory.Internals

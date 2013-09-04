@@ -1,4 +1,3 @@
-{-# LANGUAGE PatternGuards #-}
 {-# OPTIONS_GHC -fno-warn-unused-imports #-}
 
 -----------------------------------------------------------------------------

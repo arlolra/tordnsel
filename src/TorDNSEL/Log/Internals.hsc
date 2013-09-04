@@ -1,5 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, TypeSynonymInstances,
-             OverlappingInstances, FlexibleInstances #-}
+{-# LANGUAGE ForeignFunctionInterface, OverlappingInstances #-}
 
 -----------------------------------------------------------------------------
 -- |

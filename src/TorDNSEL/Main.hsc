@@ -1,4 +1,4 @@
-{-# LANGUAGE PatternGuards, BangPatterns, ForeignFunctionInterface, CPP #-}
+{-# LANGUAGE ForeignFunctionInterface, CPP #-}
 {-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-missing-fields
                 -fno-warn-orphans #-}
 

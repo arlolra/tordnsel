@@ -1,5 +1,3 @@
-{-# LANGUAGE PatternGuards, BangPatterns, TypeSynonymInstances,
-             FlexibleInstances, FlexibleContexts #-}
 {-# OPTIONS_GHC -fno-warn-incomplete-patterns #-}
 
 -----------------------------------------------------------------------------

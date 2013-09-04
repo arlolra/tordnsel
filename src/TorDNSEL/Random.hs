@@ -1,4 +1,4 @@
-{-# LANGUAGE ForeignFunctionInterface, ScopedTypeVariables #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
 
 -----------------------------------------------------------------------------
 -- |
