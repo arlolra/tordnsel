@@ -78,13 +78,13 @@ import TorDNSEL.Util
 -- | A router descriptor.
 data Descriptor = Desc
   { -- | The IPv4 address at which this router accepts connections.
-    descListenAddr :: {-# UNPACK #-} !HostAddress,
+    descListenAddr :: !HostAddress,
     -- | The time when this descriptor was generated.
-    descPublished  :: {-# UNPACK #-} !POSIXTime,
+    descPublished  :: !POSIXTime,
     -- | This router's identifier.
-    descRouterID   :: {-# UNPACK #-} !RouterID,
+    descRouterID   :: !RouterID,
     -- | This router's exit policy.
-    descExitPolicy :: {-# UNPACK #-} !ExitPolicy }
+    descExitPolicy :: !ExitPolicy }
 
 instance Show Descriptor where
   showsPrec _ d = cat (descRouterID d) ' ' (inet_htoa $ descListenAddr d) ' '
@@ -124,11 +124,11 @@ parseDescriptors = parseSubDocs (B.pack "router") parseDescriptor
 -- | A router status entry.
 data RouterStatus = RS
   { -- | This router's identifier.
-    rsRouterID  :: {-# UNPACK #-} !RouterID,
+    rsRouterID  :: !RouterID,
     -- | When this router's most recent descriptor was published.
-    rsPublished :: {-# UNPACK #-} !UTCTime,
+    rsPublished :: !UTCTime,
     -- | Is this router running?
-    rsIsRunning :: {-# UNPACK #-} !Bool }
+    rsIsRunning :: !Bool }
   deriving Show
 
 -- | Parse a router status entry. Return the result or 'throwError' in the
@@ -226,15 +226,15 @@ instance Hash ExitPolicy where
 -- port range pattern.
 data Rule = Rule
   { -- | Whether an exit connection is allowed.
-    ruleType      :: {-# UNPACK #-} !RuleType,
+    ruleType      :: !RuleType,
     -- | The IPv4 address part of the pattern.
-    ruleAddress   :: {-# UNPACK #-} !HostAddress,
+    ruleAddress   :: !HostAddress,
     -- | The IPv4 address mask part of the pattern.
-    ruleMask      :: {-# UNPACK #-} !HostAddress,
+    ruleMask      :: !HostAddress,
     -- | The first port in the pattern's port range.
-    ruleBeginPort :: {-# UNPACK #-} !Port,
+    ruleBeginPort :: !Port,
     -- | The last port in the pattern's port range.
-    ruleEndPort   :: {-# UNPACK #-} !Port
+    ruleEndPort   :: !Port
   } deriving (Eq, Ord)
 
 instance Show Rule where

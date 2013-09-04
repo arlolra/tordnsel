@@ -218,11 +218,11 @@ data ExitListQuery
   -- <https://gitweb.torproject.org/tordnsel.git/tree/doc/torel-design.txt>
   = IPPort
   { -- | The address of the candidate exit node.
-    queryAddr :: {-# UNPACK #-} !HostAddress,
+    queryAddr :: !HostAddress,
     -- | The destination address.
-    destAddr  :: {-# UNPACK #-} !HostAddress,
+    destAddr  :: !HostAddress,
     -- | The destination port.
-    destPort  :: {-# UNPACK #-} !Port
+    destPort  :: !Port
   } deriving Eq
 
 instance Show ExitListQuery where

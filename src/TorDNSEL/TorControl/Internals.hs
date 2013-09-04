@@ -256,21 +256,21 @@ protocolInfo (Conn _ _ protInfo _) = protInfo
 -- | A command to send to Tor.
 data Command = Command
   { -- | A command keyword.
-    comKey  :: {-# UNPACK #-} !ByteString,
+    comKey  :: !ByteString,
     -- | Command arguments.
-    comArgs :: {-# UNPACK #-} ![ByteString],
+    comArgs :: ![ByteString],
     -- | A list of lines sent in the data section.
-    comData :: {-# UNPACK #-} ![ByteString]
+    comData :: ![ByteString]
   } deriving Show
 
 -- | A reply sent by Tor in response to a command.
 data Reply = Reply
   { -- | A reply code.
-    repCode :: {-# UNPACK #-} !(Char, Char, Char)
+    repCode :: !(Char, Char, Char)
     -- | Reply text.
-  , repText :: {-# UNPACK #-} !ByteString
+  , repText :: !ByteString
     -- | A list of lines from the data section.
-  , repData :: {-# UNPACK #-} ![ByteString]
+  , repData :: ![ByteString]
   } deriving Show
 
 -- | Authenticate with Tor. Throw a 'TorControlError' if authenticating fails
@@ -652,8 +652,8 @@ boolVar var = ConfVar getc (setc setConf') (setc resetConf') where
 
 -- | An asynchronous event handler.
 data EventHandler = EventHandler
-  { evCode    :: {-# UNPACK #-} !ByteString         -- ^ The event code.
-  , evHandler :: {-# UNPACK #-} !([Reply] -> IO ()) -- ^ The event handler.
+  { evCode    :: !ByteString         -- ^ The event code.
+  , evHandler :: !([Reply] -> IO ()) -- ^ The event handler.
   }
 
 -- | Register a set of handlers for asynchronous events. This deregisters any
@@ -828,8 +828,8 @@ startIOManager handle = do
 
 -- | Reply types in a single sequence of replies.
 data ReplyType
-  = MidReply  {-# UNPACK #-} !Reply -- ^ A reply preceding other replies.
-  | LastReply {-# UNPACK #-} !Reply -- ^ The last reply.
+  = MidReply  !Reply -- ^ A reply preceding other replies.
+  | LastReply !Reply -- ^ The last reply.
   deriving Show
 
 -- | Start a thread that reads replies from @handle@ and passes them to

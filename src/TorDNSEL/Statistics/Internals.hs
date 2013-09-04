@@ -42,7 +42,7 @@ import TorDNSEL.Util
 -- sent.
 data Stats = Stats
   { bytesRecv, bytesSent, dgramsRecv, positives
-  , negatives, others :: {-# UNPACK #-} !Integer }
+  , negatives, others :: !Integer }
 
 -- | The current statistics state.
 statsState :: MVar Stats

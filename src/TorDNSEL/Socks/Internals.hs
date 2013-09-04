@@ -78,11 +78,11 @@ withSocksConnection handle addr port io = (`E.finally` hClose handle) $ do
 -- | A Socks4a request.
 data Request = Request
   { -- | The Socks4 command code (with Tor extensions).
-    soCommand :: {-# UNPACK #-} !Command,
+    soCommand :: !Command,
     -- | The requested destination: either an IPv4 address or a domain name.
-    soReqDest :: {-# UNPACK #-} !Address,
+    soReqDest :: !Address,
     -- | The requested destination port.
-    soReqPort :: {-# UNPACK #-} !Port }
+    soReqPort :: !Port }
 
 -- A Socks4a command (with Tor extensions).
 data Command
@@ -92,9 +92,9 @@ data Command
 
 -- | A Socks4 response.
 data Response = Response
-  { soResult   :: {-# UNPACK #-} !Result      -- ^ The result code.
-  , soRespAddr :: {-# UNPACK #-} !HostAddress -- ^ The destination address.
-  , soRespPort :: {-# UNPACK #-} !Port        -- ^ The destination port.
+  { soResult   :: !Result      -- ^ The result code.
+  , soRespAddr :: !HostAddress -- ^ The destination address.
+  , soRespPort :: !Port        -- ^ The destination port.
   }
 
 instance NFData Response where
@@ -166,7 +166,7 @@ decodeResponse resp = do
 
 -- | A Socks error.
 data SocksError
-  = SocksError {-# UNPACK #-} !Result -- ^ A known Socks error code.
+  = SocksError !Result -- ^ A known Socks error code.
   | SocksProtocolError -- ^ The response doesn't follow the Socks protocol.
   deriving Typeable
 

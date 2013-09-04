@@ -178,8 +178,8 @@ unsafeDecodeMessage pkt = runGet (getPacket pkt) (L.fromChunks [unPacket pkt])
 -- | A value representing the current name compression targets and current
 -- offset (in bytes) into the datagram we're serializing.
 data PutState = PutState
-  { psTargets :: {-# UNPACK #-} !TargetMap
-  , psCurOff  :: {-# UNPACK #-} !Offset }
+  { psTargets :: !TargetMap
+  , psCurOff  :: !Offset }
 
 -- | The initial state before we start writing a datagram.
 initialPutState :: PutState
@@ -213,7 +213,7 @@ type Offset = Int
 -- | A tree of labels used as compression targets. The top level represents
 -- top-level domain names, the second level second-level and so on. Making this
 -- a newtype triggers a bug in GHC 6.6.
-data TargetMap = TargetMap {-# UNPACK #-} !(Map Label (Offset, TargetMap))
+data TargetMap = TargetMap !(Map Label (Offset, TargetMap))
   deriving Show
 
 -- | The empty target map.
@@ -265,33 +265,33 @@ compressNameStatefully name = do
 -- | A DNS message containing the header, question, and possibly answers.
 data Message = Message
   { -- | A message identifier set by the originator.
-    msgID         :: {-# UNPACK #-} !Word16,
+    msgID         :: !Word16,
     -- | Is this message a response?
-    msgQR         :: {-# UNPACK #-} !Bool,
+    msgQR         :: !Bool,
     -- | The kind of query in this message.
-    msgOpCode     :: {-# UNPACK #-} !OpCode,
+    msgOpCode     :: !OpCode,
     -- | Is the name server an authority for this domain name?
-    msgAA         :: {-# UNPACK #-} !Bool,
+    msgAA         :: !Bool,
     -- | Is this a truncated response?
-    msgTC         :: {-# UNPACK #-} !Bool,
+    msgTC         :: !Bool,
     -- | Does the originator desire the query to be pursued recursively?
-    msgRD         :: {-# UNPACK #-} !Bool,
+    msgRD         :: !Bool,
     -- | Does the name server support recursive queries?
-    msgRA         :: {-# UNPACK #-} !Bool,
+    msgRA         :: !Bool,
     -- | Has the data in this response been verified by the name server?
-    msgAD         :: {-# UNPACK #-} !Bool,
+    msgAD         :: !Bool,
     -- | Is non-verified data acceptable to the resolver sending this query?
-    msgCD         :: {-# UNPACK #-} !Bool,
+    msgCD         :: !Bool,
     -- | Response code set by the name server.
-    msgRCode      :: {-# UNPACK #-} !RCode,
+    msgRCode      :: !RCode,
     -- | The first question set by the originator.
-    msgQuestion   :: {-# UNPACK #-} !Question,
+    msgQuestion   :: !Question,
     -- | Answers to the question set by the name server.
-    msgAnswers    :: {-# UNPACK #-} ![ResourceRecord],
+    msgAnswers    :: ![ResourceRecord],
     -- | Authority records set by the name server.
-    msgAuthority  :: {-# UNPACK #-} ![ResourceRecord],
+    msgAuthority  :: ![ResourceRecord],
     -- | Additional records set by the name server.
-    msgAdditional :: {-# UNPACK #-} ![ResourceRecord] }
+    msgAdditional :: ![ResourceRecord] }
   deriving (Eq, Show)
 
 instance NFData Message where
@@ -357,11 +357,11 @@ instance BinaryPacket Message where
 -- | A question to the name server.
 data Question = Question
   { -- | The domain name this question is about.
-    qName  :: {-# UNPACK #-} !DomainName,
+    qName  :: !DomainName,
     -- | The type of this question. We only support 'A' and *.
-    qType  :: {-# UNPACK #-} !Type,
+    qType  :: !Type,
     -- | The class of this question. We only support 'IN'.
-    qClass :: {-# UNPACK #-} !Class }
+    qClass :: !Class }
   deriving (Eq, Show)
 
 instance NFData Question where
@@ -382,57 +382,57 @@ data ResourceRecord
   -- | A record containing an IPv4 address.
   = A
     { -- | The domain name to which this record pertains.
-      rrName :: {-# UNPACK #-} !DomainName,
+      rrName :: !DomainName,
       -- | A time interval, in seconds, that the answer may be cached.
-      rrTTL  :: {-# UNPACK #-} !Word32,
+      rrTTL  :: !Word32,
       -- | An IPv4 address.
-      aAddr  :: {-# UNPACK #-} !HostAddress }
+      aAddr  :: !HostAddress }
 
   -- | An authoritative name server record.
   | NS
     { -- | The domain name to which this record pertains.
-      rrName  :: {-# UNPACK #-} !DomainName,
+      rrName  :: !DomainName,
       -- | A time interval, in seconds, that the answer may be cached.
-      rrTTL   :: {-# UNPACK #-} !Word32,
+      rrTTL   :: !Word32,
       -- | The host that should be authoritative for this zone.
-      nsDName :: {-# UNPACK #-} !DomainName }
+      nsDName :: !DomainName }
 
   -- | A start of zone of authority record.
   | SOA
     { -- | The domain name to which this record pertains.
-      rrName     :: {-# UNPACK #-} !DomainName,
+      rrName     :: !DomainName,
       -- | A time interval, in seconds, that the answer may be cached.
-      rrTTL      :: {-# UNPACK #-} !Word32,
+      rrTTL      :: !Word32,
       -- | The name server that was the original source of data for this zone.
-      soaMName   :: {-# UNPACK #-} !DomainName,
+      soaMName   :: !DomainName,
       -- | A name specifying the email address of the person responsible for
       -- this zone.
-      soaRName   :: {-# UNPACK #-} !DomainName,
+      soaRName   :: !DomainName,
       -- | The version number of the original copy of this zone.
-      soaSerial  :: {-# UNPACK #-} !Word32,
+      soaSerial  :: !Word32,
       -- | The number of seconds before the zone should be refreshed.
-      soaRefresh :: {-# UNPACK #-} !Word32,
+      soaRefresh :: !Word32,
       -- | The number of seconds before a failed refresh should be retried.
-      soaRetry   :: {-# UNPACK #-} !Word32,
+      soaRetry   :: !Word32,
       -- | The number of seconds that can elapse before the zone is no longer
       -- authoritative.
-      soaExpire  :: {-# UNPACK #-} !Word32,
+      soaExpire  :: !Word32,
       -- | The default TTL of records that do not contain a TTL, and the TTL of
       -- negative responses.
-      soaMinimum :: {-# UNPACK #-} !Word32 }
+      soaMinimum :: !Word32 }
 
   -- | An unsupported record.
   | UnsupportedResourceRecord
     { -- | The domain name to which this record pertains.
-      rrName  :: {-# UNPACK #-} !DomainName,
+      rrName  :: !DomainName,
       -- | A time interval, in seconds, that the answer may be cached.
-      rrTTL   :: {-# UNPACK #-} !Word32,
+      rrTTL   :: !Word32,
       -- | The 'Type' of this record.
-      rrType  :: {-# UNPACK #-} !Type,
+      rrType  :: !Type,
       -- | The 'Class' of this record.
-      rrClass :: {-# UNPACK #-} !Class,
+      rrClass :: !Class,
       -- | An opaque 'ByteString' containing the resource data.
-      rrData  :: {-# UNPACK #-} !ByteString }
+      rrData  :: !ByteString }
   deriving (Eq, Show)
 
 instance NFData ResourceRecord where
@@ -581,11 +581,11 @@ instance NFData OpCode where
 -- | The TYPE or QTYPE values that appear in resource records or questions,
 -- respectively.
 data Type
-  = TA                                     -- ^ An IPv4 host address.
-  | TNS                                    -- ^ An authoritative name server.
-  | TSOA                                   -- ^ A start of zone of authority.
-  | TAny                                   -- ^ A request for all records.
-  | UnsupportedType {-# UNPACK #-} !Word16 -- ^ Any other type.
+  = TA                      -- ^ An IPv4 host address.
+  | TNS                     -- ^ An authoritative name server.
+  | TSOA                    -- ^ A start of zone of authority.
+  | TAny                    -- ^ A request for all records.
+  | UnsupportedType !Word16 -- ^ Any other type.
   deriving (Eq, Show)
 
 instance NFData Type where
@@ -609,8 +609,8 @@ instance Binary Type where
 -- | The CLASS or QCLASS values that appear in resource records or questions,
 -- respectively.
 data Class
-  = IN -- ^ The Internet. We only support this class.
-  | UnsupportedClass {-# UNPACK #-} !Word16 -- ^ Any other class.
+  = IN                       -- ^ The Internet. We only support this class.
+  | UnsupportedClass !Word16 -- ^ Any other class.
   deriving (Eq, Show)
   -- XXX support *
 

@@ -41,15 +41,15 @@ type Document = [Item]
 -- | An item consisting of a keyword, possibly arguments, and zero or more
 -- objects.
 data Item = Item
-  { iKey :: {-# UNPACK #-} !ByteString         -- ^ Keyword
-  , iArg :: {-# UNPACK #-} !(Maybe ByteString) -- ^ Arguments
-  , iObj :: {-# UNPACK #-} ![Object]           -- ^ Objects
+  { iKey :: !ByteString         -- ^ Keyword
+  , iArg :: !(Maybe ByteString) -- ^ Arguments
+  , iObj :: ![Object]           -- ^ Objects
   } deriving Show
 
 -- | An object consisting of a keyword and a block of base64-encoded data.
 data Object = Object
-  { objKey  :: {-# UNPACK #-} !ByteString -- ^ Keyword
-  , objData :: {-# UNPACK #-} !ByteString -- ^ Base64-encoded data
+  { objKey  :: !ByteString -- ^ Keyword
+  , objData :: !ByteString -- ^ Base64-encoded data
   } deriving Show
 
 -- | Parse a 'Document' from a list of lines.

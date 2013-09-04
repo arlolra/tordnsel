@@ -185,15 +185,15 @@ terminateStorageManager mbWait (StorageManager tellStorageManager tid) =
 -- same as Tor uses for storing router descriptors.
 data ExitAddress = ExitAddress
   { -- | The identity of the exit node we tested through.
-    eaRouterID   :: {-# UNPACK #-} !RouterID,
+    eaRouterID   :: !RouterID,
     -- | The current descriptor published time when the test was initiated. We
     -- don't perform another test until a newer descriptor arrives.
-    eaPublished  :: {-# UNPACK #-} !UTCTime,
+    eaPublished  :: !UTCTime,
     -- | When we last received a network status update for this router. This
     -- helps us decide when to discard a router.
-    eaLastStatus :: {-# UNPACK #-} !UTCTime,
+    eaLastStatus :: !UTCTime,
     -- | A map from exit address to when the address was last seen.
-    eaAddresses  :: {-# UNPACK #-} !(Map HostAddress UTCTime)
+    eaAddresses  :: !(Map HostAddress UTCTime)
   } deriving Eq
 
 instance Show ExitAddress where

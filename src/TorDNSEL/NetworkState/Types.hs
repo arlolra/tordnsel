@@ -24,27 +24,27 @@ import TorDNSEL.Directory
 -- | A Tor router.
 data Router = Router
   { -- | This router's descriptor, if we have it yet.
-    rtrDescriptor  :: {-# UNPACK #-} !(Maybe Descriptor),
+    rtrDescriptor  :: !(Maybe Descriptor),
     -- | This router's exit test results, if one has been completed.
-    rtrTestResults :: {-# UNPACK #-} !(Maybe TestResults),
+    rtrTestResults :: !(Maybe TestResults),
     -- | Whether we think this router is running.
-    rtrIsRunning   :: {-# UNPACK #-} !Bool,
+    rtrIsRunning   :: !Bool,
     -- | The last time we received a router status entry for this router.
-    rtrLastStatus  :: {-# UNPACK #-} !UTCTime }
+    rtrLastStatus  :: !UTCTime }
 
 -- | The results of exit tests.
 data TestResults = TestResults
   { -- | The descriptor's published time when the last exit test was initiated.
-    tstPublished :: {-# UNPACK #-} !UTCTime,
+    tstPublished :: !UTCTime,
     -- | A map from exit address to when the address was last seen.
-    tstAddresses :: {-# UNPACK #-} !(Map HostAddress UTCTime) }
+    tstAddresses :: !(Map HostAddress UTCTime) }
 
 -- | Our current view of the Tor network.
 data NetworkState = NetworkState
   { -- | A map from listen address to routers.
-    nsAddrs   :: {-# UNPACK #-} !(Map HostAddress (Set RouterID)),
+    nsAddrs   :: !(Map HostAddress (Set RouterID)),
     -- | All the routers we know about.
-    nsRouters :: {-# UNPACK #-} !(Map RouterID Router) }
+    nsRouters :: !(Map RouterID Router) }
 
 -- | The empty network state.
 emptyNetworkState :: NetworkState
