@@ -43,9 +43,9 @@ module TorDNSEL.Util (
   , swap
   , partitionEither
   , whenJust
-  , forever
   , untilM
   , untilM_
+  , muntil
   , inet_htoa
   , encodeBase16
   , split
@@ -293,20 +293,20 @@ partitionEither (Right x:xs) = (x :) `second` partitionEither xs
 whenJust :: Monad m => Maybe a -> (a -> m ()) -> m ()
 whenJust = flip . maybe . return $ ()
 
--- | Repeat an 'IO' action forever.
-forever :: IO a -> IO ()
-forever = sequence_ . repeat
-
 -- | Repeat an 'IO' action until a predicate is satisfied, collecting the
 -- results into a list. The predicate is evaluated before the 'IO' action.
-untilM :: IO Bool -> IO a -> IO [a]
-untilM p io = loop where loop = do p' <- p
-                                   if p' then return []
-                                         else liftM2 (:) io loop
+untilM :: Monad m => m Bool -> m a -> m [a]
+untilM p io = p >>= \p' ->
+  if p' then return [] else liftM2 (:) io $ untilM p io
 
 -- | Like 'untilM', but ignoring the results of the 'IO' action.
-untilM_ :: IO Bool -> IO a -> IO ()
-untilM_ p io = loop where loop = p >>= flip unless (io >> loop)
+untilM_ :: Monad m => m Bool -> m a -> m ()
+untilM_ p io = p >>= (`unless` (io >> untilM_ p io))
+
+-- | Like 'untilM', but the predicate is not monadic.
+muntil :: Monad m => (a -> Bool) -> m a -> m [a]
+muntil p a = a >>= \a' ->
+  if p a' then return [] else (a':) `liftM` muntil p a
 
 -- | Convert an IPv4 address to a 'String' in dotted-quad form.
 inet_htoa :: HostAddress -> String

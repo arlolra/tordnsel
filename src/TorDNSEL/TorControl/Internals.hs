@@ -137,10 +137,11 @@ import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar
   (MVar, newMVar, newEmptyMVar, takeMVar, tryPutMVar, withMVar, modifyMVar_)
 import qualified Control.Exception as E
-import Control.Monad (when, unless, liftM, mzero, mplus)
+import Control.Monad (when, unless, liftM, mzero, mplus, forever)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)
 import Control.Monad.State (StateT(StateT), get, put, lift, evalStateT)
+import Control.Applicative
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)

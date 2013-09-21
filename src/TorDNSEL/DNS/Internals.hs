@@ -59,7 +59,7 @@ module TorDNSEL.DNS.Internals (
   ) where
 
 import qualified Control.Exception as E
-import Control.Monad (when, unless, replicateM, liftM2, liftM3, forM)
+import Control.Monad (when, unless, replicateM, liftM2, liftM3, forM, forever)
 import qualified Control.Monad.State as S
 import Control.Monad.Trans (lift)
 import Control.DeepSeq

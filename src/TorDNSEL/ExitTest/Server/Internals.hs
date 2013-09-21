@@ -24,7 +24,7 @@ import Prelude hiding (log)
 import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan, isEmptyChan)
 import Control.Concurrent.QSemN (QSemN, newQSemN, waitQSemN, signalQSemN)
 import qualified Control.Exception as E
-import Control.Monad (when, forM, foldM)
+import Control.Monad (when, forM, foldM, forever)
 import Control.Monad.Fix (fix)
 import Control.Monad.Trans (lift)
 import Control.Applicative

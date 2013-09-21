@@ -48,7 +48,7 @@ import Control.Arrow ((***), second)
 import Control.Concurrent.Chan
 import Control.Concurrent.MVar
 import qualified Control.Exception as E
-import Control.Monad (liftM, liftM2, ap)
+import Control.Monad (liftM, liftM2, ap, forever)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)
 import Data.Char (isSpace, toLower)
