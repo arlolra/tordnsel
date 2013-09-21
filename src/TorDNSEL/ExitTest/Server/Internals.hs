@@ -181,7 +181,7 @@ handleMessage conf s (NewClient sock addr) = do
   tid <- forkLinkIO . (`E.finally` signalQSemN (handlerSem s) 1) .
     E.bracket (socketToHandle sock ReadWriteMode) hClose $ \client -> do
       r <- timeout readTimeout . E.try $ do
-        r <- runMaybeT $ getRequest client
+        r <- getRequest client
         case r of
           Just cookie -> do
             now <- getCurrentTime

@@ -95,7 +95,6 @@ module TorDNSEL.TorControl.Internals (
   -- * Backend connection manager
   , IOMessage(..)
   , startIOManager
-  , ReplyType(..)
   , startSocketReader
 
   -- * Data types
@@ -130,6 +129,7 @@ module TorDNSEL.TorControl.Internals (
   , parseReplyCode
   , throwIfNotPositive
   , isPositive
+
   ) where
 
 import Control.Arrow (first, second)
@@ -155,6 +155,10 @@ import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)
 import Data.Typeable (Typeable)
 import System.IO (Handle, hClose, hSetBuffering, BufferMode(..), hFlush)
 import System.IO.Error (isEOFError)
+
+import           Data.Conduit
+import qualified Data.Conduit.Binary as CB
+import qualified Data.Conduit.List as CL
 
 import TorDNSEL.Control.Concurrent.Link
 import TorDNSEL.Control.Concurrent.Future
@@ -213,7 +217,6 @@ openConnection handle mbPasswd = do
        let conn' = Conn tellIOManager ioManagerTid protInfo confSettings
        authenticate mbPasswd conn'
        useFeature [VerboseNames] conn'
-       putStrLn "*X MRMLJ"
        return conn'
     ) `onException'` closeConnection' conn confSettings
 
@@ -823,45 +826,48 @@ startIOManager handle = do
 
     eventCode = B.takeWhile (/= ' ') . repText
 
--- | Reply types in a single sequence of replies.
-data ReplyType
-  = MidReply  !Reply -- ^ A reply preceding other replies.
-  | LastReply !Reply -- ^ The last reply.
-  deriving Show
-
 -- | Start a thread that reads replies from @handle@ and passes them to
 -- @sendRepliesToIOManager@, linking it to the calling thread.
 startSocketReader :: Handle -> ([Reply] -> IO ()) -> IO ThreadId
 startSocketReader handle sendRepliesToIOManager =
-  forkLinkIO . forever $ readReplies >>= sendRepliesToIOManager
+  forkLinkIO $ CB.sourceHandle handle $=
+               repliesC               $$
+               CL.mapM_ sendRepliesToIOManager
+
+-- | Conduit taking lines to 'Reply' blocks.
+replyC :: Conduit B.ByteString IO [Reply]
+replyC =
+    line0 []
   where
-    readReplies = do
-      line <- parseReplyLine =<< hGetLine handle crlf maxLineLength
-      case line of
-        MidReply reply  -> fmap (reply :) readReplies
-        LastReply reply -> return [reply]
 
-    parseReplyLine line =
-      either (E.throwIO . ProtocolError) (parseReplyLine' typ text)
-             (parseReplyCode code)
-      where (code,(typ,text)) = B.splitAt 1 `second` B.splitAt 3 line
+    line0 acc = await >>= return () `maybe` \line -> do
+      let (code, (typ, text)) = B.splitAt 1 `second` B.splitAt 3 line
+      code' <- either (monadThrow . ProtocolError) return $
+                      parseReplyCode code
+      case () of
+        _ | typ == B.pack "-" -> line0 (Reply code' text [] : acc)
+          | typ == B.pack "+" -> line0 . (: acc) . Reply code' text =<< rest []
+          | typ == B.pack " " -> do
+              yield $ reverse (Reply code' text [] : acc)
+              line0 []
+          | otherwise -> monadThrow $ ProtocolError $
+                            cat "Malformed reply line type " (esc 1 typ) '.'
 
-    parseReplyLine' typ text code
-      | typ == B.pack "-" = return . MidReply $ Reply code text []
-      | typ == B.pack "+" = (MidReply . Reply code text) `fmap` readData
-      | typ == B.pack " " = return . LastReply $ Reply code text []
-      | otherwise = E.throwIO . ProtocolError $
-                      cat "Malformed reply line type " (esc 1 typ) '.'
+    rest acc =
+      await >>= \mline -> case mline of
+          Nothing                        -> return $ reverse acc
+          Just line | B.null line        -> rest acc
+                    | line == B.pack "." -> return $ reverse (line:acc)
+                    | otherwise          -> rest (line:acc)
 
-    readData = do
-      line <- hGetLine handle (B.pack "\n") maxLineLength
-      case (if B.last line == '\r' then B.init else id) line of
-        line' | line == (B.pack ".\r")   -> return []
-              | any B.null [line, line'] -> readData
-              | otherwise                -> fmap (line' :) readData
-
-    crlf = B.pack "\r\n"
-    maxLineLength = 2^20
+-- | Conduit taking raw 'ByteString' to 'Reply' blocks.
+repliesC :: Conduit B.ByteString IO [Reply]
+repliesC =
+    CB.lines =$= CL.map strip =$= replyC
+  where
+    strip bs = case unsnoc bs of
+        Just (bs', '\r') -> bs'
+        _                -> bs
 
 --------------------------------------------------------------------------------
 -- Data types
