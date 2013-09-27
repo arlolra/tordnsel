@@ -32,7 +32,7 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import Data.Map (Map)
-import Data.Maybe (catMaybes, fromJust, isJust)
+import Data.Maybe
 import qualified Data.Set as S
 import Data.Set (Set)
 import Data.Time (UTCTime, getCurrentTime)

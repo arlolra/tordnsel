@@ -92,7 +92,7 @@ instance E.Exception DNSMessage
 -- it. Link the DNS server to the calling thread.
 startDNSServer :: DNSConfig -> IO DNSServer
 startDNSServer initConf = do
-  log Info "Starting DNS server." :: IO ()
+  log Info "Starting DNS server."
   fmap DNSServer . forkLinkIO . E.block . loop $ initConf
   where
     loop conf = do
@@ -108,7 +108,7 @@ startDNSServer initConf = do
           signal
           loop newConf
         Left (_,Terminate reason) -> do
-          log Info "Terminating DNS server." :: IO ()
+          log Info "Terminating DNS server."
           exit reason
         Right _ -> loop conf -- impossible
 

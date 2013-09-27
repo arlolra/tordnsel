@@ -26,7 +26,7 @@ import qualified Control.Exception as E
 import Control.Monad (when, forever)
 import Control.Monad.Fix (fix)
 import qualified Data.ByteString.Char8 as B
-import Data.Maybe (isJust, isNothing)
+import Data.Maybe
 import qualified Data.Set as S
 import Network.Socket (accept, socketToHandle, Socket)
 import System.IO (hClose, IOMode(ReadWriteMode))
@@ -118,7 +118,7 @@ startStatsServer listenSock = do
               let newHandlers = S.delete tid (handlers s)
               case terminateReason s of
                 -- all the handlers have finished, so let's exit
-                Just exitReason | S.null newHandlers -> exit exitReason
+                Just reason | S.null newHandlers -> exit reason
                 _ -> loop s { handlers = newHandlers }
           | isAbnormal reason -> exit reason
           | otherwise -> loop s

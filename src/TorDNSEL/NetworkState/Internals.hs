@@ -67,7 +67,7 @@ import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString.Char8 (ByteString)
 import Data.List (foldl')
-import Data.Maybe (mapMaybe, isJust, fromMaybe)
+import Data.Maybe
 import qualified Data.Map as M
 import Data.Map (Map)
 import qualified Data.Set as S

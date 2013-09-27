@@ -145,10 +145,9 @@ import Control.Applicative
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
-import Data.Dynamic (Dynamic, fromDynamic)
 import Data.List (find)
 import qualified Data.Map as M
-import Data.Maybe (fromMaybe, maybeToList, listToMaybe, isNothing, isJust)
+import Data.Maybe
 import qualified Data.Sequence as S
 import Data.Sequence ((<|), ViewR((:>)), viewr)
 import Data.Time (UTCTime, TimeZone, localTimeToUTC, getCurrentTimeZone)

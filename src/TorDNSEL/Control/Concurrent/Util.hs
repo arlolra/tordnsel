@@ -15,12 +15,10 @@ module TorDNSEL.Control.Concurrent.Util where
 import qualified Control.Exception as E
 import Data.Functor ( (<$) )
 import Control.Concurrent.MVar (MVar, newEmptyMVar, takeMVar, putMVar, tryPutMVar)
-import Data.Dynamic (Dynamic)
 import Data.Maybe (isJust)
 import System.Timeout
 
 import TorDNSEL.Control.Concurrent.Link
-import TorDNSEL.Util
 
 -- | A type representing a handle to a thread.
 class Thread a where

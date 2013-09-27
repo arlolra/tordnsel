@@ -134,7 +134,7 @@ fromExitSignal _ = Nothing
 -- | The default action used to signal a thread. Abnormal 'ExitReason's are
 -- sent to the thread and normal exits are ignored.
 defaultSignal :: C.ThreadId -> ThreadId -> ExitReason -> IO ()
-defaultSignal dst src NormalExit = return ()
+defaultSignal _   _   NormalExit = return ()
 defaultSignal dst src e          = E.throwTo dst $ ExitSignal src e
 
 -- | Initialize the state supporting links and monitors. It is an error to call
@@ -239,8 +239,8 @@ forkLinkIO' shouldLink io = E.mask $ \restore -> do
   return childId
 
   where
-    forkHandler io = E.mask_ . C.forkIO $
-      (() <$ io) `E.catch` \(e :: E.SomeException) -> return ()
+    forkHandler a = E.mask_ . C.forkIO $
+      (() <$ a) `E.catch` \(_ :: E.SomeException) -> return ()
 
 -- | Establish a bidirectional link between the calling thread and a given
 -- thread. If either thread terminates, an exit signal will be sent to the other

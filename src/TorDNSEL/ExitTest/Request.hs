@@ -26,13 +26,11 @@ module TorDNSEL.ExitTest.Request (
   , cookieLen
   ) where
 
-import Control.Arrow ((***), second)
+import Control.Arrow ((***))
 import Control.Applicative
 import Control.Monad
-import Control.Monad.Trans (lift, liftIO)
 import Data.Monoid
 import qualified Data.ByteString.Char8 as B
-import qualified Data.ByteString.Lazy as BL
 import Data.Char (isSpace, toLower)
 import qualified Data.Map as M
 import System.IO (Handle)

@@ -42,7 +42,6 @@ import qualified Control.Exception as E
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 import Data.ByteString (ByteString)
-import Data.Dynamic (Dynamic, fromDynamic)
 import Data.Typeable (Typeable)
 import Network.Socket (HostAddress)
 import System.IO (Handle, BufferMode(NoBuffering), hClose, hSetBuffering)

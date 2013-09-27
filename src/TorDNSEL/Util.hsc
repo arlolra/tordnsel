@@ -109,25 +109,19 @@ module TorDNSEL.Util (
 
 import Control.Arrow ((&&&), first, second)
 import Control.Applicative
+import Control.Monad
 import qualified Control.Exception as E
-import Control.Monad.Error
-  (Error(..), MonadError(..), MonadTrans(..), MonadIO(..))
+import Control.Monad.Error (Error(..), MonadError(..), MonadTrans(..), MonadIO(..))
 import qualified Control.Monad.State as State
-import Control.Monad.State
-  (MonadState, liftM, liftM2, zipWithM_, when, unless, guard, MonadPlus(..))
-import Data.Array.ST (runSTUArray, newArray_, readArray, writeArray)
-import Data.Array.Unboxed ((!))
+import Control.Monad.State (MonadState)
 import Data.Bits ((.&.), (.|.), shiftL, shiftR)
 import Data.Char
   (intToDigit, showLitChar, isPrint, isControl, chr, ord, digitToInt, isAscii)
-import Data.Dynamic (Dynamic)
 import Data.List (foldl', intersperse)
-import Data.Maybe (mapMaybe)
 import Data.Monoid
 import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Internal as B (c2w)
-import qualified Data.ByteString as B (hGetSome)
 import Data.ByteString (ByteString)
 import qualified Data.Map as M
 import Data.Ratio (numerator, denominator, (%))
@@ -143,7 +137,6 @@ import System.Directory (doesFileExist, removeFile)
 import System.Environment (getProgName)
 import System.Exit (exitWith, ExitCode)
 import System.IO (Handle, hPutStr)
-import System.IO.Error (isEOFError)
 import System.Posix.Files (setFileMode)
 import System.Posix.Types (FileMode)
 import Text.Printf (printf)

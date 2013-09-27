@@ -58,7 +58,6 @@ import Control.Concurrent.Chan (Chan, newChan, writeChan, readChan)
 import qualified Control.Exception as E
 import Control.Monad (replicateM_, guard, when)
 import qualified Data.ByteString.Char8 as B
-import Data.Dynamic (fromDynamic)
 import qualified Data.Foldable as F
 import Data.List (foldl', unfoldr, mapAccumL)
 import qualified Data.Map as M
@@ -153,7 +152,7 @@ data TestStatus
 -- thread.
 startExitTestInitiator :: ExitTestInitiatorConfig -> IO ExitTestInitiator
 startExitTestInitiator initConf = do
-  log Info "Starting exit test initiator." :: IO ()
+  log Info "Starting exit test initiator."
   chan <- newChan
   initiatorTid <- forkLinkIO $ do
     setTrapExit ((writeChan chan .) . Exit)
@@ -172,15 +171,15 @@ startExitTestInitiator initConf = do
       | TestWaiting rid ports published <- testStatus s
       , canRunExitTest conf s ports = do
           log Info "Forking exit test clients for router " rid
-                   " ports " ports '.' :: IO ()
+                   " ports " ports '.'
           newClients <- mapM (forkTestClient conf rid published) ports
           let newRunningClients = foldl' (flip Set.insert) (runningClients s)
                                          newClients
           log Info "Exit test clients currently running: "
-                   (Set.size newRunningClients) '.' :: IO ()
+                   (Set.size newRunningClients) '.'
           if Q.length (pendingTests s) == 0
             then do
-              log Info "Pending exit tests: 0." :: IO ()
+              log Info "Pending exit tests: 0."
               loop conf s { runningClients = newRunningClients
                           , testStatus = NoTestsPending }
             else do
@@ -201,7 +200,7 @@ handleMessage
 handleMessage conf s (NewDirInfo routers)
   | nRouterTests == 0 = return (conf, s)
   | otherwise = do
-      log Info "Scheduling exit tests for " nRouterTests " routers." :: IO ()
+      log Info "Scheduling exit tests for " nRouterTests " routers."
       now <- getCurrentTime
       let newS = s { pendingTests = newPendingTests
                    , testHistory = appendTestsToHistory now nRouterTests .
@@ -237,7 +236,7 @@ handleMessage conf s (Reconfigure reconf signal) = do
   return (newConf, s)
 
 handleMessage _ s (Terminate reason) = do
-  log Info "Terminating exit test initiator." :: IO ()
+  log Info "Terminating exit test initiator."
   F.forM_ (runningClients s) $ \client ->
     terminateThread Nothing client (killThread client)
   exit reason
@@ -251,13 +250,13 @@ handleMessage conf s (Exit tid reason)
       routers <- nsRouters `fmap` eticfGetNetworkState conf
       case testsToExecute conf routers (pendingTests s) of
         Nothing -> do
-          log Info "Pending exit tests: 0." :: IO ()
+          log Info "Pending exit tests: 0."
           return (conf, s { pendingTests = Q.empty
                           , testStatus = NoTestsPending })
         Just (rid,ports,published,newPendingTests) -> do
-          log Info "Pending exit tests: " (Q.length newPendingTests + 1) '.' :: IO ()
+          log Info "Pending exit tests: " (Q.length newPendingTests + 1) '.'
           log Debug "Waiting to run exit test for router " rid
-                    " ports " ports '.' :: IO ()
+                    " ports " ports '.'
           return (conf, s { pendingTests = newPendingTests
                           , testStatus = TestWaiting rid ports published })
   -- Periodically, add every eligible router to the exit test queue. This should
@@ -372,13 +371,13 @@ forkTestClient conf rid published port =
               return ()
     case r of
       Left (E.fromException -> Just (e :: SocksError)) -> do
-        log Info "Exit test for router " rid " port " port " failed: " e :: IO ()
+        log Info "Exit test for router " rid " port " port " failed: " e
         E.throwIO e
       Left (E.fromException -> Just (e :: E.IOException)) -> do
         log Warn "Exit test for router " rid " port " port " failed : " e
                  ". This might indicate a problem with making application \
                  \connections through Tor. Is Tor running? Is its SocksPort \
-                 \listening on " (eticfSocksServer conf) '?' :: IO ()
+                 \listening on " (eticfSocksServer conf) '?'
         E.throwIO e
       Left e -> E.throwIO e
       Right Nothing ->
@@ -402,8 +401,8 @@ forkTestTimer :: InitiatorState -> IO ThreadId
 forkTestTimer s = forkLinkIO $ do
   log Debug "Total routers scheduled in exit test history: "
             (nTotalRouters $ testHistory s) ". "
-            (show . F.toList . historySeq $ testHistory s) :: IO ()
-  log Info "Running next exit test in " currentInterval " microseconds." :: IO ()
+            (show . F.toList . historySeq $ testHistory s)
+  log Info "Running next exit test in " currentInterval " microseconds."
   threadDelay $ fromIntegral currentInterval
   where
     currentInterval = currentTestInterval nPending (testHistory s)
