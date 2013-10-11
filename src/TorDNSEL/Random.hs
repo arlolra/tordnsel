@@ -26,7 +26,7 @@ import System.Directory (doesFileExist)
 import System.IO (Handle, openFile, IOMode(ReadMode))
 
 import Foreign (Ptr, Word8, withForeignPtr, plusPtr)
-import Foreign.C.Types (CInt)
+import Foreign.C.Types (CInt(..))
 
 import TorDNSEL.Util
 

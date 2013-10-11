@@ -33,7 +33,7 @@ import Data.Bits ((.|.))
 import qualified Data.ByteString.Char8 as B
 import Data.List (foldl')
 import Data.Time (UTCTime, getCurrentTime)
-import Foreign.C (CString, CInt, withCString)
+import Foreign.C (CString, CInt(..), withCString)
 import System.IO
   (Handle, stdout, stderr, openFile, IOMode(AppendMode), hFlush, hClose)
 import System.IO.Unsafe (unsafePerformIO)

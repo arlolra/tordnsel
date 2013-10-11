@@ -108,7 +108,7 @@ import System.Posix.Types (UserID, GroupID)
 import System.Posix.User
   ( getEffectiveUserID, UserEntry(userID), GroupEntry(groupID)
   , getUserEntryForName, getGroupEntryForName, setUserID, setGroupID )
-import Foreign.C (CString, CInt, withCString)
+import Foreign.C (CString, CInt(..), withCString)
 
 import TorDNSEL.Config
 import TorDNSEL.Control.Concurrent.Link
