@@ -1,7 +1,5 @@
 {-# LANGUAGE ForeignFunctionInterface, OverlappingInstances, UndecidableInstances #-}
-{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-orphans -Wwarn #-}
---                                                        ^^^^^^
---                                    XXX: findSubstrings is deprecated
+{-# OPTIONS_GHC -fno-warn-type-defaults -fno-warn-orphans #-}
 
 -----------------------------------------------------------------------------
 -- |
@@ -63,7 +61,6 @@ module TorDNSEL.Util (
   , inBoundsOf
   , htonl
   , ntohl
-  , splitByDelimiter
   , showUTCTime
 
   -- * Conduit utilities
@@ -428,16 +425,6 @@ frameC delim = loop $ B.pack "" where
       case B.breakSubstring delim $ acc <> bs of
             (h, t) | B.null t  -> loop h
                    | otherwise -> h <$ C.leftover (B.drop (B.length delim) t)
-
--- | Split @bs@ into pieces delimited by @delimiter@, consuming the delimiter.
--- The result for overlapping delimiters is undefined.
-splitByDelimiter :: ByteString -> ByteString -> [ByteString]
-splitByDelimiter delimiter bs = subst (-len : B.findSubstrings delimiter bs)
-  where
-    subst (x:xs@(y:_)) = B.take (y-x-len) (B.drop (x+len) bs) : subst xs
-    subst [x]          = [B.drop (x+len) bs]
-    subst []           = error "splitByDelimiter: empty list"
-    len = B.length delimiter
 
 -- | Convert a 'UTCTime' to a string in ISO 8601 format.
 showUTCTime :: UTCTime -> String
