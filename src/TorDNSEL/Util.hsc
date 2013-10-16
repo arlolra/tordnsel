@@ -65,7 +65,8 @@ module TorDNSEL.Util (
 
   -- * Conduit utilities
   , takeC
-  , frameC
+  , frames
+  , frame
 
   -- * Network functions
   , bindUDPSocket
@@ -416,15 +417,34 @@ foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32
 takeC :: Monad m => Int -> C.ConduitM ByteString o m ByteString
 takeC = fmap (mconcat . BL.toChunks) . CB.take
 
--- | Take a prefix up to delimiter.
--- FIXME This is worst-case quadratic.
-frameC :: Monad m => ByteString -> C.ConduitM ByteString o m ByteString
-frameC delim = loop $ B.pack "" where
-  loop acc = C.await >>=
-    return acc `maybe` \bs ->
-      case B.breakSubstring delim $ acc <> bs of
-            (h, t) | B.null t  -> loop h
-                   | otherwise -> h <$ C.leftover (B.drop (B.length delim) t)
+-- | Take a "frame" - delimited sequence - from the input.
+-- Returns 'Nothing' if the delimiter does not appear before the stream ends.
+frame :: MonadIO m => ByteString -> C.ConduitM ByteString a m (Maybe ByteString)
+frame delim = input $ B.pack ""
+  where
+    input front = C.await >>=
+      (Nothing <$ C.leftover front) `maybe` \bs ->
+
+        let (front', bs') = (<> bs) `second`
+              B.splitAt (B.length front - d_len + 1) front
+
+        in case B.breakSubstring delim bs' of
+          (part, rest) | B.null rest -> input (front' <> bs')
+                       | otherwise   -> do
+                          leftover $ B.drop d_len rest
+                          return $ Just $ front' <> part
+
+    d_len = B.length delim
+
+-- | Stream delimited chunks.
+frames :: MonadIO m => ByteString -> C.Conduit ByteString m ByteString
+frames delim = frame delim >>=
+                  return () `maybe` ((>> frames delim) . C.yield)
+
+leftover :: Monad m => ByteString -> C.Conduit ByteString m o
+leftover bs | B.null bs = return ()
+            | otherwise = C.leftover bs
+
 
 -- | Convert a 'UTCTime' to a string in ISO 8601 format.
 showUTCTime :: UTCTime -> String

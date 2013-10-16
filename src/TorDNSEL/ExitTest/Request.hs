@@ -30,6 +30,7 @@ import Control.Arrow ((***))
 import Control.Applicative
 import Control.Monad
 import Data.Monoid
+import Data.Maybe
 import qualified Data.ByteString.Char8 as B
 import Data.Char (isSpace, toLower)
 import qualified Data.Map as M
@@ -67,27 +68,27 @@ createRequest host port cookie =
 getRequest :: Handle -> IO (Maybe Cookie)
 getRequest client =
     CB.sourceHandle client $= CB.isolate maxReqLen $$ do
-      mh <- getHeaders
-      case checkHeaders mh of
+      reqline <- line
+      hs      <- accHeaders []
+      case checkHeaders reqline hs of
            Nothing -> return Nothing
            Just _  -> Just . Cookie <$> takeC cookieLen
 
   where
     maxReqLen = 2048 + cookieLen
-    line      = frameC "\r\n"
+    line      = fromMaybe "" <$> frame "\r\n"
 
-    getHeaders =
-        (,) <$> line
-            <*> (decodeHeaders <$> muntil B.null line)
-      where
-        decodeHeaders = M.fromList .
-          map ((B.map toLower *** B.dropWhile isSpace . B.tail)
-                . B.break (== ':'))
+    accHeaders hs = line >>= \ln ->
+      if ln == "" then return $ M.fromList hs
+                  else accHeaders (parseHeader ln : hs)
 
-    checkHeaders (reqLine, headers) = do
+    parseHeader = (B.map toLower *** B.dropWhile isSpace . B.tail) .
+                    B.break (== ':')
+
+    checkHeaders reqline headers = do
       contentType <- "content-type" `M.lookup` headers
       contentLen  <- readInt =<< "content-length" `M.lookup` headers
-      guard $ reqLine `elem` ["POST / HTTP/1.0", "POST / HTTP/1.1"]
+      guard $ reqline `elem` ["POST / HTTP/1.0", "POST / HTTP/1.1"]
       guard $ contentType == "application/octet-stream"
       guard $ contentLen == cookieLen
 

@@ -137,11 +137,10 @@ import Control.Concurrent.Chan (newChan, readChan, writeChan)
 import Control.Concurrent.MVar
   (MVar, newMVar, newEmptyMVar, takeMVar, tryPutMVar, withMVar, modifyMVar_)
 import qualified Control.Exception as E
-import Control.Monad (when, unless, liftM, mzero, mplus, forever)
+import Control.Monad (when, unless, liftM, mzero, mplus)
 import Control.Monad.Error (MonadError(..))
 import Control.Monad.Fix (fix)
 import Control.Monad.State (StateT(StateT), get, put, lift, evalStateT)
-import Control.Applicative
 import qualified Data.ByteString.Char8 as B
 import Data.ByteString (ByteString)
 import Data.Char (isSpace, isAlphaNum, isDigit, isAlpha, toLower)
@@ -830,13 +829,13 @@ startIOManager handle = do
 startSocketReader :: Handle -> ([Reply] -> IO ()) -> IO ThreadId
 startSocketReader handle sendRepliesToIOManager =
   forkLinkIO $ CB.sourceHandle handle $=
-               repliesC               $$
+               c_replies              $$
                CL.mapM_ sendRepliesToIOManager
 
--- | Conduit taking lines to 'Reply' blocks.
-replyC :: Conduit B.ByteString IO [Reply]
-replyC =
-    line0 []
+-- | Stream decoded 'Reply' groups.
+c_replies :: Conduit B.ByteString IO [Reply]
+c_replies =
+    frames (B.pack "\r\n") =$= line0 []
   where
 
     line0 acc = await >>= return () `maybe` \line -> do
@@ -844,13 +843,13 @@ replyC =
       code' <- either (monadThrow . ProtocolError) return $
                       parseReplyCode code
       case () of
-        _ | typ == B.pack "-" -> line0 (Reply code' text [] : acc)
-          | typ == B.pack "+" -> line0 . (: acc) . Reply code' text =<< rest []
-          | typ == B.pack " " -> do
-              yield $ reverse (Reply code' text [] : acc)
-              line0 []
-          | otherwise -> monadThrow $ ProtocolError $
-                            cat "Malformed reply line type " (esc 1 typ) '.'
+        _ | typ == B.pack "-" -> line0 (acc' [])
+          | typ == B.pack "+" -> rest [] >>= line0 . acc'
+          | typ == B.pack " " -> yield (reverse $ acc' []) >> line0 []
+          | otherwise         -> monadThrow $
+              ProtocolError $ cat "Malformed reply line type " (esc 1 typ) '.'
+          where
+            acc' xs = Reply code' text xs : acc
 
     rest acc =
       await >>= \mline -> case mline of
@@ -858,15 +857,6 @@ replyC =
           Just line | B.null line        -> rest acc
                     | line == B.pack "." -> return $ reverse (line:acc)
                     | otherwise          -> rest (line:acc)
-
--- | Conduit taking raw 'ByteString' to 'Reply' blocks.
-repliesC :: Conduit B.ByteString IO [Reply]
-repliesC =
-    CB.lines =$= CL.map strip =$= replyC
-  where
-    strip bs = case unsnoc bs of
-        Just (bs', '\r') -> bs'
-        _                -> bs
 
 --------------------------------------------------------------------------------
 -- Data types
