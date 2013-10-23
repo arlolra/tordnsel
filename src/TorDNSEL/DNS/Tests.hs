@@ -16,7 +16,7 @@ module TorDNSEL.DNS.Tests (tests) where
 
 import Control.Monad (replicateM)
 import qualified Data.ByteString as B
-import qualified Data.ByteString.Base as B
+import qualified Data.ByteString.Internal as B (c2w)
 import qualified Data.ByteString.Lazy as L
 import Test.HUnit (Test(..), (@=?))
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings  #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      : TorDNSEL.DNS.Server.Tests
