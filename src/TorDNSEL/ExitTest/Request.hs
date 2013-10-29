@@ -68,17 +68,16 @@ createRequest host port cookie =
 getRequest :: Handle -> IO (Maybe Cookie)
 getRequest client =
     CB.sourceHandle client $= CB.isolate maxReqLen $$ do
-      reqline <- line
+      reqline <- c_line_crlf
       hs      <- accHeaders []
       case checkHeaders reqline hs of
            Nothing -> return Nothing
-           Just _  -> Just . Cookie <$> takeC cookieLen
+           Just _  -> Just . Cookie <$> c_take cookieLen
 
   where
     maxReqLen = 2048 + cookieLen
-    line      = fromMaybe "" <$> frame "\r\n"
 
-    accHeaders hs = line >>= \ln ->
+    accHeaders hs = c_line_crlf >>= \ln -> do
       if ln == "" then return $ M.fromList hs
                   else accHeaders (parseHeader ln : hs)
 

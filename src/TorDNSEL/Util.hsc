@@ -64,9 +64,10 @@ module TorDNSEL.Util (
   , showUTCTime
 
   -- * Conduit utilities
-  , takeC
-  , frames
-  , frame
+  , c_take
+  , c_breakDelim
+  , c_line_crlf
+  , c_lines_any
 
   -- * Network functions
   , bindUDPSocket
@@ -141,6 +142,7 @@ import Text.Printf (printf)
 import Data.Binary (Binary(..))
 
 import qualified Data.Conduit as C
+import qualified Data.Conduit.List as CL
 import qualified Data.Conduit.Binary as CB
 
 #include <netinet/in.h>
@@ -414,38 +416,6 @@ instance Error e => MonadError e Maybe where
 foreign import ccall unsafe "htonl" htonl :: Word32 -> Word32
 foreign import ccall unsafe "ntohl" ntohl :: Word32 -> Word32
 
-takeC :: Monad m => Int -> C.ConduitM ByteString o m ByteString
-takeC = fmap (mconcat . BL.toChunks) . CB.take
-
--- | Take a "frame" - delimited sequence - from the input.
--- Returns 'Nothing' if the delimiter does not appear before the stream ends.
-frame :: MonadIO m => ByteString -> C.ConduitM ByteString a m (Maybe ByteString)
-frame delim = input $ B.pack ""
-  where
-    input front = C.await >>=
-      (Nothing <$ C.leftover front) `maybe` \bs ->
-
-        let (front', bs') = (<> bs) `second`
-              B.splitAt (B.length front - d_len + 1) front
-
-        in case B.breakSubstring delim bs' of
-          (part, rest) | B.null rest -> input (front' <> bs')
-                       | otherwise   -> do
-                          leftover $ B.drop d_len rest
-                          return $ Just $ front' <> part
-
-    d_len = B.length delim
-
--- | Stream delimited chunks.
-frames :: MonadIO m => ByteString -> C.Conduit ByteString m ByteString
-frames delim = frame delim >>=
-                  return () `maybe` ((>> frames delim) . C.yield)
-
-leftover :: Monad m => ByteString -> C.Conduit ByteString m o
-leftover bs | B.null bs = return ()
-            | otherwise = C.leftover bs
-
-
 -- | Convert a 'UTCTime' to a string in ISO 8601 format.
 showUTCTime :: UTCTime -> String
 showUTCTime time = printf "%s %02d:%02d:%s" date hours mins secStr'
@@ -457,6 +427,48 @@ showUTCTime time = printf "%s %02d:%02d:%s" date hours mins secStr'
     secs = fromRational (frac % d) + fromIntegral sec
     secStr = printf "%02.4f" (secs :: Double)
     secStr' = (if length secStr < 7 then ('0':) else id) secStr
+
+--------------------------------------------------------------------------------
+-- Conduit utilities
+
+-- | 'CB.take' for strict 'ByteString's.
+c_take :: Monad m => Int -> C.ConduitM ByteString o m ByteString
+c_take = fmap (mconcat . BL.toChunks) . CB.take
+
+-- | Read until the delimiter and return the parts before and after, not
+-- including delimiter.
+c_breakDelim :: Monad m
+             => ByteString
+             -> C.ConduitM ByteString o m (Maybe (ByteString, ByteString))
+c_breakDelim delim = wait_input $ B.empty
+  where
+    wait_input front = C.await >>=
+      (Nothing <$ C.leftover front) `maybe` \bs ->
+
+        let (front', bs') = (<> bs) `second`
+              B.splitAt (B.length front - d_len + 1) front
+
+        in case B.breakSubstring delim bs' of
+            (part, rest) | B.null rest -> wait_input $ front' <> bs'
+                         | otherwise   ->
+                           return $ Just (front' <> part, B.drop d_len rest)
+
+    d_len = B.length delim
+
+
+-- | Take a CRLF-delimited line from the input.
+c_line_crlf :: Monad m => C.ConduitM ByteString o m ByteString
+c_line_crlf =
+  c_breakDelim (B.pack "\r\n") >>=
+    return B.empty `maybe` \(line, rest) -> line <$ C.leftover rest
+
+-- | Stream lines delimited by either LF or CRLF.
+c_lines_any :: Monad m => C.Conduit ByteString m ByteString
+c_lines_any = CB.lines C.=$= CL.map strip
+  where
+    strip bs = case unsnoc bs of
+        Just (bs', '\r') -> bs'
+        _                -> bs
 
 --------------------------------------------------------------------------------
 -- Network functions

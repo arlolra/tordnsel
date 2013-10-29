@@ -834,8 +834,7 @@ startSocketReader handle sendRepliesToIOManager =
 
 -- | Stream decoded 'Reply' groups.
 c_replies :: Conduit B.ByteString IO [Reply]
-c_replies =
-    frames (B.pack "\r\n") =$= line0 []
+c_replies = c_lines_any =$= line0 []
   where
 
     line0 acc = await >>= return () `maybe` \line -> do
@@ -855,7 +854,7 @@ c_replies =
       await >>= \mline -> case mline of
           Nothing                        -> return $ reverse acc
           Just line | B.null line        -> rest acc
-                    | line == B.pack "." -> return $ reverse (line:acc)
+                    | line == B.pack "." -> return $ reverse acc
                     | otherwise          -> rest (line:acc)
 
 --------------------------------------------------------------------------------
