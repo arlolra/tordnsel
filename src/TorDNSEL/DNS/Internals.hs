@@ -63,6 +63,7 @@ import qualified Control.Exception as E
 import Control.Monad (when, unless, replicateM, liftM2, liftM3, forM)
 import qualified Control.Monad.State as S
 import Control.Monad.Trans (lift)
+import Control.DeepSeq
 import Data.Bits ((.|.), (.&.), xor, shiftL, shiftR, testBit, setBit)
 import Data.List (foldl')
 import qualified Data.ByteString as B
@@ -81,7 +82,6 @@ import Data.Binary.Get
   (runGet, getWord16be, getByteString, bytesRead, lookAhead, skip, isEmpty)
 import Data.Binary.Put (runPut, putWord16be, putByteString, PutM)
 
-import TorDNSEL.DeepSeq
 import TorDNSEL.Util
 
 --------------------------------------------------------------------------------
@@ -295,11 +295,11 @@ data Message = Message
     msgAdditional :: {-# UNPACK #-} ![ResourceRecord] }
   deriving (Eq, Show)
 
-instance DeepSeq Message where
-  deepSeq (Message a b c d e f g h i j k l m n) =
-    deepSeq a . deepSeq b . deepSeq c . deepSeq d . deepSeq e . deepSeq f .
-    deepSeq g . deepSeq h . deepSeq i . deepSeq j . deepSeq k . deepSeq l .
-    deepSeq m $ deepSeq n
+instance NFData Message where
+  rnf !msg = msgQuestion   msg `deepseq`
+             msgAnswers    msg `deepseq`
+             msgAuthority  msg `deepseq`
+             msgAdditional msg `deepseq` ()
 
 instance BinaryPacket Message where
   getPacket pkt = do
@@ -365,8 +365,8 @@ data Question = Question
     qClass :: {-# UNPACK #-} !Class }
   deriving (Eq, Show)
 
-instance DeepSeq Question where
-  deepSeq (Question a b c) = deepSeq a . deepSeq b $ deepSeq c
+instance NFData Question where
+  rnf !q = rnf (qName q)
 
 instance BinaryPacket Question where
   getPacket pkt = liftM3 Question (getPacket pkt) get get
@@ -436,6 +436,14 @@ data ResourceRecord
       rrData  :: {-# UNPACK #-} !ByteString }
   deriving (Eq, Show)
 
+instance NFData ResourceRecord where
+  rnf !rr = rrName rr `deepseq`
+      case rr of
+           A{}   -> aAddr rr `deepseq` ()
+           NS{}  -> nsDName rr `deepseq` ()
+           SOA{} -> soaMName rr `deepseq` soaRName rr `deepseq` ()
+           _     -> ()
+
 instance BinaryPacket ResourceRecord where
   getPacket pkt = do
     name   <- getPacket pkt
@@ -493,21 +501,12 @@ instance BinaryPacket ResourceRecord where
       putByteString rData
     incrOffset (10 + B.length rData)
 
-instance DeepSeq ResourceRecord where
-  deepSeq (A a b c) = deepSeq a . deepSeq b $ deepSeq c
-  deepSeq (NS a b c) = deepSeq a . deepSeq b $ deepSeq c
-  deepSeq (SOA a b c d e f g h i) =
-    deepSeq a . deepSeq b . deepSeq c . deepSeq d . deepSeq e .
-    deepSeq f . deepSeq g . deepSeq h $ deepSeq i
-  deepSeq (UnsupportedResourceRecord a b c d e) =
-    deepSeq a . deepSeq b . deepSeq c . deepSeq d $ deepSeq e
-
 -- | A domain name.
 newtype DomainName = DomainName [Label]
   deriving (Eq, Show)
 
-instance DeepSeq DomainName where
-  deepSeq (DomainName ls) = deepSeq ls
+instance NFData DomainName where
+  rnf (DomainName ls) = rnf ls
 
 instance BinaryPacket DomainName where
   -- Read a DomainName as a sequence of 'Label's ending with either a null label
@@ -545,6 +544,8 @@ instance BinaryPacket DomainName where
 newtype Label = Label { unLabel :: ByteString }
   deriving (Eq, Ord, Show)
 
+instance NFData Label where
+
 instance Binary Label where
   get = do
     len <- getWord8
@@ -553,9 +554,6 @@ instance Binary Label where
   put (Label label) = do
     putWord8 . fromIntegral . B.length $ label
     putByteString label
-
-instance DeepSeq Label where
-  deepSeq (Label bs) = deepSeq bs
 
 -- | A response code set by the name server.
 data RCode
@@ -570,7 +568,7 @@ data RCode
                    -- operation for policy reasons.
   deriving (Eq, Show)
 
-instance DeepSeq RCode where deepSeq = seq
+instance NFData RCode where
 
 -- | Specifies the kind of query in a message set by the originator.
 data OpCode
@@ -579,7 +577,7 @@ data OpCode
   | ServerStatusRequest -- ^ A server status request.
   deriving (Eq, Show)
 
-instance DeepSeq OpCode where deepSeq = seq
+instance NFData OpCode where
 
 -- | The TYPE or QTYPE values that appear in resource records or questions,
 -- respectively.
@@ -590,6 +588,8 @@ data Type
   | TAny                                   -- ^ A request for all records.
   | UnsupportedType {-# UNPACK #-} !Word16 -- ^ Any other type.
   deriving (Eq, Show)
+
+instance NFData Type where
 
 instance Binary Type where
   get = do
@@ -607,13 +607,6 @@ instance Binary Type where
   put TAny                = putWord16be 255
   put (UnsupportedType t) = put t
 
-instance DeepSeq Type where
-  deepSeq TA   = id
-  deepSeq TNS  = id
-  deepSeq TAny = id
-  deepSeq TSOA = id
-  deepSeq (UnsupportedType t) = deepSeq t
-
 -- | The CLASS or QCLASS values that appear in resource records or questions,
 -- respectively.
 data Class
@@ -621,6 +614,8 @@ data Class
   | UnsupportedClass {-# UNPACK #-} !Word16 -- ^ Any other class.
   deriving (Eq, Show)
   -- XXX support *
+
+instance NFData Class where
 
 instance Binary Class where
   get = do
@@ -631,7 +626,3 @@ instance Binary Class where
 
   put IN                   = putWord16be 1
   put (UnsupportedClass c) = put c
-
-instance DeepSeq Class where
-  deepSeq IN = id
-  deepSeq (UnsupportedClass c) = deepSeq c

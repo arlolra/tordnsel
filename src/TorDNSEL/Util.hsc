@@ -132,21 +132,12 @@ import Network.Socket
 import System.Directory (doesFileExist, removeFile)
 import System.Environment (getProgName)
 import System.Exit (exitWith, ExitCode)
-import System.IO (hPutStr)
+import System.IO (Handle, hPutStr)
 import System.IO.Error (isEOFError)
 import System.Posix.Files (setFileMode)
 import System.Posix.Types (FileMode)
 import Text.Printf (printf)
-
-import GHC.Handle
-  (wantReadableHandle, fillReadBuffer, readCharFromBuffer, ioe_EOF)
-import GHC.IOBase
-  ( Handle, Handle__(..), Buffer(..), readIORef, writeIORef
-  , BufferMode(NoBuffering) )
-
 import Data.Binary (Binary(..))
-
-import TorDNSEL.DeepSeq
 
 #include <netinet/in.h>
 
@@ -612,9 +603,6 @@ instance Show Port where
 instance Binary Port where
   get = Port `fmap` get
   put = put . unPort
-
-instance DeepSeq Port where
-  deepSeq = seq . unPort
 
 -- | Parse a port, returning the result or 'throwError' in the monad if parsing
 -- fails.

@@ -49,11 +49,12 @@ import Data.Typeable (Typeable)
 import Network.Socket (HostAddress)
 import System.IO (Handle, BufferMode(NoBuffering), hClose, hSetBuffering)
 
+import Control.DeepSeq
+
 import Data.Binary (Binary(..), getWord8, putWord8)
 import Data.Binary.Get (runGet)
 import Data.Binary.Put (runPut, putWord32be, putByteString)
 
-import TorDNSEL.DeepSeq
 import TorDNSEL.Util
 
 --------------------------------------------------------------------------------
@@ -97,8 +98,7 @@ data Response = Response
   , soRespPort :: {-# UNPACK #-} !Port        -- ^ The destination port.
   }
 
-instance DeepSeq Response where
-  deepSeq (Response a b c) = deepSeq a . deepSeq b $ deepSeq c
+instance NFData Response where
 
 -- | A Socks4 result code.
 data Result
@@ -117,8 +117,6 @@ instance Show Result where
                            \connect to identd on the client"
   show IdentdMismatch    = "Request rejected because the client program and \
                            \identd report different user-ids"
-
-instance DeepSeq Result where deepSeq = seq
 
 --------------------------------------------------------------------------------
 -- Serialization
