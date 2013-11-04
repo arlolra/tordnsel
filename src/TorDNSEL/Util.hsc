@@ -141,6 +141,7 @@ import System.Posix.Types (FileMode)
 import Text.Printf (printf)
 import Data.Binary (Binary(..))
 
+import           Data.Conduit (Pipe(..), Conduit, Sink)
 import qualified Data.Conduit as C
 import qualified Data.Conduit.List as CL
 import qualified Data.Conduit.Binary as CB
@@ -431,19 +432,25 @@ showUTCTime time = printf "%s %02d:%02d:%s" date hours mins secStr'
 --------------------------------------------------------------------------------
 -- Conduit utilities
 
+-- ## Conduit 0.4.2 shim
+-- ##
+leftover :: Monad m => i -> Conduit i m o
+leftover i = Done (Just i) ()
+-- ##
+
 -- | 'CB.take' for strict 'ByteString's.
-c_take :: Monad m => Int -> C.ConduitM ByteString o m ByteString
+c_take :: Monad m => Int -> Sink ByteString m ByteString
 c_take = fmap (mconcat . BL.toChunks) . CB.take
 
 -- | Read until the delimiter and return the parts before and after, not
 -- including delimiter.
 c_breakDelim :: Monad m
              => ByteString
-             -> C.ConduitM ByteString o m (Maybe (ByteString, ByteString))
+             -> Sink ByteString m (Maybe (ByteString, ByteString))
 c_breakDelim delim = wait_input $ B.empty
   where
     wait_input front = C.await >>=
-      (Nothing <$ C.leftover front) `maybe` \bs ->
+      (Nothing <$ leftover front) `maybe` \bs ->
 
         let (front', bs') = (<> bs) `second`
               B.splitAt (B.length front - d_len + 1) front
@@ -455,15 +462,14 @@ c_breakDelim delim = wait_input $ B.empty
 
     d_len = B.length delim
 
-
 -- | Take a CRLF-delimited line from the input.
-c_line_crlf :: Monad m => C.ConduitM ByteString o m ByteString
+c_line_crlf :: Monad m => Sink ByteString m ByteString
 c_line_crlf =
   c_breakDelim (B.pack "\r\n") >>=
-    return B.empty `maybe` \(line, rest) -> line <$ C.leftover rest
+    return B.empty `maybe` \(line, rest) -> line <$ leftover rest
 
 -- | Stream lines delimited by either LF or CRLF.
-c_lines_any :: Monad m => C.Conduit ByteString m ByteString
+c_lines_any :: Monad m => Conduit ByteString m ByteString
 c_lines_any = CB.lines C.=$= CL.map strip
   where
     strip bs = case unsnoc bs of

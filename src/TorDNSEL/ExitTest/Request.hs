@@ -30,7 +30,6 @@ import Control.Arrow ((***))
 import Control.Applicative
 import Control.Monad
 import Data.Monoid
-import Data.Maybe
 import qualified Data.ByteString.Char8 as B
 import Data.Char (isSpace, toLower)
 import qualified Data.Map as M

@@ -839,14 +839,13 @@ c_replies = c_lines_any =$= line0 []
 
     line0 acc = await >>= return () `maybe` \line -> do
       let (code, (typ, text)) = B.splitAt 1 `second` B.splitAt 3 line
-      code' <- either (monadThrow . ProtocolError) return $
-                      parseReplyCode code
+      code' <- either throwProtoError return $ parseReplyCode code
       case () of
         _ | typ == B.pack "-" -> line0 (acc' [])
           | typ == B.pack "+" -> rest [] >>= line0 . acc'
           | typ == B.pack " " -> yield (reverse $ acc' []) >> line0 []
-          | otherwise         -> monadThrow $
-              ProtocolError $ cat "Malformed reply line type " (esc 1 typ) '.'
+          | otherwise         -> throwProtoError $
+               cat "Malformed reply line type " (esc 1 typ) '.'
           where
             acc' xs = Reply code' text xs : acc
 
@@ -856,6 +855,8 @@ c_replies = c_lines_any =$= line0 []
           Just line | B.null line        -> rest acc
                     | line == B.pack "." -> return $ reverse acc
                     | otherwise          -> rest (line:acc)
+
+    throwProtoError = lift . E.throw . ProtocolError
 
 --------------------------------------------------------------------------------
 -- Data types
