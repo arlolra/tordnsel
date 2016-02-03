@@ -4,7 +4,7 @@ For an overview, see the man page at doc/tordnsel.8.
 
 The design document for TorDNSEL can be found at:
 
-    https://gitweb.torproject.org/tordnsel.git/blob/HEAD:/doc/torel-design.txt
+    https://gitweb.torproject.org/tordnsel.git/tree/doc/torel-design.txt
 
 Currently, only query type 1 from torel-design.txt is supported:
 
