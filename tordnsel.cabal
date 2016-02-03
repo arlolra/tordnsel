@@ -59,7 +59,8 @@ Other-Modules:   TorDNSEL.Config,
 HS-Source-Dirs:  src
 Includes:        sys/types.h, unistd.h, sysexits.h, netinet/in.h, openssl/rand.h
 Extra-Libraries: crypto
-GHC-Options:     -O2 -Wall -Werror -DVERSION="0.1.1-dev"
+GHC-Options:     -O2 -Wall -Werror
+CPP-Options:     -DVERSION="0.1.1-dev"
 
 Executable:      runtests
 Buildable:       False
