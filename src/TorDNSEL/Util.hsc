@@ -531,6 +531,10 @@ bindListeningUnixDomainStreamSocket sockPath mode = do
     listen sock sOMAXCONN
     return sock
 
+-- network-2.3 compat
+--
+deriving instance Ord SockAddr
+
 --------------------------------------------------------------------------------
 -- Monads
 
