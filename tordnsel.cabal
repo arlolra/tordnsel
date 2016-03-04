@@ -83,4 +83,4 @@ Other-Modules:   TorDNSEL.Config.Tests
 HS-Source-Dirs:  src
 Includes:        netinet/in.h, openssl/rand.h
 Extra-Libraries: crypto
-GHC-Options:     -fasm -Wall -Werror -fno-warn-missing-signatures
+GHC-Options:     -Wall -Werror -fno-warn-missing-signatures
