@@ -141,7 +141,7 @@ import System.Posix.Types (FileMode)
 import Text.Printf (printf)
 import Data.Binary (Binary(..))
 
-import           Data.Conduit (Pipe(..), Conduit, Sink)
+import           Data.Conduit.Internal (Conduit, Sink)
 import qualified Data.Conduit as C
 import qualified Data.Conduit.List as CL
 import qualified Data.Conduit.Binary as CB
@@ -432,12 +432,6 @@ showUTCTime time = printf "%s %02d:%02d:%s" date hours mins secStr'
 --------------------------------------------------------------------------------
 -- Conduit utilities
 
--- ## Conduit 0.4.2 shim
--- ##
-leftover :: Monad m => i -> Conduit i m o
-leftover i = Done (Just i) ()
--- ##
-
 -- | 'CB.take' for strict 'ByteString's.
 c_take :: Monad m => Int -> Sink ByteString m ByteString
 c_take = fmap (mconcat . BL.toChunks) . CB.take
@@ -450,7 +444,7 @@ c_breakDelim :: Monad m
 c_breakDelim delim = wait_input $ B.empty
   where
     wait_input front = C.await >>=
-      (Nothing <$ leftover front) `maybe` \bs ->
+      (Nothing <$ C.leftover front) `maybe` \bs ->
 
         let (front', bs') = (<> bs) `second`
               B.splitAt (B.length front - d_len + 1) front
@@ -466,7 +460,7 @@ c_breakDelim delim = wait_input $ B.empty
 c_line_crlf :: Monad m => Sink ByteString m ByteString
 c_line_crlf =
   c_breakDelim (B.pack "\r\n") >>=
-    return B.empty `maybe` \(line, rest) -> line <$ leftover rest
+    return B.empty `maybe` \(line, rest) -> line <$ C.leftover rest
 
 -- | Stream lines delimited by either LF or CRLF.
 c_lines_any :: Monad m => Conduit ByteString m ByteString
@@ -510,10 +504,6 @@ bindListeningUnixDomainStreamSocket sockPath mode = do
     setFileMode sockPath mode
     listen sock sOMAXCONN
     return sock
-
--- network-2.3 compat
---
-deriving instance Ord SockAddr
 
 --------------------------------------------------------------------------------
 -- Monads

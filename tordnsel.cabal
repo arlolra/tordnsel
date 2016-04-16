@@ -11,12 +11,14 @@ License-File:    LICENSE
 Homepage:        http://p56soo2ibjkx23xo.onion/
 Package-URL:     https://archive.torproject.org/tor-package-archive/tordnsel/tordnsel-0.1.1.tar.gz
 Author:          tup
-Maintainer:      tup.tuple@googlemail.com, lunar@debian.org, andrew@torproject.org
+Maintainer:      tup.tuple@googlemail.com, lunar@debian.org
 Build-Type:      Simple
-Build-Depends:   base>=4.5, network==2.3.*, mtl==2.*, unix>=2.5, stm>=2.3,
-                 time>=1.4, HUnit>=1.2, binary>=0.5, bytestring>=0.9, array>=0.4,
-                 directory>=1.1, containers>=0.4, conduit==0.4.2, deepseq>=1.3
-Tested-With:     GHC==7.4, GHC==7.6
+Build-Depends:   array>=0.4, base>=4.5, binary>=0.7, bytestring>=0.10,
+                 containers>=0.5, deepseq>=1.3, directory>=1.2, time>=1.4,
+                 unix>=2.5,
+                 HUnit==1.2.*, conduit==1.1.*, conduit-extra==1.1.*,
+                 mtl==2.1.*, network==2.4.*, stm==2.4.*
+Tested-With:     GHC==7.6
 Data-Files:      config/tordnsel.conf.sample, contrib/cacti-input.pl,
                  contrib/tordnsel-init.d-script.sample, doc/tordnsel.8
 
@@ -59,7 +61,7 @@ Other-Modules:   TorDNSEL.Config
 HS-Source-Dirs:  src
 Includes:        sys/types.h, unistd.h, sysexits.h, netinet/in.h, openssl/rand.h
 Extra-Libraries: crypto
-GHC-Options:     -O2 -funbox-strict-fields -fno-warn-unused-do-bind -Wall -Werror
+GHC-Options:     -O2 -funbox-strict-fields -fno-warn-unused-do-bind -Wall
 CPP-Options:     -DVERSION="0.1.1-dev"
 Extensions:      FlexibleContexts
                  FlexibleInstances

@@ -22,10 +22,10 @@ Presumably, users of software with built-in support for DNSBLs would configure
 
 Dependencies
 
-  TorDNSEL requires GHC 6.8. If you're running Debian Lenny:
+  TorDNSEL requires GHC 7.6. If you're running Debian Jessie:
 
-    apt-get install ghc6 libghc6-mtl-dev libghc6-network-dev libghc6-time-dev \
-      libghc6-hunit-dev libghc6-stm-dev libghc6-binary-dev
+    apt-get install ghc libghc-network-dev libghc-mtl-dev libghc-stm-dev
+      libghc-hunit-dev libghc-conduit-dev libghc-conduit-extra-dev
 
   OpenSSL's libcrypto is required for strong random numbers:
 
