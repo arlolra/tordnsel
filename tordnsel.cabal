@@ -77,13 +77,27 @@ Extensions:      FlexibleContexts
                  StandaloneDeriving
 
 Executable:      runtests
-Buildable:       False
+Buildable:       True
 Main-Is:         runtests.hs
 Other-Modules:   TorDNSEL.Config.Tests
                  TorDNSEL.Directory.Tests
                  TorDNSEL.DNS.Tests
                  TorDNSEL.DNS.Server.Tests
+                 TorDNSEL.Util
+                 TorDNSEL.Log.Internals
+Extensions:      FlexibleContexts
+                 FlexibleInstances
+                 TypeSynonymInstances
+                 MultiParamTypeClasses
+                 PatternGuards
+                 BangPatterns
+                 ViewPatterns
+                 ScopedTypeVariables
+                 DeriveDataTypeable
+                 GeneralizedNewtypeDeriving
+                 Rank2Types
+                 StandaloneDeriving
 HS-Source-Dirs:  src
 Includes:        netinet/in.h, openssl/rand.h
 Extra-Libraries: crypto
-GHC-Options:     -Wall -Werror -fno-warn-missing-signatures
+GHC-Options:     -Wall -fno-warn-missing-signatures

@@ -2,3 +2,7 @@ language: haskell
 
 ghc:
     - 7.6
+
+script:
+    - cabal configure --enable-tests --ghc-options="-fno-warn-unused-do-bind" && cabal build
+    - ./dist/build/runtests/runtests

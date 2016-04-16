@@ -37,7 +37,7 @@ config = toConfig
   [ "ZoneOfAuthority"        ~> "exitlist.example.com."
   , "DomainName"             ~> "exitlist-ns.example.com."
   , "SOARName"               ~> "hostmaster.example.com."
-  , "StateDirectory"         ~> "/state"
+  , "StateDirectory"         ~> "/state/"
   , "RuntimeDirectory"       ~> "/srv/tordnsel/run/"
   , "DNSListenAddress"       ~> "127.0.0.1:53"
   , "Address"                ~> "10.0.0.1"
@@ -78,10 +78,10 @@ configFile =
   \\n\
   \## Store exit test results in this directory. This should be an absolute\n\
   \## path accessible inside the chroot (if one is configured).\n\
-  \#StateDirectory /srv/tordnsel/state\n\
+  \#StateDirectory /srv/tordnsel/state/\n\
   \## This line is equivalent to the previous line if you've specified\n\
-  \## ChangeRootDirectory as /srv/tordnsel.\n\
-  \StateDirectory /state\n\
+  \## ChangeRootDirectory as /srv/tordnsel/.\n\
+  \StateDirectory /state/\n\
   \\n\
   \## Place the statistics and reconfigure sockets in this directory before\n\
   \## chrooting or dropping privileges.\n\
@@ -138,7 +138,7 @@ configFile =
   \\n\
   \## Call chroot(2) to change our root directory. This option also requires\n\
   \## root privileges.\n\
-  \ChangeRootDirectory /srv/tordnsel\n\
+  \ChangeRootDirectory /srv/tordnsel/\n\
   \\n\
   \## Write our PID to the specified file before chrooting or dropping\n\
   \## privileges. This file won't be removed on exit.\n\
