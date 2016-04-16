@@ -24,8 +24,8 @@ Dependencies
 
   TorDNSEL requires GHC 7.6. If you're running Debian Jessie:
 
-    apt-get install ghc libghc-network-dev libghc-mtl-dev libghc-stm-dev
-      libghc-hunit-dev libghc-conduit-dev libghc-conduit-extra-dev
+    apt-get install ghc libghc-hunit-dev libghc-binary-dev libghc-conduit-dev \
+      libghc-conduit-extra-dev libghc-mtl-dev libghc-network-dev  libghc-stm-dev
 
   OpenSSL's libcrypto is required for strong random numbers:
 

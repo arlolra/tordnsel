@@ -13,11 +13,10 @@ Package-URL:     https://archive.torproject.org/tor-package-archive/tordnsel/tor
 Author:          tup
 Maintainer:      tup.tuple@googlemail.com, lunar@debian.org
 Build-Type:      Simple
-Build-Depends:   array>=0.4, base>=4.5, binary>=0.7, bytestring>=0.10,
-                 containers>=0.5, deepseq>=1.3, directory>=1.2, time>=1.4,
-                 unix>=2.5,
-                 HUnit==1.2.*, conduit==1.1.*, conduit-extra==1.1.*,
-                 mtl==2.1.*, network==2.4.*, stm==2.4.*
+Build-Depends:   array>=0.4, base>=4.5, bytestring>=0.10, containers>=0.5,
+                 deepseq>=1.3, directory>=1.2, time>=1.4, unix>=2.5,
+                 HUnit==1.2.*, binary==0.7.*, conduit==1.1.*,
+                 conduit-extra==1.1.*, mtl==2.1.*, network==2.4.*, stm==2.4.*
 Tested-With:     GHC==7.6
 Data-Files:      config/tordnsel.conf.sample, contrib/cacti-input.pl,
                  contrib/tordnsel-init.d-script.sample, doc/tordnsel.8
