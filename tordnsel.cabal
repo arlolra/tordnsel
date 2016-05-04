@@ -11,7 +11,7 @@ License-File:    LICENSE
 Homepage:        http://p56soo2ibjkx23xo.onion/
 Package-URL:     https://archive.torproject.org/tor-package-archive/tordnsel/tordnsel-0.1.1.tar.gz
 Author:          tup
-Maintainer:      tup.tuple@googlemail.com, lunar@debian.org
+Maintainer:      tup.tuple@googlemail.com, arlo@torproject.org
 Build-Type:      Simple
 Build-Depends:   array>=0.4, base>=4.5, bytestring>=0.10, containers>=0.5,
                  deepseq>=1.3, directory>=1.2, time>=1.4, unix>=2.5,
